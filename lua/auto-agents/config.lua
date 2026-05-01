@@ -13,6 +13,12 @@ M.defaults = {
     percentage = 0.30,
     editor_floor = 40,
     slot_rail = "winbar",
+    -- TUIs (claude/codex) draw a status line at the bottom; if the
+    -- terminal occupies the entire window height, that status line
+    -- can sit flush against vim's own statusline/cmdline and look
+    -- cramped. We send a SIGWINCH with rows = win_height - margin so
+    -- the TUI renders this many blank rows at the bottom edge.
+    bottom_margin = 1,
   },
   agents = {
     default_kind = "claude",
@@ -61,6 +67,9 @@ function M.validate(cfg)
   end
   if not RAILS[p.slot_rail] then
     return "panel.slot_rail must be 'winbar', 'vertical', or 'off'"
+  end
+  if type(p.bottom_margin) ~= "number" or p.bottom_margin < 0 then
+    return "panel.bottom_margin must be a non-negative integer"
   end
   local a = cfg.agents
   if not KINDS[a.default_kind] then

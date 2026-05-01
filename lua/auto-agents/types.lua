@@ -20,7 +20,7 @@
 ---@class AutoAgentsAgentsConfig
 ---@field default_kind AutoAgentsAgentKind
 ---@field primary_kind AutoAgentsAgentKind
----@field bootstrap boolean
+---@field bootstrap table[]  -- list of bootstrap entries
 
 ---@class AutoAgentsKbConfig
 ---@field default_scope AutoAgentsKbScope

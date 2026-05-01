@@ -123,10 +123,15 @@ function Instance:get_jobid() return self.jobid end
 ---the correct size. Cheap to call defensively after every buffer/window
 ---swap.
 ---@param winid integer
-function Instance:resize_to(winid)
+---@param opts { bottom_margin: integer|nil }|nil  -- subtract N rows from height
+function Instance:resize_to(winid, opts)
   if not self.jobid or self.jobid <= 0 then return end
   if not winid or not vim.api.nvim_win_is_valid(winid) then return end
-  pcall(vim.fn.jobresize, self.jobid, vim.api.nvim_win_get_width(winid), vim.api.nvim_win_get_height(winid))
+  local margin = (opts and opts.bottom_margin) or 0
+  local w = vim.api.nvim_win_get_width(winid)
+  local h = vim.api.nvim_win_get_height(winid) - margin
+  if h < 1 then h = 1 end
+  pcall(vim.fn.jobresize, self.jobid, w, h)
 end
 
 ---@param spec AutoAgentsTerminalSpec

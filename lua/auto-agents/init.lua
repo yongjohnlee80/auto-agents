@@ -741,12 +741,24 @@ function M.focus_slot(slot)
   end
   if slot >= 1 then
     -- Defensive resize: send SIGWINCH to the TUI so it redraws at the
-    -- panel's current dimensions. Critical when the panel was resized
-    -- (or the buffer was last in a different-sized window) since we
-    -- last focused this slot.
+    -- panel's current dimensions, with bottom_margin rows reserved so
+    -- the TUI's own status line doesn't sit flush against vim's
+    -- statusline/cmdline. Margin resolves per-slot first (bootstrap
+    -- entry's bottom_margin), then falls back to cfg.panel default.
+    -- Different TUIs have different internal padding (codex pads
+    -- internally; claude doesn't) so per-slot override is essential.
     local term = M.state.slot_terminals[slot]
-    if term and term.resize_to then term:resize_to(winid) end
-    pcall(vim.api.nvim_win_call, winid, function() vim.cmd("normal! G") end)
+    if term and term.resize_to then
+      local margin = cfg.panel.bottom_margin or 0
+      local bs = (cfg.agents and cfg.agents.bootstrap) or {}
+      for _, e in ipairs(bs) do
+        if e.slot == slot and e.bottom_margin ~= nil then
+          margin = e.bottom_margin
+          break
+        end
+      end
+      term:resize_to(winid, { bottom_margin = margin })
+    end
     vim.cmd("startinsert")
   else
     -- Slot 0 (admin): prompt buffer — move cursor to the prompt line

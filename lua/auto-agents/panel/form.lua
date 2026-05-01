@@ -23,6 +23,7 @@ local FIELDS = {
   { name = "allowed_paths", default = "" },
   { name = "manager",       default = "" },
   { name = "kb_scope",      default = "shared" },
+  { name = "bottom_margin", default = "" },  -- empty = inherit panel default
 }
 
 local LABEL_WIDTH = 16  -- " allowed_paths: " padding column
@@ -99,6 +100,13 @@ local function apply()
     manager = (v.manager ~= "" and v.manager) or nil,
     kb_scope = (v.kb_scope ~= "" and v.kb_scope) or nil,
   }
+  if v.bottom_margin and v.bottom_margin ~= "" then
+    local n = tonumber(v.bottom_margin)
+    if not n or n < 0 or n ~= math.floor(n) then
+      return false, "bottom_margin must be a non-negative integer (got '" .. v.bottom_margin .. "')"
+    end
+    entry.bottom_margin = n
+  end
   if v.allowed_paths and v.allowed_paths ~= "" then
     local paths = {}
     for p in v.allowed_paths:gmatch("[^,]+") do
