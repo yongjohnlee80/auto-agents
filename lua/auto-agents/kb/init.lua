@@ -9,11 +9,25 @@
 ---  │   └── <agent-name>/
 ---  └── log.md
 ---
----kb_root resolution (in order):
----  1. cfg.kb.root_override   — set from the TOML's `[kb].root` (M6)
+---kb_root resolution.
+---
+---Agent identities are persistent: jarvis defined in `global.toml`
+---should perform identically regardless of which directory the user
+---opened nvim in. So default KB path follows where the *config* came
+---from, not where the cwd happens to be:
+---
+---  global agents  → <stdpath('config')>/.auto-agents-config/kb
+---                    (one shared KB across all sessions)
+---  project agents → <session_project_root>/.auto-agents/kb
+---                    (project-local — travels with the repo)
+---
+---Resolution (in order):
+---  1. cfg.kb.root_override   — explicit `[kb].root` in the TOML
 ---  2. cfg.kb.path            — legacy lua-spec override; expanded for ~
----  3. <session_project_root>/.auto-agents/kb  — cached at setup() time
----  4. <cwd>/.auto-agents/kb  — fallback if setup hasn't cached anything
+---  3. branch by config_source:
+---     - "global" → <stdpath('config')>/.auto-agents-config/kb
+---     - else     → <session_project_root>/.auto-agents/kb
+---     - fallback (no setup) → <cwd>/.auto-agents/kb
 ---@module 'auto-agents.kb'
 
 local M = {}
@@ -28,6 +42,10 @@ function M.root()
   end
   if kb_cfg.path and kb_cfg.path ~= "" then
     return vim.fn.expand(kb_cfg.path)
+  end
+  if aa.state.config_source == "global" then
+    local store = require("auto-agents.config.store")
+    return store.config_dir() .. "/kb"
   end
   local base = aa.state.session_project_root
   if not base or base == "" then

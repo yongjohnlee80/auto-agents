@@ -35,10 +35,20 @@ project import <key|path|cwd>        # power-user form
 ```
 
 Copies `[[agents]]` from another project's TOML into the current
-project. **Shares the source's `[kb].root`** verbatim — useful when
-you have the same project mirrored at multiple paths (a clone, a
-worktree, a sibling repo) and want a single shared KB rather than
-fragmenting notes.
+project. **Freezes the source's effective KB path into `[kb].root`** —
+if the source had an explicit `[kb].root`, that's copied verbatim; if
+not, the source's *resolved* default is materialized (the global KB
+path for global, the source project's `<cwd>/.auto-agents/kb` for a
+project source). This preserves the persistence contract: an imported
+agent keeps reading the same KB it had at the source.
+
+Useful when you have the same project mirrored at multiple paths (a
+clone, a worktree, a sibling repo) and want a single shared KB rather
+than fragmenting notes — or when you want to bring jarvis from
+`global` into a project but keep him pointed at his global KB.
+
+Edit the destination TOML's `[kb].root` afterwards if you want a
+forked, project-local KB instead.
 
 Refuses if the current project already has a config (`project remove`
 first if you really mean it).

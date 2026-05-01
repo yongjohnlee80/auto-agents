@@ -255,13 +255,32 @@ function M.import_from(current_key, current_cwd, source_path)
   if file_exists(target_path) then
     return false, "current project already has a config: " .. target_path, target_path
   end
+
+  -- Freeze the source's effective KB path into [kb].root so imported
+  -- agents keep reading the same KB they had at the source. Without
+  -- this, an import from global → project would silently switch the
+  -- agent's KB from the global path to a fresh per-project default,
+  -- breaking the "agent is persistent" model.
+  local kb = src.kb and vim.deepcopy(src.kb) or {}
+  if not kb.root then
+    if source_path == M.global_path() then
+      kb.root = M.config_dir() .. "/kb"
+    else
+      -- Source is another project. The source TOML had no explicit
+      -- [kb].root, so it was using its own project's default
+      -- (<source-project-cwd>/.auto-agents/kb). Bake that in.
+      local src_cwd = (src.project and src.project.cwd) or current_cwd
+      kb.root = src_cwd .. "/.auto-agents/kb"
+    end
+  end
+
   local payload = {
     project = {
       cwd = current_cwd,
       created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     },
-    kb = src.kb,            -- shared KB location
-    agents = src.agents,    -- copied agents
+    kb = kb,
+    agents = src.agents,
   }
   local ok, err = M.write(target_path, payload)
   if not ok then return false, err, target_path end

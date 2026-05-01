@@ -71,6 +71,11 @@ local function resolve_source(selector)
   if not selector or selector == "" then
     return nil, "no selector supplied"
   end
+  -- Special-case "global" so users can import from the global TOML
+  -- by name without typing the full path.
+  if selector == "global" then
+    return store.global_path(), nil
+  end
   -- Absolute or relative path?
   local expanded = vim.fn.expand(selector)
   if vim.fn.filereadable(expanded) == 1 then

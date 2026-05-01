@@ -158,23 +158,25 @@ local function dispatch(input)
   local toks = tokenize(input)
   local verb = toks[1]
 
-  -- Help routing (M6). Three forms:
-  --   help [<verb> [<sub>]]    → help.show(verb, sub)
-  --   ? [<verb> [<sub>]]       → help.show(verb, sub)
-  --   help open <verb> [<sub>] → help.open(verb, sub)  (in editor)
-  --   <verb> [<sub>] help      → help.show(verb, sub)  (contextual)
+  -- Help routing (M6). Help opens in a scrollable floating window so
+  -- long content (whole-file views especially) stays readable. The
+  -- admin REPL itself doesn't get cluttered with dozens of help lines
+  -- the user has to scroll past. q / <Esc> closes the popup.
+  --
+  --   help [<verb> [<sub>]]    → help.popup(verb, sub)
+  --   ? [<verb> [<sub>]]       → help.popup(verb, sub)
+  --   help open <verb> [<sub>] → help.open(verb, sub)  (in editor for editing)
+  --   <verb> [<sub>] help      → help.popup(verb, sub) (contextual)
   --   <verb> [<sub>] ?         → same as 'help'
-  -- All return early so the rest of dispatch isn't entered.
   if is_help_token(verb) then
     if toks[2] == "open" then
       require("auto-agents.help").open(toks[3], toks[4])
     else
-      require("auto-agents.help").show(toks[2], toks[3], function(lines) emit(lines) end)
+      require("auto-agents.help").popup(toks[2], toks[3])
     end
     return
   elseif #toks >= 2 and is_help_token(toks[#toks]) then
-    require("auto-agents.help").show(toks[1], toks[2] ~= "" and toks[2] or nil,
-      function(lines) emit(lines) end)
+    require("auto-agents.help").popup(toks[1], toks[2] ~= "" and toks[2] or nil)
     return
   end
 

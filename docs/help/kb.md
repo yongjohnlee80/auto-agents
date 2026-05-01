@@ -1,9 +1,21 @@
 # kb — knowledge base
 
-The KB is project-local durable knowledge that every agent in this
-project shares. It lives at `[kb].root` from the active TOML (default:
-`<project-root>/.auto-agents/kb`). The KB has a **type** (`coding`,
-`wiki`, `research`, `ops`, `general`, or `custom`) — pick at init.
+Where the KB lives depends on **which TOML the active agents came from**,
+because agent identities are persistent — jarvis defined in `global.toml`
+should perform identically regardless of which directory you opened nvim
+in. Default resolution:
+
+| Active config source | Default `kb_root`                               |
+|----------------------|-------------------------------------------------|
+| `global` (global.toml)  | `<stdpath('config')>/.auto-agents-config/kb` (one shared KB) |
+| `project` (per-project)  | `<project-root>/.auto-agents/kb` (project-local) |
+
+Set `[kb].root = "/abs/path"` in any TOML to override. `project import`
+freezes the source's effective KB path into the destination so an
+imported agent keeps reading the same KB.
+
+The KB has a **type** (`coding`, `wiki`, `research`, `ops`, `general`,
+or `custom`) — pick at init.
 
 The KB type drives the layout, the conventions, and the agent contract
 (`<kb_root>/AGENTS.md`). Switch types with `kb init <new-type>` —
