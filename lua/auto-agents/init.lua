@@ -41,6 +41,8 @@ function M.setup(opts)
     require("auto-agents.logger").info("init",
       "loaded " .. #persisted .. " persisted bootstrap entries")
   end
+  -- M5: load resource grants for this project.
+  require("auto-agents.resources.grants").load()
   M.state.config = config
   M.state.initialized = true
   require("auto-agents.float").install_auto_hide()
@@ -103,9 +105,9 @@ local function resolve_slot_spec(slot)
   }
 end
 
----Build the env table merged for an agent's spawn — KB scope vars +
----memory path (M3.x). Returns nil if no env extras to keep snacks's
----defaulting clean.
+---Build the env table merged for an agent's spawn — KB scope vars
+---(M4) + resource grants (M5). Returns nil if no env extras to keep
+---snacks's defaulting clean.
 ---@param spec AutoAgentsResolvedSpec
 ---@return table<string,string>|nil
 local function build_agent_env(spec)
@@ -115,6 +117,9 @@ local function build_agent_env(spec)
   local kb_root = kb.root()
   kb.ensure_layout(kb_root)
   local env = require("auto-agents.kb.scope").env_for(spec, kb_root)
+  -- M5: merge in resource grants (AUTO_AGENTS_ALLOWED_PATHS, etc.).
+  local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
+  for k, v in pairs(resources_env) do env[k] = v end
   if next(env) == nil then return nil end
   return env
 end
@@ -186,6 +191,8 @@ local function ensure_main_slot_terminal(slot, winid)
   end
 
   local cwd = require("auto-agents.cwd").resolve(cfg.terminal, build_cwd_ctx(cfg))
+  -- M5: explicit `resource cwd` grant > first path grant > cwd.resolve default.
+  cwd = require("auto-agents.resources").cwd_for(slot, cwd)
   term = require("auto-agents.terminal").new(cfg, {
     cmd = spec.cmd,
     cwd = cwd,
@@ -298,6 +305,7 @@ function M.toggle_sub(slot)
   end
 
   local cwd = require("auto-agents.cwd").resolve(cfg.terminal, build_cwd_ctx(cfg))
+  cwd = require("auto-agents.resources").cwd_for(slot, cwd)
   float.toggle(cfg, slot, {
     cmd = spec.cmd,
     cwd = cwd,

@@ -59,6 +59,12 @@ local function help_lines()
     "  kb tail                        open log.md in editor (autoread)",
     "  kb log                         print path of kb log.md",
     "  kb obsidian-init               scaffold .obsidian/ in kb root",
+    "  resource grant <N> <path>      grant a path to slot N (AUTO_AGENTS_ALLOWED_PATHS)",
+    "  resource revoke <N> <path>     revoke a previously-granted path",
+    "  resource cwd <N> [<path>]      set/clear explicit cwd for slot N",
+    "  resource list [<N>]            list grants (all or for slot N)",
+    "  resource manager set <S> <M>   designate slot M as manager of S",
+    "  resource manager show          show manager → subordinate map",
     "  config save                    persist current bootstrap to JSON",
     "  config reset                   delete persisted JSON (revert to lazy spec)",
     "  config show                    show effective config + persistence path",
@@ -147,6 +153,97 @@ local function dispatch(input)
   elseif verb == "quit" then
     emit({ "Closing panel." })
     vim.schedule(function() require("auto-agents").close() end)
+
+  elseif verb == "resource" then
+    local sub = toks[2]
+    local resources = require("auto-agents.resources")
+    if sub == "grant" then
+      local n = tonumber(toks[3])
+      local path = toks[4]
+      if not n or not path then
+        emit({ "resource grant: usage 'resource grant <slot> <path>'" })
+      else
+        local abs = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
+        local added = resources.grants.add(n, "path", abs)
+        emit({ added and ("Granted path '" .. abs .. "' to slot " .. n .. " (effective at next spawn)")
+                    or ("resource grant: already granted") })
+      end
+    elseif sub == "revoke" then
+      local n = tonumber(toks[3])
+      local path = toks[4]
+      if not n or not path then
+        emit({ "resource revoke: usage 'resource revoke <slot> <path>'" })
+      else
+        local abs = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
+        local removed = resources.grants.remove(n, "path", abs)
+        emit({ removed and ("Revoked path '" .. abs .. "' from slot " .. n)
+                      or ("resource revoke: no matching grant") })
+      end
+    elseif sub == "cwd" then
+      local n = tonumber(toks[3])
+      local path = toks[4]
+      if not n then
+        emit({ "resource cwd: usage 'resource cwd <slot> <path>' (omit path to clear)" })
+      elseif not path then
+        local removed = resources.grants.remove(n, "cwd", nil)
+        emit({ removed and ("Cleared cwd grant for slot " .. n)
+                      or ("resource cwd: slot " .. n .. " had no cwd grant") })
+      else
+        local abs = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
+        resources.grants.add(n, "cwd", abs)
+        emit({ "Set cwd of slot " .. n .. " to '" .. abs .. "' (effective at next spawn)" })
+      end
+    elseif sub == "list" then
+      local filter = {}
+      local n = tonumber(toks[3])
+      if n then filter.slot = n end
+      local items = resources.grants.list(filter)
+      local lines = { "", n and ("Grants for slot " .. n .. ":") or "Grants:" }
+      if #items == 0 then
+        table.insert(lines, "  (none)")
+      else
+        for _, g in ipairs(items) do
+          table.insert(lines, string.format("  slot %d  %-5s  %s", g.slot, g.kind, g.value))
+        end
+      end
+      table.insert(lines, "")
+      emit(lines)
+    elseif sub == "manager" then
+      local action = toks[3]
+      if action == "set" then
+        local subordinate = tonumber(toks[4])
+        local mgr = tonumber(toks[5])
+        if not subordinate then
+          emit({ "resource manager set: usage 'resource manager set <subordinate> <manager>' (omit manager to clear)" })
+        else
+          local ok, err = resources.manager.set(subordinate, mgr)
+          if ok then
+            if mgr then
+              emit({ "Slot " .. subordinate .. " is now managed by slot " .. mgr })
+            else
+              emit({ "Cleared manager designation for slot " .. subordinate })
+            end
+          else
+            emit({ "resource manager set: " .. (err or "failed") })
+          end
+        end
+      elseif action == "show" or action == nil then
+        local chains = resources.manager.list_chains()
+        local lines = { "", "Manager → Subordinate(s):" }
+        local count = 0
+        for mgr, subs in pairs(chains) do
+          count = count + 1
+          table.insert(lines, string.format("  slot %d → { %s }", mgr, table.concat(vim.tbl_map(tostring, subs), ", ")))
+        end
+        if count == 0 then table.insert(lines, "  (none)") end
+        table.insert(lines, "")
+        emit(lines)
+      else
+        emit({ "resource manager: unknown action '" .. tostring(action) .. "' — try 'set' / 'show'" })
+      end
+    else
+      emit({ "resource: unknown subverb '" .. tostring(sub) .. "' — try grant/revoke/cwd/list/manager" })
+    end
 
   elseif verb == "kb" then
     local sub = toks[2]
@@ -515,7 +612,21 @@ local function complete_at(prompt, cursor_col)
 
   local candidates
   if #prev_toks == 0 then
-    candidates = { "help", "?", ":h", "status", "agent", "kb", "config", "clear", "quit" }
+    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "config", "clear", "quit" }
+  elseif #prev_toks == 1 and prev_toks[1] == "resource" then
+    candidates = { "grant", "revoke", "cwd", "list", "manager" }
+  elseif #prev_toks == 2 and prev_toks[1] == "resource"
+    and (prev_toks[2] == "grant" or prev_toks[2] == "revoke"
+         or prev_toks[2] == "cwd" or prev_toks[2] == "list") then
+    candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+  elseif #prev_toks == 2 and prev_toks[1] == "resource" and prev_toks[2] == "manager" then
+    candidates = { "set", "show" }
+  elseif #prev_toks == 3 and prev_toks[1] == "resource" and prev_toks[2] == "manager"
+    and prev_toks[3] == "set" then
+    candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+  elseif #prev_toks == 4 and prev_toks[1] == "resource" and prev_toks[2] == "manager"
+    and prev_toks[3] == "set" then
+    candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
   elseif #prev_toks == 1 and prev_toks[1] == "config" then
     candidates = { "save", "reset", "show", "path" }
   elseif #prev_toks == 1 and prev_toks[1] == "kb" then
