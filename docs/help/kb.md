@@ -51,6 +51,50 @@ Idempotent on reruns: existing user content is preserved; only the
 schema doc rewrites with `force_schema = true` (which `kb init` always
 sets).
 
+## ingest
+
+```
+kb ingest                       # show worklist
+kb ingest --attach <N>          # show + dispatch worklist to slot N
+```
+
+`kb ingest` itself **performs no ingestion** — it produces a diff
+report. The actual reading + synthesis is the agent's job (which is
+the part that needs LLM reasoning). With `--attach <N>`, the worklist
+is sent via stdin to slot N so the agent can act on it directly.
+
+Compares files in `raw/` against `shared/sources/*.md` source pages
+(one summary page per ingested raw file) using a `source_sha`
+recorded in each source page's frontmatter. Reports four buckets:
+
+- **new**     — file in `raw/`, no source page references it (never ingested).
+- **edited**  — source page exists, sha mismatch (re-ingest needed).
+  This is the case for mutable raw docs like code reviews.
+- **current** — source page sha matches the raw file (skip).
+- **orphan**  — source page references a raw path that no longer exists.
+
+No persisted index — frontmatter IS the persisted state. The agent
+re-runs `kb ingest` on demand to know what work is left.
+
+**Source-page convention** (taught to agents via the seed `AGENTS.md`):
+
+```yaml
+---
+type: source
+sources: [raw/path/to/foo.md]
+source_sha: <sha256 of raw/path/to/foo.md at ingest>
+ingested_at: 2026-05-01
+---
+```
+
+Pages that aggregate multiple sources (entities, topic hubs,
+syntheses) list `sources:` for citation but DON'T track sha — only
+the one-to-one source pages do. The diff tool only inspects pages
+under `shared/sources/`.
+
+**Skipped during scan**: `raw/README.md` (our scaffolded immutability
+note), dotfiles, and the `raw/archive/` subtree.
+
 ## path
 
 ```

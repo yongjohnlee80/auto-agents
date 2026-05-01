@@ -51,6 +51,7 @@ local function help_lines()
     "  agent task list [<N>]          show tasks for slot N (or all)",
     "  agent mem                      report RSS per running agent",
     "  kb init [<type> [<seed>]]      seed kb (coding|wiki|research|ops|general|custom)",
+    "  kb ingest [--attach <N>]       diff raw/ vs ingested source pages; optionally hand worklist to slot N",
     "  kb path                        print kb root + ensure layout",
     "  kb scope <N> <mode>            change kb_scope (shared|private|isolated)",
     "  kb sync                        regenerate manifest.json per namespace",
@@ -430,6 +431,33 @@ local function dispatch(input)
       end
     elseif sub == "log" then
       emit({ "kb log: " .. kb.root() .. "/log.md" })
+    elseif sub == "ingest" then
+      local ingest = require("auto-agents.kb.ingest")
+      local diff = ingest.diff(kb.root())
+      local report = ingest.format_report(diff)
+      emit(report)
+      -- Optional --attach <N> dispatches the worklist to slot N's
+      -- stdin so the agent can act on it without a manual hand-off.
+      local attach_to
+      for i = 3, #toks - 1 do
+        if toks[i] == "--attach" then attach_to = tonumber(toks[i + 1]) end
+      end
+      if attach_to then
+        local n_actionable = #diff.new + #diff.edited + #diff.orphan
+        if n_actionable == 0 then
+          emit({ "(no new/edited/orphan items — nothing to attach)" })
+        else
+          local lines = {
+            "auto-agents kb ingest worklist (please synthesize per AGENTS.md):",
+            "",
+          }
+          for _, l in ipairs(report) do lines[#lines + 1] = l end
+          local payload = table.concat(lines, "\n")
+          local ok = require("auto-agents").send_slot(attach_to, payload)
+          emit({ ok and ("Sent worklist to slot " .. attach_to)
+                    or ("send to slot " .. attach_to .. " failed (no running agent?)") })
+        end
+      end
     elseif sub == "sync" then
       local summary = require("auto-agents.kb.sync").sync_all(kb.root())
       local lines = { "", "kb sync: " .. summary.kb_root }
@@ -770,9 +798,14 @@ local function complete_at(prompt, cursor_col)
   elseif #prev_toks == 2 and prev_toks[1] == "help" and prev_toks[2] == "open" then
     candidates = { "index", "agent", "kb", "project", "resource", "term", "config", "general" }
   elseif #prev_toks == 1 and prev_toks[1] == "kb" then
-    candidates = { "init", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
+    candidates = { "init", "ingest", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "init" then
     candidates = { "coding", "wiki", "research", "ops", "general", "custom" }
+  elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "ingest" then
+    candidates = { "--attach" }
+  elseif #prev_toks == 3 and prev_toks[1] == "kb" and prev_toks[2] == "ingest"
+      and prev_toks[3] == "--attach" then
+    candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb"
     and (prev_toks[2] == "scope" or prev_toks[2] == "attach") then
     candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }

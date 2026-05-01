@@ -69,6 +69,37 @@ pointers to this file.
 
 ## Operations
 
+### Ingest raw evidence (alerts / chatops / tickets / dashboards)
+
+When an incident is over and you're writing up a postmortem, you'll
+ingest evidence dropped into `raw/`. **Before deciding what to
+ingest**, run `kb ingest` in the admin panel (or have the user
+forward via `kb ingest --attach <slot>`). The worklist buckets every
+`raw/` file as **new**, **edited** (e.g. updated chat transcripts),
+**current**, or **orphan**.
+
+When ingesting a `new` or `edited` raw artifact:
+
+1. Read it end-to-end.
+2. If the artifact warrants its own summary page (rare for ops —
+   most evidence flows into postmortem/incident pages), write
+   `shared/sources/<slug>.md` with frontmatter that includes
+   `source_sha` + `ingested_at`:
+
+   ```yaml
+   ---
+   type: source
+   sources: [raw/chatops/<slug>.md]
+   source_sha: <sha256 of raw/chatops/<slug>.md at this ingest>
+   ingested_at: 2026-05-01
+   ---
+   ```
+
+3. Propagate citations into the relevant `shared/incidents/<INC-…>.md`
+   and `shared/postmortems/<…>.md` — these aggregate from many raw
+   artifacts and **don't track sha**, only `shared/sources/*` do.
+4. Append a `log.md` line.
+
 ### When an alert fires
 
 1. **Acknowledge** — silence the page so you can think.

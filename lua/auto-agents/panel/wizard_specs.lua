@@ -182,6 +182,29 @@ function M.agent(mode, slot)
         return n
       end,
     },
+    {
+      -- diff_review (claudecode.nvim bridge). When y, the agent gets
+      -- CLAUDE_CODE_SSE_PORT at spawn so Claude Code CLI's openDiff
+      -- tool routes to a diff split in your editor for review/edit/
+      -- accept. When N, Claude Code falls back to its TUI confirm
+      -- prompt — useful for sub-agents whose diffs you don't want
+      -- popping at you alongside your main coding agent's.
+      field = "diff_review",
+      prompt = "Show diff views from this agent in your editor?",
+      choices = { "y", "N" },
+      default = function(values)
+        if existing and existing.diff_review ~= nil then
+          return existing.diff_review and "y" or "N"
+        end
+        return values.kind == "claude" and "y" or "N"
+      end,
+      skip = function(values) return values.kind ~= "claude" end,
+      parse = function(v)
+        if type(v) == "boolean" then return v end
+        v = (v or ""):lower()
+        return v == "y" or v == "yes" or v == "true"
+      end,
+    },
   }
 
   -- Add-only: KB type picker. Picks one of the built-in types,
@@ -239,6 +262,7 @@ function M.agent(mode, slot)
         manager = values.manager,
         kb_scope = values.kb_scope or "shared",
         bottom_margin = values.bottom_margin,
+        diff_review = values.diff_review == true or nil,  -- omit when false to keep TOML clean
       }
       -- Preserve any tasks list from the existing entry on edit.
       if existing and existing.tasks then entry.tasks = existing.tasks end

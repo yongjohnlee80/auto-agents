@@ -171,6 +171,43 @@ Reports RSS per running agent (Linux `/proc` only — silently empty on
 other platforms). Useful for spotting runaways. Shows total at the
 bottom.
 
+## diff_review (in-editor diff splits for proposed edits)
+
+Per-agent boolean. The wizard asks **"Show diff views from this agent
+in your editor?"** on add/edit (default y for `kind = "claude"`,
+N for the rest).
+
+- **`diff_review = true`** — when this agent proposes a file edit,
+  a diff split opens in your editor (left current, right proposed).
+  You can edit the proposed side manually before accepting; `:w` on
+  the proposed buffer accepts, closing the diff rejects. Implemented
+  by injecting `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`,
+  and `CLAUDE_CODE_SSE_PORT=<port>` at spawn so Claude Code CLI's
+  `openDiff` tool routes to claudecode.nvim's MCP server (which we
+  start on demand and treat as a soft dependency).
+
+- **`diff_review = false`** — no MCP env injection. Claude Code CLI
+  falls back to its built-in TUI confirm prompt **inside that agent's
+  own terminal** — useful for sub-agents whose every edit you don't
+  want popping at you alongside your main coding agent's.
+
+Typical setup: one main coding agent (jarvis in slot 1) has
+`diff_review = true`; workers in other slots have it `false` so their
+edits stay scoped to their own terminals. To watch a sub-agent's
+proposed edits, focus its slot.
+
+Requires `coder/claudecode.nvim` installed. Without it, the plugin
+logs a warning and skips env injection — the agent still runs.
+
+### Roadmap: manager-routed approval
+
+A future milestone (post-v0.1.0, alongside M5.C inter-agent comms)
+will let sub-agents route diffs through their **manager** (set via
+`resource manager set <S> <M>`): subordinate proposes → manager
+reviews/edits/approves → result returns to subordinate. That requires
+a deeper Claude Code CLI integration than the current `openDiff` tool
+exposes, so it ships separately from v0.1.0.
+
 ## How agent operations interact with the rest of the system
 
 - **Project**: `agent add/edit/move/rename` writes to the **active**

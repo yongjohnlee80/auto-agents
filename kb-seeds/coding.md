@@ -68,6 +68,44 @@ present) are thin pointers to this file.
 
 ## Operations
 
+### Ingest a raw doc (spec / issue / code-review)
+
+`raw/specs/`, `raw/issues/`, `raw/transcripts/` accumulate evidence —
+specs you're working from, bug reports, code-review docs, meeting
+notes. Code-review docs in particular get **edited** as the review
+progresses, so you may need to re-ingest them.
+
+**Before deciding what to ingest**, ask the plugin for a worklist:
+run `kb ingest` in the admin panel (or the user will forward it via
+`kb ingest --attach <slot>`). The worklist buckets every `raw/` file
+as **new**, **edited**, **current**, or **orphan** — only act on
+`new`/`edited`/`orphan`, skip `current`.
+
+When ingesting a `new` or `edited` raw file:
+
+1. Read it end-to-end.
+2. Write or update a summary page at `shared/sources/<slug>.md`.
+   **Always include `source_sha` + `ingested_at` in frontmatter** —
+   that's how `kb ingest` knows when re-ingestion is needed:
+
+   ```yaml
+   ---
+   type: source
+   sources: [raw/specs/<slug>.md]
+   source_sha: <sha256 of raw/specs/<slug>.md at this ingest>
+   ingested_at: 2026-05-01
+   ---
+   ```
+
+   On re-ingest of an edited doc, **update `source_sha` to the new
+   value** and bump `ingested_at`.
+3. From the source page, propagate findings into:
+   - `shared/conventions/` if the doc defines or refines a convention.
+   - `shared/adrs/` if it implies an architectural decision (or write
+     a new ADR superseding an old one).
+   - `shared/playbooks/` if it documents a procedure worth reusing.
+4. Append a `log.md` line: `## [YYYY-MM-DD HH:MM] ingest | <slug>`.
+
 ### Plan code changes
 
 Before writing code:

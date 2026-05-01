@@ -65,19 +65,42 @@ pattern doc into `raw/` if you want context).
 
 ### Ingest
 
-When the human drops a source into `raw/`:
+**Before deciding what to ingest**, ask the plugin for a worklist:
+either run `kb ingest` in the admin panel yourself, or the user will
+forward you the diff via `kb ingest --attach <slot>`. The worklist
+buckets every `raw/` file as **new**, **edited**, **current**, or
+**orphan** — only act on `new`/`edited`/`orphan`, skip `current`.
 
-1. Read `index.md` first, especially the sources register, to avoid
-   re-processing.
+When working a `new` or `edited` raw file:
+
+1. Read `index.md` first to anchor in what's already mapped.
 2. Read the source end-to-end. No skimming.
 3. Decide whether the source is **durable** ("if the original incident
    closed, would this still teach me something?"). If not, it's
    raw-only — don't synthesize.
-4. Write or update `shared/sources/<slug>.md` (one summary page per
-   source). Apply the durability test before creating it.
+4. Write or update `shared/sources/<slug>.md`. **Always include
+   `source_sha` and `ingested_at` in the frontmatter** — that's how
+   `kb ingest` knows when re-ingestion is needed:
+
+   ```yaml
+   ---
+   type: source
+   sources: [raw/path/to/<slug>.md]
+   source_sha: <sha256 of raw/path/to/<slug>.md at this ingest>
+   ingested_at: 2026-05-01
+   created: 2026-05-01
+   updated: 2026-05-01
+   ---
+   ```
+
+   Use `vim.fn.sha256(content)` (or `:! sha256sum raw/path/to/file`)
+   to capture the sha at ingest time. On edit re-ingest, **update
+   `source_sha` to the new value** and bump `updated`/`ingested_at`.
+
 5. Update **5–15 wiki pages** the source touches: entities, concepts,
    topics, syntheses. Append to `sources:` frontmatter — don't silently
-   drop earlier sources.
+   drop earlier sources. **Aggregating pages (entity/topic/synthesis)
+   do NOT track sha** — only one-to-one source pages do.
 6. Update `index.md` with any new pages.
 7. Append to `log.md`: `## [YYYY-MM-DD HH:MM] ingest | <source title>`.
 
@@ -139,13 +162,13 @@ Other rules:
 
 ### Sub-type guide
 
-| Type        | What goes here                                                     |
-|-------------|--------------------------------------------------------------------|
-| `source`    | One page per ingested source — abstract, key claims, entities surfaced |
-| `entity`    | A person, org, product, place, codebase — the "noun" pages         |
-| `concept`   | An idea, method, recurring theme — definition + examples + lineage |
-| `topic`     | A hub clustering related entities/concepts — thin, mostly links    |
-| `synthesis` | Filed-back analysis, comparison, answer worth keeping              |
+| Type        | What goes here                                                     | Tracks `source_sha`? |
+|-------------|--------------------------------------------------------------------|----------------------|
+| `source`    | One page per ingested source — abstract, key claims, entities surfaced | **yes**          |
+| `entity`    | A person, org, product, place, codebase — the "noun" pages         | no                   |
+| `concept`   | An idea, method, recurring theme — definition + examples + lineage | no                   |
+| `topic`     | A hub clustering related entities/concepts — thin, mostly links    | no                   |
+| `synthesis` | Filed-back analysis, comparison, answer worth keeping              | no                   |
 
 ---
 

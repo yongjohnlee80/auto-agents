@@ -71,6 +71,26 @@ When something is worth keeping (a link, a note, a decision):
 3. Synthesis → `shared/<sensible-subdir>/<slug>.md`.
 4. Append `log.md`: `## [YYYY-MM-DD HH:MM] capture | <one-liner>`.
 
+### Ingest (when the general KB grows source pages)
+
+If you've adopted a `shared/sources/` convention (one summary per raw
+file), the plugin's `kb ingest` works for general KBs too. Run it in
+the admin panel to see new/edited/current/orphan buckets. When
+writing source pages, include `source_sha` + `ingested_at` in the
+frontmatter so `kb ingest` can detect edits later:
+
+```yaml
+---
+type: source
+sources: [raw/<subdir>/<file>]
+source_sha: <sha256 of raw/<subdir>/<file> at this ingest>
+ingested_at: 2026-05-01
+---
+```
+
+Pages aggregating from multiple sources don't track sha — only the
+one-to-one source pages do.
+
 ### Recall
 
 When asked a question:

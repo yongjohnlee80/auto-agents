@@ -66,23 +66,34 @@ pointers to this file.
 
 ### Ingest a paper
 
-When you read a new paper:
+**Before deciding what to ingest**, run `kb ingest` in the admin
+panel (or have the user forward you the worklist via
+`kb ingest --attach <slot>`). Every `raw/papers/<file>` is bucketed
+as **new**, **edited** (annotated/replaced), **current**, or
+**orphan** — only act on `new`/`edited`/`orphan`.
 
-1. Drop the PDF/markdown into `raw/papers/`.
+When ingesting a `new` or `edited` paper:
+
+1. Drop the PDF/markdown into `raw/papers/` (if not already there).
 2. Read it end-to-end (or admit you skimmed and mark the page as
    `status: skimmed`).
-3. Write `shared/papers/<slug>.md`:
+3. Write `shared/papers/<slug>.md`. **Always include `source_sha` +
+   `ingested_at` in frontmatter** — that's how `kb ingest` knows
+   when re-ingestion is needed (e.g., you replaced the PDF with an
+   annotated version):
 
    ```yaml
    ---
-   type: paper
+   type: source
+   sources: [raw/papers/<file>]
+   source_sha: <sha256 of raw/papers/<file> at this ingest>
+   ingested_at: 2026-05-01
    created: YYYY-MM-DD
    updated: YYYY-MM-DD
    authors: [<author-1>, <author-2>]
    year: 2026
    venue: <conference|journal|arXiv>
    doi: <doi-or-arxiv-id>
-   raw: raw/papers/<file>
    status: read | skimmed | abandoned
    tags: [<tag>, …]
    ---

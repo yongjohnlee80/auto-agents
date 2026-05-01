@@ -68,6 +68,44 @@ function M.setup(opts)
   M.state.config = config
   M.state.initialized = true
 
+  -- M6 diff-review bridge: if any agent opted in via `diff_review =
+  -- true` in TOML, start claudecode.nvim's WebSocket MCP server and
+  -- cache its port. Opted-in agents get `CLAUDE_CODE_SSE_PORT` at
+  -- spawn so Claude Code CLI's `openDiff` tool routes to the user's
+  -- editor as a diff split. Non-opted-in agents don't get the port,
+  -- so Claude Code CLI falls back to its built-in TUI confirm prompt
+  -- (no in-editor diff for them). Manager-routed approval flow is
+  -- on the roadmap (post-v0.1.0, alongside M5.C inter-agent comms).
+  -- claudecode.nvim is a soft dep; we error gracefully if missing.
+  M.state.diff_review_enabled = false
+  M.state.diff_review_port = nil
+  for _, e in ipairs(config.agents.bootstrap) do
+    if e.diff_review then M.state.diff_review_enabled = true; break end
+  end
+  if M.state.diff_review_enabled then
+    local ok, claudecode = pcall(require, "claudecode")
+    if not ok then
+      require("auto-agents.logger").warn("init",
+        "agent has diff_review=true but claudecode.nvim is not installed — "
+          .. "diff splits will be unavailable. Add `coder/claudecode.nvim` "
+          .. "to your plugin list.")
+    else
+      pcall(claudecode.setup, claudecode.state and claudecode.state.config or {})
+      if not (claudecode.state and claudecode.state.server) then
+        local ok2, _err = pcall(claudecode.start, false)
+        if not ok2 then
+          require("auto-agents.logger").warn("init",
+            "claudecode.nvim server failed to start; diff env will be skipped")
+        end
+      end
+      if claudecode.state and claudecode.state.port then
+        M.state.diff_review_port = claudecode.state.port
+        require("auto-agents.logger").info("init",
+          "diff-review bridge ready on port " .. tostring(M.state.diff_review_port))
+      end
+    end
+  end
+
   -- Default the initial focus to admin (slot 0) when no agents are
   -- configured. Otherwise the first :AutoAgents drops you into a
   -- fallback shell at slot 1 — the wizard auto-engages from admin, so
@@ -134,6 +172,7 @@ local function resolve_slot_spec(slot)
         title = entry.title,
         cmd = agent.cmd_for(kind, entry),
         kb_scope = entry.kb_scope,
+        diff_review = entry.diff_review == true,
         slot = slot,
         configured = true,
       }
@@ -175,6 +214,17 @@ local function build_agent_env(spec, cwd)
   -- M5: merge in resource grants (AUTO_AGENTS_ALLOWED_PATHS, etc.).
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
   for k, v in pairs(resources_env) do env[k] = v end
+
+  -- M6 diff-review bridge: opted-in agents get the env vars Claude
+  -- Code CLI uses to find + authenticate to claudecode.nvim's MCP
+  -- server. The headline tool is `openDiff` — proposed edits open
+  -- as a reviewable diff split in the user's editor. Without the
+  -- port, Claude Code CLI falls back to its TUI confirm prompt.
+  if spec.diff_review and M.state.diff_review_port then
+    env.ENABLE_IDE_INTEGRATION  = "true"
+    env.FORCE_CODE_TERMINAL     = "true"
+    env.CLAUDE_CODE_SSE_PORT    = tostring(M.state.diff_review_port)
+  end
 
   -- M6 KB-aware launch: write the per-kind instruction file (idempotent)
   -- and emit a visible confirmation. This is the durable, TUI-safe way
