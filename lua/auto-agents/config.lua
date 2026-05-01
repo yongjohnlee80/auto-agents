@@ -34,6 +34,13 @@ M.defaults = {
     cwd_provider = nil,
     git_repo_cwd = true,
   },
+  term = {
+    -- Playground terminals T1..T4 — shared user/agent shells, separate
+    -- from agent slots. Set enabled = false to skip the F1..F4 default
+    -- keymaps and auto-hide; you can still drive them via :AutoAgentsTerm.
+    enabled = true,
+    fkeys = { "<F1>", "<F2>", "<F3>", "<F4>" },
+  },
 }
 
 local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace = true }

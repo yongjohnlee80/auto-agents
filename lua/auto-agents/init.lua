@@ -67,7 +67,29 @@ function M.setup(opts)
   require("auto-agents.resources.grants").load()
   M.state.config = config
   M.state.initialized = true
+
+  -- Default the initial focus to admin (slot 0) when no agents are
+  -- configured. Otherwise the first :AutoAgents drops you into a
+  -- fallback shell at slot 1 — the wizard auto-engages from admin, so
+  -- admin is the right landing slot for an empty config. With agents
+  -- loaded, the previous focused_slot (or 1) still applies.
+  if #config.agents.bootstrap == 0 then
+    M.state.focused_slot = 0
+  end
+
   require("auto-agents.float").install_auto_hide()
+
+  -- M6: playground terminals T1..T4. Auto-hide on editor focus +
+  -- default F1..F4 keymaps unless the user opts out.
+  if config.term and config.term.enabled then
+    require("auto-agents.term.focus").install_auto_hide()
+    for slot, lhs in ipairs(config.term.fkeys or {}) do
+      pcall(vim.keymap.set, { "n", "t" }, lhs, function()
+        require("auto-agents.term.focus").focus_or_hide(slot)
+      end, { desc = "Auto-agents term " .. slot .. " (focus/hide)" })
+    end
+  end
+
   require("auto-agents.logger").info("init",
     string.format("auto-agents v%s initialized; config_source=%s, agents=%d",
       M.version, source, #config.agents.bootstrap))
@@ -293,6 +315,29 @@ end
 ---editor, with single-keystroke dispatch.
 function M.dock_toggle()
   require("auto-agents.dock").toggle()
+end
+
+---Convenience proxies for the term module, so `require('auto-agents')`
+---is enough for any playground terminal driver.
+
+---Focus / hide / open dispatch for T1..T4. State machine:
+---  no terminal     → open + focus
+---  hidden          → re-open + focus
+---  visible & blur  → focus
+---  visible & focus → hide
+---@param slot integer
+function M.term_focus(slot)
+  require("auto-agents.term.focus").focus_or_hide(slot)
+end
+
+---Paste-safe send to T-slot: chan_send body, 60ms defer, then \r.
+---Pass `opts.submit = false` to skip the trailing CR.
+---@param slot integer
+---@param text string
+---@param opts table|nil
+---@return boolean
+function M.term_send(slot, text, opts)
+  return require("auto-agents.term").send(slot, text, opts)
 end
 
 ---Build a human-readable description for a slot's keymap, derived from

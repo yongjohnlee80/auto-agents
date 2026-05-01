@@ -22,7 +22,9 @@ split, and [`PERFORMANCE.md`](./PERFORMANCE.md) for the memory/CPU budget.
 - [TOML config](#toml-config)
 - [Project commands](#project-commands)
 - [Admin panel](#admin-panel)
+- [Help](#help)
 - [Wizards](#wizards)
+- [Playground terminals (T1..T4)](#playground-terminals-t1t4)
 - [Agent kinds](#agent-kinds)
 - [Knowledge base](#knowledge-base)
 - [Resource grants](#resource-grants)
@@ -56,7 +58,7 @@ without losing the main view.
 `snacks.nvim` is required for the sub-agent floats and the navigation dock.
 
 **Agents are not configured in your lazy spec.** They live in TOML files
-under `<stdpath('config')>/auto-agents/`:
+under `<stdpath('config')>/.auto-agents-config/`:
 
 - `<sha16-of-project-root>.toml` — per-project (overrides global)
 - `global.toml`                  — shared default across all projects
@@ -163,7 +165,7 @@ If you'd rather configure a **per-project** TOML before adding agents, type
 ## TOML config
 
 Agents and KB are stored in TOML files under
-`<stdpath('config')>/auto-agents/`:
+`<stdpath('config')>/.auto-agents-config/`:
 
 | File                     | Used for                                          |
 |--------------------------|---------------------------------------------------|
@@ -234,6 +236,29 @@ Top-level lua `opts` is now small — just runtime settings:
 at multiple paths (a clone, a worktree, a sibling repo) — agents are
 duplicated, but the KB is shared so notes don't fragment.
 
+## Help
+
+Every admin command is documented in a markdown file under `docs/help/`.
+You can browse the docs three ways:
+
+- **At the prompt** — append `help` or `?` to any command:
+
+  ```
+  agent add help          # → renders the `## add` section of agent.md
+  kb init ?               # → same, for kb.md
+  ?                       # → top-level index.md
+  ```
+
+- **In the editor** — `help open <verb> [<sub>]` opens the underlying
+  markdown in a non-panel window so you can read or hand-edit. Edits
+  persist; the plugin never rewrites these files.
+
+- **On disk** — the files ship as plain markdown under
+  `docs/help/{index,agent,kb,project,resource,term,config,general}.md`.
+
+Tab-completion in the admin offers `help`, `help open`, and the verb
+list as candidates.
+
 ## Wizards
 
 The wizard runs **inside the admin prompt buffer** — it's not a modal float.
@@ -294,6 +319,45 @@ help, ?, :h                            this help
 
 In normal mode the admin buffer also accepts `0`–`9` as one-key shortcuts that
 focus a slot, and `<Tab>` completes verbs/sub-verbs/slot numbers.
+
+## Playground terminals (T1..T4)
+
+Four shared shells, **separate from agent slots**, mapped to `<F1>..<F4>`
+by default. Same key:
+
+| Current state                | Effect             |
+|------------------------------|--------------------|
+| Slot N has no terminal yet   | Create + focus     |
+| Slot N hidden                | Show + focus       |
+| Slot N visible, unfocused    | Move focus to it   |
+| Slot N visible, focused      | Hide               |
+
+Moving focus into any non-float window auto-hides every T1..T4 float at
+once (scoped — won't fight lazygit/lazysql or other snacks consumers).
+
+T-floats **persist across `:cd`**: a buffer-local marker
+(`b:auto_agents_term_slot`) bypasses snacks's cwd-keyed hashing, so the
+same `T1` follows you across worktree changes — your interactive REPL
+or build watcher stays alive.
+
+```
+term focus 1            # also: <F1>
+term send 2 npm run dev # paste-safe: chan_send body, 60ms defer, then \r
+term list               # state of all four slots
+term kill 3
+term hide               # hide all four floats at once
+```
+
+User commands: `:AutoAgentsTerm <sub>` and `:AutoAgentsTermSend <slot>
+<text>`. From lua: `require("auto-agents").term_send(slot, text)`.
+
+Agents can drive playground terminals from their own admin slot — the
+admin verb `term send <N> <text>` is callable inside any agent's
+session, so a manager agent can dispatch a build command to T2 without
+leaving its panel.
+
+Disable defaults with `opts.term = { enabled = false }`. Customize the
+F-keys with `opts.term.fkeys = { "<F1>", "<F2>", ... }`.
 
 ## Agent kinds
 

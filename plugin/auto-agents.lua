@@ -40,6 +40,56 @@ end, {
   desc = "Toggle the auto-agents navigation dock (rightmost float, single-key dispatch)",
 })
 
+vim.api.nvim_create_user_command("AutoAgentsTerm", function(opts)
+  local sub = opts.fargs[1] or "list"
+  local term = require("auto-agents.term")
+  local focus = require("auto-agents.term.focus")
+  if sub == "focus" then
+    local slot = tonumber(opts.fargs[2])
+    if not slot then vim.notify("AutoAgentsTerm focus: needs slot 1..4", vim.log.levels.ERROR); return end
+    focus.focus_or_hide(slot)
+  elseif sub == "send" then
+    local slot = tonumber(opts.fargs[2])
+    if not slot then vim.notify("AutoAgentsTerm send: needs slot 1..4", vim.log.levels.ERROR); return end
+    local text = table.concat(vim.list_slice(opts.fargs, 3), " ")
+    term.send(slot, text)
+  elseif sub == "list" then
+    for _, e in ipairs(term.list()) do
+      print(string.format("  T%d  alive=%s visible=%s focused=%s buf=%s",
+        e.slot, tostring(e.alive), tostring(e.visible), tostring(e.focused), tostring(e.bufnr)))
+    end
+  elseif sub == "kill" then
+    local slot = tonumber(opts.fargs[2])
+    if not slot then vim.notify("AutoAgentsTerm kill: needs slot 1..4", vim.log.levels.ERROR); return end
+    print(term.kill(slot) and ("killed T" .. slot) or ("T" .. slot .. " has no terminal"))
+  elseif sub == "hide" then
+    term.hide_all()
+  else
+    vim.notify("AutoAgentsTerm: unknown subcommand '" .. sub
+      .. "' — try focus|send|list|kill|hide", vim.log.levels.ERROR)
+  end
+end, {
+  nargs = "*",
+  complete = function(_, line)
+    local n = #vim.split(line, "%s+", { trimempty = true })
+    if n <= 2 then return { "focus", "send", "list", "kill", "hide" } end
+    if n == 3 then return { "1", "2", "3", "4" } end
+    return {}
+  end,
+  desc = "Auto-agents playground terminals (T1..T4)",
+})
+
+vim.api.nvim_create_user_command("AutoAgentsTermSend", function(opts)
+  local slot = tonumber(opts.fargs[1])
+  if not slot then vim.notify("AutoAgentsTermSend: needs slot 1..4", vim.log.levels.ERROR); return end
+  local text = table.concat(vim.list_slice(opts.fargs, 2), " ")
+  if text == "" then vim.notify("AutoAgentsTermSend: empty text", vim.log.levels.ERROR); return end
+  require("auto-agents.term").send(slot, text)
+end, {
+  nargs = "+",
+  desc = "Paste-safe send to a playground terminal (slot 1..4)",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsProject", function(opts)
   local sub = opts.fargs[1]
   local args = {}

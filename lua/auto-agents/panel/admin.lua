@@ -75,11 +75,21 @@ local function help_lines()
     "  config reset                   alias of 'project remove'",
     "  config show                    show effective config + paths",
     "  config path                    print path of the active TOML",
+    "  term focus <N>                 open/focus/hide playground terminal T<N> (1..4)",
+    "  term send <N> <text>           paste-safe send to T<N>'s stdin",
+    "  term list                      list T1..T4 state (alive/visible/focused)",
+    "  term kill <N>                  stop T<N> and wipe its buffer",
+    "  term hide                      hide every T1..T4 float",
     "  clear                          wipe history above the prompt",
     "  quit                           close the auto-agents panel",
     "",
+    "Per-command help:",
+    "  <verb> ?                       same as 'help <verb>'",
+    "  <verb> <sub> ?                 contextual help for that subcommand",
+    "  help open <verb> [<sub>]       open the help md in the editor",
+    "",
     "Kinds: claude | codex | gemini | copilot | generic",
-    "Config: project file at <stdpath('config')>/auto-agents/<key>.toml,",
+    "Config: project file at <stdpath('config')>/.auto-agents-config/<key>.toml,",
     "        falls back to global.toml in that dir, else empty.",
     "        :cd does not move the project — boundary is cached at startup.",
     "",
@@ -136,6 +146,11 @@ local function tokenize(input)
   return toks
 end
 
+---True if `tok` is a help-trigger token.
+local function is_help_token(tok)
+  return tok == "help" or tok == "?" or tok == ":h"
+end
+
 local function dispatch(input)
   input = (input or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if input == "" then return end
@@ -143,10 +158,27 @@ local function dispatch(input)
   local toks = tokenize(input)
   local verb = toks[1]
 
-  if verb == "help" or verb == "?" or verb == ":h" then
-    emit(help_lines())
+  -- Help routing (M6). Three forms:
+  --   help [<verb> [<sub>]]    → help.show(verb, sub)
+  --   ? [<verb> [<sub>]]       → help.show(verb, sub)
+  --   help open <verb> [<sub>] → help.open(verb, sub)  (in editor)
+  --   <verb> [<sub>] help      → help.show(verb, sub)  (contextual)
+  --   <verb> [<sub>] ?         → same as 'help'
+  -- All return early so the rest of dispatch isn't entered.
+  if is_help_token(verb) then
+    if toks[2] == "open" then
+      require("auto-agents.help").open(toks[3], toks[4])
+    else
+      require("auto-agents.help").show(toks[2], toks[3], function(lines) emit(lines) end)
+    end
+    return
+  elseif #toks >= 2 and is_help_token(toks[#toks]) then
+    require("auto-agents.help").show(toks[1], toks[2] ~= "" and toks[2] or nil,
+      function(lines) emit(lines) end)
+    return
+  end
 
-  elseif verb == "status" then
+  if verb == "status" then
     emit(status_lines())
 
   elseif verb == "clear" then
@@ -162,6 +194,48 @@ local function dispatch(input)
     local args = {}
     for i = 3, #toks do args[#args + 1] = toks[i] end
     require("auto-agents.project").dispatch(sub, args, function(lines) emit(lines) end)
+
+  elseif verb == "term" then
+    local sub = toks[2]
+    local term_mod = require("auto-agents.term")
+    local focus = require("auto-agents.term.focus")
+    if sub == "focus" then
+      local slot = tonumber(toks[3])
+      if not slot then emit({ "term focus: needs slot 1..4" })
+      else focus.focus_or_hide(slot); emit({ "term focus → T" .. slot }) end
+    elseif sub == "send" then
+      local slot = tonumber(toks[3])
+      if not slot then
+        emit({ "term send: usage 'term send <slot> <text>'" })
+      else
+        local text = input:match("^term%s+send%s+%S+%s*(.*)$") or ""
+        if text == "" then emit({ "term send: text is empty" })
+        else
+          local ok = term_mod.send(slot, text)
+          emit({ ok and ("Sent to T" .. slot) or ("T" .. slot .. " send failed") })
+        end
+      end
+    elseif sub == "list" then
+      local lines = { "", "Playground terminals (T1..T4):" }
+      for _, e in ipairs(term_mod.list()) do
+        local state = e.alive and (e.visible and (e.focused and "focused" or "visible") or "hidden") or "-"
+        table.insert(lines, string.format("  T%d  %-8s  buf=%s",
+          e.slot, state, tostring(e.bufnr or "-")))
+      end
+      table.insert(lines, "")
+      emit(lines)
+    elseif sub == "kill" then
+      local slot = tonumber(toks[3])
+      if not slot then emit({ "term kill: needs slot 1..4" })
+      else
+        emit({ term_mod.kill(slot) and ("killed T" .. slot) or ("T" .. slot .. " has no terminal") })
+      end
+    elseif sub == "hide" then
+      term_mod.hide_all()
+      emit({ "Hid all T1..T4 floats." })
+    else
+      emit({ "term: unknown subverb '" .. tostring(sub) .. "' — try focus|send|list|kill|hide" })
+    end
 
   elseif verb == "quit" then
     emit({ "Closing panel." })
@@ -684,6 +758,15 @@ local function complete_at(prompt, cursor_col)
     candidates = { "save", "reset", "show", "path" }
   elseif #prev_toks == 1 and prev_toks[1] == "project" then
     candidates = { "init", "import", "remove", "list", "show" }
+  elseif #prev_toks == 1 and prev_toks[1] == "term" then
+    candidates = { "focus", "send", "list", "kill", "hide" }
+  elseif #prev_toks == 2 and prev_toks[1] == "term"
+    and (prev_toks[2] == "focus" or prev_toks[2] == "send" or prev_toks[2] == "kill") then
+    candidates = { "1", "2", "3", "4" }
+  elseif #prev_toks == 1 and prev_toks[1] == "help" then
+    candidates = { "open", "agent", "kb", "project", "resource", "term", "config", "general" }
+  elseif #prev_toks == 2 and prev_toks[1] == "help" and prev_toks[2] == "open" then
+    candidates = { "index", "agent", "kb", "project", "resource", "term", "config", "general" }
   elseif #prev_toks == 1 and prev_toks[1] == "kb" then
     candidates = { "init", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "init" then

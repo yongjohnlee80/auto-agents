@@ -5,7 +5,7 @@
 ---  2. `<config_dir>/global.toml`                 (default, shared across projects)
 ---  3. nothing                                    (admin auto-engages add wizard)
 ---
----`<config_dir>` defaults to `<stdpath('config')>/auto-agents/`.
+---`<config_dir>` defaults to `<stdpath('config')>/.auto-agents-config/`.
 ---
 ---File schema (subset of TOML — see vendor/toml.lua):
 ---
@@ -43,10 +43,14 @@ local AGENT_KEY_ORDER = {
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }
 local KB_KEY_ORDER = { "root", "type", "seed" }
 
----Directory holding project + global TOML files.
+---Directory holding project + global TOML files. Dot-prefixed so it
+---doesn't visually collide with project KB dirs that happen to live
+---in the same parent (e.g. when the nvim config dir is itself a
+---project, you'd otherwise see `auto-agents/` and `.auto-agents/`
+---side-by-side).
 ---@return string
 function M.config_dir()
-  return vim.fn.stdpath("config") .. "/auto-agents"
+  return vim.fn.stdpath("config") .. "/.auto-agents-config"
 end
 
 ---Path to the global default TOML.

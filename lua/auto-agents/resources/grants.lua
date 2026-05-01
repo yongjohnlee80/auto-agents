@@ -11,7 +11,7 @@
 ---
 ---Persistence: per-project JSON keyed by sha256(git_root || cwd) under
 ---`<stdpath('data')>/auto-agents/<key>-grants.json`. Bootstrap lives in
----a TOML in `<stdpath('config')>/auto-agents/<key>.toml` (see
+---a TOML in `<stdpath('config')>/.auto-agents-config/<key>.toml` (see
 ---`auto-agents.config.store`); grants stay JSON for now since they're
 ---internal coordination state, not human-edited.
 ---@module 'auto-agents.resources.grants'
