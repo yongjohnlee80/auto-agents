@@ -33,7 +33,7 @@ M.defaults = {
 local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace = true }
 local SIDES = { left = true, right = true }
 local RAILS = { winbar = true, vertical = true, off = true }
-local KINDS = { claude = true, codex = true, gemini = true, generic = true }
+local KINDS = { claude = true, codex = true, gemini = true, copilot = true, generic = true }
 local SCOPES = { shared = true, private = true, isolated = true }
 local PROVIDERS = { auto = true, snacks = true, native = true, none = true }
 

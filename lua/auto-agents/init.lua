@@ -7,6 +7,12 @@ local M = {}
 
 M.version = "0.1.0-pre.1"
 
+-- Slot stratification (D17). Slots 0..MAIN_SLOT_MAX are main (right
+-- window, multi-buffer multiplex); slots MAIN_SLOT_MAX+1..MAX_SLOT are
+-- sub-agent floats (mutually exclusive).
+M.MAIN_SLOT_MAX = 5
+M.MAX_SLOT = 9
+
 ---@class AutoAgentsState
 ---@field config AutoAgentsConfig|nil
 ---@field initialized boolean
@@ -25,6 +31,16 @@ M.state = {
 function M.setup(opts)
   local config = require("auto-agents.config").apply(opts or {})
   require("auto-agents.logger").setup(config)
+  -- M3.4 persistence: if a per-project JSON exists, it overrides the
+  -- lazy-spec bootstrap. User mutations via the form / rename / move
+  -- survive across restarts. Reset via `config reset` in admin.
+  local persisted = require("auto-agents.agent.persist").load()
+  if persisted then
+    config.agents = config.agents or {}
+    config.agents.bootstrap = persisted
+    require("auto-agents.logger").info("init",
+      "loaded " .. #persisted .. " persisted bootstrap entries")
+  end
   M.state.config = config
   M.state.initialized = true
   require("auto-agents.float").install_auto_hide()
@@ -32,12 +48,6 @@ function M.setup(opts)
 end
 
 -- ── local helpers ──────────────────────────────────────────────────────────
-
-local KIND_CMDS = {
-  claude = { "claude" },
-  codex = { "codex" },
-  gemini = { "gemini" },
-}
 
 ---@param cfg AutoAgentsConfig
 ---@return AutoAgentsCwdContext
@@ -60,29 +70,31 @@ end
 
 ---Resolve a slot to a runnable spec. Looks up `agents.bootstrap` first;
 ---falls back to a persistent shell terminal for unconfigured slots.
+---Per-kind cmd resolution goes through `agent.adapters.<kind>` (D3).
 ---@param slot integer
 ---@return AutoAgentsResolvedSpec
 local function resolve_slot_spec(slot)
   local cfg = M.state.config
+  local agent = require("auto-agents.agent")
   local bootstrap = (cfg and cfg.agents and cfg.agents.bootstrap) or {}
   for _, entry in ipairs(bootstrap) do
     if entry.slot == slot then
       local kind = entry.kind or "generic"
-      local cmd = entry.cmd or KIND_CMDS[kind] or { vim.o.shell }
       return {
         kind = kind,
         name = entry.name,
         title = entry.title,
-        cmd = cmd,
+        cmd = agent.cmd_for(kind, entry),
         configured = true,
       }
     end
   end
+  -- Unconfigured slot — fall back to the generic adapter (vim.o.shell).
   return {
     kind = "shell",
     name = nil,
     title = nil,
-    cmd = { vim.o.shell },
+    cmd = agent.cmd_for("generic", {}),
     configured = false,
   }
 end
@@ -205,6 +217,40 @@ function M.dock_toggle()
   require("auto-agents.dock").toggle()
 end
 
+---Build a human-readable description for a slot's keymap, derived from
+---the agents.bootstrap config. Used by autovim's lazy spec to keep
+---<leader>a[0..9] descriptions in sync with the actual configured kind/
+---name. Optional `bootstrap` arg lets the lazy spec call this BEFORE
+---setup() runs (when state.config isn't populated yet).
+---@param slot integer
+---@param bootstrap table[]|nil  -- list of bootstrap entries; defaults to current config
+---@return string
+function M.slot_desc(slot, bootstrap)
+  if slot == 0 then
+    return "Focus admin (slot 0)"
+  end
+  bootstrap = bootstrap or ((M.state.config or {}).agents or {}).bootstrap or {}
+  for _, e in ipairs(bootstrap) do
+    if e.slot == slot then
+      local label = e.title or e.name or e.kind or "agent"
+      return string.format("Focus slot %d — %s", slot, label)
+    end
+  end
+  local where = (slot > M.MAIN_SLOT_MAX) and "float" or "main"
+  return string.format("Focus slot %d — shell (%s, empty)", slot, where)
+end
+
+---Re-register the <leader>a[0..9] keymaps with descriptions reflecting
+---current bootstrap state. Called automatically from agent rename /
+---add / edit so which-key et al. stay in sync.
+function M.refresh_keymaps()
+  for slot = 0, 9 do
+    pcall(vim.keymap.set, "n", "<leader>a" .. slot,
+      "<cmd>AutoAgentsFocus " .. slot .. "<cr>",
+      { desc = M.slot_desc(slot), silent = true })
+  end
+end
+
 ---Toggle a sub-agent float (D17). Slot must be in 5..9. Resolves the
 ---slot's spec from `agents.bootstrap`; unconfigured slots fall back to
 ---a persistent shell terminal float.
@@ -247,6 +293,369 @@ function M.toggle_sub(slot)
   })
 end
 
+-- ── lifecycle (M3) ─────────────────────────────────────────────────────────
+
+---Find and return the snacks terminal for a sub-agent slot, if any.
+---Returns the term object or nil.
+local function find_sub_term(slot)
+  local ok, snacks = pcall(require, "snacks")
+  if not ok or not snacks or not snacks.terminal then return nil end
+  for _, term in ipairs(Snacks.terminal.list()) do
+    if term.buf and vim.api.nvim_buf_is_valid(term.buf)
+      and vim.b[term.buf].auto_agents_slot == slot then
+      return term
+    end
+  end
+  return nil
+end
+
+---Kill the agent process in a slot. For main slots (1..4) jobstops the
+---terminal and wipes its buffer; for sub slots (5..9) closes the snacks
+---float (which also stops the underlying job).
+---@param slot integer
+---@return boolean killed
+function M.kill_slot(slot)
+  local logger = require("auto-agents.logger")
+  if slot >= 1 and slot <= M.MAIN_SLOT_MAX then
+    local term = M.state.slot_terminals[slot]
+    if not term then
+      logger.info("lifecycle", "slot " .. slot .. " has no running terminal")
+      return false
+    end
+    if term.kill then term:kill() end
+    local buf = term.get_bufnr and term:get_bufnr() or nil
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+    M.state.slot_terminals[slot] = nil
+    -- If the panel was showing this slot, swap to admin so the dead
+    -- buffer doesn't linger in the window.
+    if M.state.focused_slot == slot and M.state.panel_winid
+      and vim.api.nvim_win_is_valid(M.state.panel_winid) then
+      M.focus_slot(0)
+    end
+    logger.info("lifecycle", "slot " .. slot .. " killed")
+    return true
+  elseif slot > M.MAIN_SLOT_MAX and slot <= M.MAX_SLOT then
+    local term = find_sub_term(slot)
+    if not term then
+      logger.info("lifecycle", "sub slot " .. slot .. " has no running terminal")
+      return false
+    end
+    if type(term.close) == "function" then pcall(term.close, term) end
+    if term.buf and vim.api.nvim_buf_is_valid(term.buf) then
+      pcall(vim.api.nvim_buf_delete, term.buf, { force = true })
+    end
+    logger.info("lifecycle", "sub slot " .. slot .. " killed")
+    return true
+  end
+  logger.error("lifecycle", "kill_slot: invalid slot " .. tostring(slot))
+  return false
+end
+
+---Restart a slot — kill then re-spawn. For main slots, focuses the new
+---terminal in the panel. For sub slots, opens the new float.
+---@param slot integer
+function M.restart_slot(slot)
+  M.kill_slot(slot)
+  vim.schedule(function() M.focus_slot(slot) end)
+end
+
+---Attach files to an agent slot — sends file paths via stdin so the
+---agent has them as context. If `paths` is empty, queries the active
+---tree explorer (neo-tree, oil, etc.) via integrations/tree.lua and
+---uses whatever's selected/under-cursor there.
+---@param slot integer
+---@param paths string[]|nil  -- explicit paths; nil = ask tree integration
+---@return boolean ok
+---@return string|nil err
+function M.attach_slot(slot, paths)
+  local logger = require("auto-agents.logger")
+  if not paths or #paths == 0 then
+    local tree = require("auto-agents.integrations.tree")
+    local files, err = tree.get_selected_files_from_tree()
+    if not files or #files == 0 then
+      return false, err or "no paths supplied and tree integration found nothing"
+    end
+    paths = files
+  end
+  local text = table.concat(paths, " ")
+  local ok = M.send_slot(slot, text)
+  if not ok then
+    logger.warn("attach", "send to slot " .. slot .. " failed (no running agent?)")
+    return false, "slot " .. slot .. " has no running agent or send failed"
+  end
+  return true, nil
+end
+
+-- ── tasks (M3.5) ────────────────────────────────────────────────────────────
+
+---Find the bootstrap entry for a slot, mutating-friendly.
+---@param slot integer
+---@return table|nil entry
+local function bootstrap_entry(slot)
+  local cfg = M.state.config
+  if not cfg or not cfg.agents or not cfg.agents.bootstrap then return nil end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == slot then return e end
+  end
+  return nil
+end
+
+---Append a task to the agent's task list.
+---@param slot integer
+---@param text string
+---@return boolean ok
+function M.task_add(slot, text)
+  local entry = bootstrap_entry(slot)
+  if not entry then return false end
+  entry.tasks = entry.tasks or {}
+  table.insert(entry.tasks, text)
+  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  return true
+end
+
+---Mark a task as done — removes it from the list. (We chose remove over
+---'mark complete' for v0.1.0 simplicity; the agent's purpose is forward.)
+---@param slot integer
+---@param index integer  -- 1-based
+---@return boolean ok
+---@return string|nil removed_text
+function M.task_done(slot, index)
+  local entry = bootstrap_entry(slot)
+  if not entry or not entry.tasks then return false end
+  if index < 1 or index > #entry.tasks then return false end
+  local text = table.remove(entry.tasks, index)
+  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  return true, text
+end
+
+---Return the task list for a slot, or empty table.
+---@param slot integer
+---@return string[]
+function M.task_list(slot)
+  local entry = bootstrap_entry(slot)
+  if not entry or not entry.tasks then return {} end
+  return entry.tasks
+end
+
+---Send `text` to the agent's stdin via `nvim_chan_send`. Works for both
+---main slots (native terminal) and sub-float slots (snacks terminal).
+---@param slot integer
+---@param text string
+---@return boolean ok
+function M.send_slot(slot, text)
+  if not text or text == "" then return false end
+  if slot >= 1 and slot <= M.MAIN_SLOT_MAX then
+    local term = M.state.slot_terminals[slot]
+    if term and term:is_alive() and term.send then
+      return term:send(text)
+    end
+    return false
+  elseif slot > M.MAIN_SLOT_MAX and slot <= M.MAX_SLOT then
+    local sterm = find_sub_term(slot)
+    if sterm and sterm.buf and vim.api.nvim_buf_is_valid(sterm.buf) then
+      local jobid = vim.b[sterm.buf].terminal_job_id
+      if jobid then
+        vim.api.nvim_chan_send(jobid, text)
+        return true
+      end
+    end
+    return false
+  end
+  return false
+end
+
+---Read VmRSS for a pid (Linux). Returns kB or nil if unavailable.
+---@param pid integer
+---@return integer|nil rss_kb
+local function read_rss_kb(pid)
+  local f = io.open("/proc/" .. tostring(pid) .. "/status", "r")
+  if not f then return nil end
+  local rss
+  for line in f:lines() do
+    local v = line:match("^VmRSS:%s+(%d+)")
+    if v then rss = tonumber(v); break end
+  end
+  f:close()
+  return rss
+end
+
+---Resolve the live PID for a slot (or nil if not running).
+---@param slot integer
+---@return integer|nil pid
+local function pid_for_slot(slot)
+  if slot >= 1 and slot <= M.MAIN_SLOT_MAX then
+    local term = M.state.slot_terminals[slot]
+    if not term or not term:is_alive() then return nil end
+    if not term.get_jobid then return nil end
+    local jobid = term:get_jobid()
+    if not jobid or jobid <= 0 then return nil end
+    local ok, pid = pcall(vim.fn.jobpid, jobid)
+    return ok and pid or nil
+  elseif slot > M.MAIN_SLOT_MAX and slot <= M.MAX_SLOT then
+    local sterm = find_sub_term(slot)
+    if not sterm or not sterm.buf or not vim.api.nvim_buf_is_valid(sterm.buf) then return nil end
+    local jobid = vim.b[sterm.buf].terminal_job_id
+    if not jobid then return nil end
+    local ok, pid = pcall(vim.fn.jobpid, jobid)
+    return ok and pid or nil
+  end
+  return nil
+end
+
+---Build a memory report across all running agents (Linux /proc only).
+---Returns a list of strings suitable for printing into the admin buffer.
+---@return string[] lines
+function M.mem_report()
+  local cfg = M.state.config or {}
+  local bs = (cfg.agents and cfg.agents.bootstrap) or {}
+  local by_slot = {}
+  for _, e in ipairs(bs) do by_slot[e.slot] = e end
+
+  local lines = { "", "Memory (RSS, MB):" }
+  local total = 0
+  local any = false
+  for slot = 1, M.MAX_SLOT do
+    local pid = pid_for_slot(slot)
+    if pid then
+      any = true
+      local rss_kb = read_rss_kb(pid)
+      local rss_mb = rss_kb and math.floor(rss_kb / 1024) or nil
+      local entry = by_slot[slot]
+      local label = entry and (entry.title or entry.name or entry.kind) or "shell"
+      local where = (slot > M.MAIN_SLOT_MAX) and "float" or "main"
+      if rss_mb then
+        total = total + rss_mb
+        table.insert(lines, string.format("  %d  %-22s  %-5s  pid=%d  rss=%d MB", slot, label, where, pid, rss_mb))
+      else
+        table.insert(lines, string.format("  %d  %-22s  %-5s  pid=%d  rss=?", slot, label, where, pid))
+      end
+    end
+  end
+  if not any then
+    table.insert(lines, "  (no running agents)")
+  else
+    table.insert(lines, string.format("  %30s total=%d MB", "", total))
+  end
+  table.insert(lines, "")
+  return lines
+end
+
+---Move a slot's bootstrap entry + running terminal to a different slot.
+---Restricted to same-side moves (both main 1..MAIN_SLOT_MAX or both
+---sub MAIN_SLOT_MAX+1..MAX_SLOT) to avoid crossing the native/snacks
+---divide. Cross-boundary moves require kill + add via the form.
+---@param from integer
+---@param to integer
+---@param swap boolean|nil  -- if true, swap with destination's content
+---@return boolean ok
+---@return string|nil err
+function M.move_slot(from, to, swap)
+  if from == to then return false, "from and to are the same slot" end
+  local function side(s)
+    if s == 0 then return "admin" end
+    if s >= 1 and s <= M.MAIN_SLOT_MAX then return "main" end
+    if s > M.MAIN_SLOT_MAX and s <= M.MAX_SLOT then return "float" end
+    return "invalid"
+  end
+  local sf, st = side(from), side(to)
+  if sf == "invalid" or sf == "admin" then return false, "invalid 'from' slot " .. from end
+  if st == "invalid" or st == "admin" then return false, "invalid 'to' slot " .. to end
+  if sf ~= st then
+    return false, "cross-boundary moves (main↔float) not yet supported; kill the source and re-add via the form"
+  end
+
+  local cfg = M.state.config
+  if not cfg then return false, "auto-agents.setup() not called" end
+  cfg.agents = cfg.agents or {}
+  cfg.agents.bootstrap = cfg.agents.bootstrap or {}
+
+  local entry_from, entry_to
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == from then entry_from = e
+    elseif e.slot == to then entry_to = e end
+  end
+
+  if entry_to and not swap then
+    return false, "destination slot " .. to .. " is occupied; pass --swap to exchange"
+  end
+
+  -- Mutate bootstrap entries.
+  if entry_from then entry_from.slot = to end
+  if entry_to and swap then entry_to.slot = from end
+
+  -- Transfer running terminals on the same side.
+  if sf == "main" then
+    local t_from = M.state.slot_terminals[from]
+    local t_to   = M.state.slot_terminals[to]
+    M.state.slot_terminals[from] = swap and t_to or nil
+    M.state.slot_terminals[to]   = t_from
+  else
+    -- Sub-float: re-stamp the slot marker on the underlying buffer(s).
+    local sterm_from = find_sub_term(from)
+    local sterm_to   = find_sub_term(to)
+    if sterm_from and sterm_from.buf and vim.api.nvim_buf_is_valid(sterm_from.buf) then
+      vim.b[sterm_from.buf].auto_agents_slot = to
+    end
+    if swap and sterm_to and sterm_to.buf and vim.api.nvim_buf_is_valid(sterm_to.buf) then
+      vim.b[sterm_to.buf].auto_agents_slot = from
+    end
+  end
+
+  -- Refresh focused_slot if the move moved the focused terminal.
+  if M.state.focused_slot == from then
+    M.state.focused_slot = to
+  elseif M.state.focused_slot == to and swap then
+    M.state.focused_slot = from
+  end
+
+  -- Refresh keymap descriptions and panel winbar.
+  M.refresh_keymaps()
+  if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
+    local winbar = require("auto-agents.panel.winbar")
+    local w = vim.api.nvim_win_get_width(M.state.panel_winid)
+    pcall(vim.api.nvim_set_option_value, "winbar",
+      winbar.render(M.state.focused_slot or 1, w),
+      { win = M.state.panel_winid })
+  end
+  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  return true, nil
+end
+
+---Rename a slot's bootstrap entry (mutates config.agents.bootstrap).
+---No process restart — the new name surfaces in winbar/status on the
+---next render cycle.
+---@param slot integer
+---@param new_name string
+---@return boolean
+function M.rename_slot(slot, new_name)
+  local cfg = M.state.config
+  if not cfg then return false end
+  cfg.agents = cfg.agents or {}
+  cfg.agents.bootstrap = cfg.agents.bootstrap or {}
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == slot then
+      e.name = new_name
+      -- Refresh the panel winbar if this slot is on the main panel.
+      if slot >= 0 and slot <= M.MAIN_SLOT_MAX and M.state.panel_winid
+        and vim.api.nvim_win_is_valid(M.state.panel_winid) then
+        local winbar = require("auto-agents.panel.winbar")
+        local w = vim.api.nvim_win_get_width(M.state.panel_winid)
+        pcall(vim.api.nvim_set_option_value, "winbar",
+          winbar.render(M.state.focused_slot or 1, w),
+          { win = M.state.panel_winid })
+      end
+      M.refresh_keymaps()
+      pcall(function() require("auto-agents.agent.persist").save_current() end)
+      return true
+    end
+  end
+  return false
+end
+
+-- ── focus (existing) ───────────────────────────────────────────────────────
+
 ---Universal slot router (D17). Slots 0..4 → main right window (buffer
 ---multiplex); slots 5..9 → sub-agent floats (mutually exclusive).
 ---@param slot integer
@@ -258,13 +667,13 @@ function M.focus_slot(slot)
     return
   end
 
-  if slot >= 5 and slot <= 9 then
+  if slot > M.MAIN_SLOT_MAX and slot <= M.MAX_SLOT then
     M.toggle_sub(slot)
     return
   end
 
-  if slot < 0 or slot > 4 then
-    logger.error("init", "focus_slot: slot must be 0..9, got " .. tostring(slot))
+  if slot < 0 or slot > M.MAIN_SLOT_MAX then
+    logger.error("init", "focus_slot: slot must be 0.." .. M.MAX_SLOT .. ", got " .. tostring(slot))
     return
   end
 
@@ -292,13 +701,15 @@ function M.focus_slot(slot)
   M.state.focused_slot = slot
   vim.api.nvim_set_current_win(winid)
 
-  -- D10 winbar tab-strip: all 5 main slots, focused one bracketed,
-  -- each wrapped in a clickable region. Implementation in
+  -- D10 winbar tab-strip: all main slots, focused one bracketed, each
+  -- wrapped in a clickable region. Adaptive: full labels when panel is
+  -- wide enough, focused-only labels when it isn't. Implementation in
   -- panel/winbar.lua.
   do
     local winbar = require("auto-agents.panel.winbar")
     winbar.ensure_highlights()
-    pcall(vim.api.nvim_set_option_value, "winbar", winbar.render(slot), { win = winid })
+    local w = vim.api.nvim_win_get_width(winid)
+    pcall(vim.api.nvim_set_option_value, "winbar", winbar.render(slot, w), { win = winid })
   end
   if slot >= 1 then
     -- Defensive resize: send SIGWINCH to the TUI so it redraws at the

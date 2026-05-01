@@ -32,24 +32,47 @@ local function slot_label(slot)
   return "shell"
 end
 
----Build the winbar string.
----@param focused_slot integer  -- 0..4
+---Build the winbar string. Adaptive: tries to render every slot with
+---its label; if the result wouldn't fit in `available_width`, falls
+---back to a compact format where only the focused slot keeps its label
+---and others show just the number.
+---@param focused_slot integer  -- 0..MAIN_SLOT_MAX
+---@param available_width integer|nil  -- panel window width; nil disables the fit check
 ---@return string
-function M.render(focused_slot)
-  local parts = {}
-  for slot = 0, 4 do
+function M.render(focused_slot, available_width)
+  local main_max = require("auto-agents").MAIN_SLOT_MAX or 5
+
+  -- Plain-text length (excluding %<minwid>@..%X click markup and %#hl#..%*
+  -- highlight markup, which contribute zero displayed width). Each slot
+  -- renders as either ' N: Label ' (10 + #label, the surrounding spaces
+  -- are the inter-slot gap) or '[N: Label]' for focused (4 + #label).
+  -- Separators between slots are single spaces.
+  local labels = {}
+  local full_len = 0
+  for slot = 0, main_max do
     local label = slot_label(slot)
+    labels[slot] = label
+    if slot == focused_slot then
+      full_len = full_len + 4 + #tostring(slot) + #label
+    else
+      full_len = full_len + 4 + #tostring(slot) + #label  -- ' N: label '
+    end
+  end
+  full_len = full_len + main_max  -- inter-slot single spaces
+
+  local use_compact = available_width and available_width > 0 and full_len > available_width
+
+  local parts = {}
+  for slot = 0, main_max do
+    local label = labels[slot]
     local text
     if slot == focused_slot then
-      -- Bracketed + highlighted via the AutoAgentsSlotActive group. The
-      -- group is defined lazily via M.ensure_highlights so users can
-      -- override colors via their colorscheme.
       text = string.format("%%#AutoAgentsSlotActive#[%d: %s]%%*", slot, label)
+    elseif use_compact then
+      text = string.format(" %d ", slot)
     else
       text = string.format(" %d: %s ", slot, label)
     end
-    -- %<minwid>@<func>@<text>%X  → click region. The slot number rides
-    -- in `minwid` and surfaces as the first arg of M.click.
     table.insert(
       parts,
       string.format("%%%d@v:lua.require'auto-agents.panel.winbar'.click@%s%%X", slot, text)

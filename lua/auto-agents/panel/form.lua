@@ -80,7 +80,7 @@ local function apply()
   if not slot or slot < 1 or slot > 9 then
     return false, "slot must be 1..9 (got '" .. tostring(v.slot) .. "')"
   end
-  local valid_kinds = { claude = true, codex = true, gemini = true, generic = true }
+  local valid_kinds = { claude = true, codex = true, gemini = true, copilot = true, generic = true }
   if v.kind ~= "" and not valid_kinds[v.kind] then
     return false, "kind must be claude|codex|gemini|generic (got '" .. v.kind .. "')"
   end
@@ -130,10 +130,12 @@ local function save()
   end
   local v = parse_form()
   local slot = tonumber(v.slot)
-  -- For edit mode, if the slot already had a running terminal, kill it
-  -- so the new spec takes effect on next focus. (Skip kill for now;
-  -- M3 lifecycle work handles this properly.)
   close()
+  -- Refresh <leader>a[0..9] descriptions so which-key reflects the new
+  -- agent label.
+  pcall(function() require("auto-agents").refresh_keymaps() end)
+  -- Persist mutation so it survives nvim restart (M3.4).
+  pcall(function() require("auto-agents.agent.persist").save_current() end)
   if slot then
     vim.schedule(function() require("auto-agents").focus_slot(slot) end)
   end
@@ -217,6 +219,17 @@ function M.open(opts)
   end, { buffer = bufnr, silent = true })
   vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, silent = true })
   vim.keymap.set("n", "q",     close, { buffer = bufnr, silent = true })
+
+  -- F-key passthrough so summoning the dock or snacks helpers from inside
+  -- the form (in insert mode) works without dropping the keys as garbage.
+  for i = 1, 12 do
+    local lhs = "<F" .. i .. ">"
+    local termcoded = vim.api.nvim_replace_termcodes(lhs, true, false, true)
+    vim.keymap.set("i", lhs, function()
+      vim.cmd("stopinsert")
+      vim.api.nvim_feedkeys(termcoded, "m", false)
+    end, { buffer = bufnr, silent = true })
+  end
 
   vim.api.nvim_create_autocmd("WinLeave", {
     buffer = bufnr,

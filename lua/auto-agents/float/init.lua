@@ -16,7 +16,10 @@ local logger = require("auto-agents.logger")
 local M = {}
 
 local SLOT_MARKER = "auto_agents_slot"
-M.MIN_SLOT = 5
+-- Boundary: slots 0..5 are main, 6..9 are sub-floats. Mirrors
+-- M.MAIN_SLOT_MAX in lua/auto-agents/init.lua (kept duplicated to avoid
+-- a require cycle between auto-agents and auto-agents.float).
+M.MIN_SLOT = 6
 M.MAX_SLOT = 9
 
 ---@return boolean
