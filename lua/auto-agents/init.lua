@@ -416,6 +416,14 @@ local function ensure_main_window(force)
   vim.api.nvim_set_option_value("signcolumn", "no", { win = winid })
   vim.api.nvim_set_option_value("foldcolumn", "0", { win = winid })
 
+  -- Lock the panel width: claudecode.nvim's diff handler runs
+  -- `wincmd =` (equalize) when the diff vsplit opens, which would
+  -- otherwise stretch our panel to ~1/3 of the editor. winfixwidth
+  -- tells vim to leave THIS window's width alone during equalize and
+  -- balance ops. Direct `nvim_win_set_width` calls bypass it, but
+  -- those are caught by the AutoAgentsDiffParity autocmd hooks below.
+  vim.api.nvim_set_option_value("winfixwidth", true, { win = winid })
+
   return winid
 end
 
