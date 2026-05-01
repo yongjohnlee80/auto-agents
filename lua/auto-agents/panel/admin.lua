@@ -50,6 +50,7 @@ local function help_lines()
     "  agent task done <N> <index>    mark task #<index> done (removes it)",
     "  agent task list [<N>]          show tasks for slot N (or all)",
     "  agent mem                      report RSS per running agent",
+    "  kb init [<type> [<seed>]]      seed kb (coding|wiki|research|ops|general|custom)",
     "  kb path                        print kb root + ensure layout",
     "  kb scope <N> <mode>            change kb_scope (shared|private|isolated)",
     "  kb sync                        regenerate manifest.json per namespace",
@@ -65,16 +66,22 @@ local function help_lines()
     "  resource list [<N>]            list grants (all or for slot N)",
     "  resource manager set <S> <M>   designate slot M as manager of S",
     "  resource manager show          show manager → subordinate map",
-    "  config save                    persist current bootstrap to JSON",
-    "  config reset                   delete persisted JSON (revert to lazy spec)",
-    "  config show                    show effective config + persistence path",
+    "  project init                   create a per-project TOML for this cwd",
+    "  project import [<key|path|cwd>] duplicate agents from another project",
+    "  project remove                 delete the per-project TOML (KB survives)",
+    "  project list                   list known config files",
+    "  project show                   print active resolution",
+    "  config save                    write current bootstrap to active TOML",
+    "  config reset                   alias of 'project remove'",
+    "  config show                    show effective config + paths",
+    "  config path                    print path of the active TOML",
     "  clear                          wipe history above the prompt",
     "  quit                           close the auto-agents panel",
     "",
     "Kinds: claude | codex | gemini | copilot | generic",
-    "Persistence: form save / agent rename / agent move auto-save",
-    "             to <stdpath('data')>/auto-agents/<project>.json",
-    "Future: kb *, resource * (M4/M5).",
+    "Config: project file at <stdpath('config')>/auto-agents/<key>.toml,",
+    "        falls back to global.toml in that dir, else empty.",
+    "        :cd does not move the project — boundary is cached at startup.",
     "",
   }
 end
@@ -149,6 +156,12 @@ local function dispatch(input)
         vim.api.nvim_buf_set_lines(M._bufnr, 0, last - 1, false, {})
       end
     end
+
+  elseif verb == "project" then
+    local sub = toks[2]
+    local args = {}
+    for i = 3, #toks do args[#args + 1] = toks[i] end
+    require("auto-agents.project").dispatch(sub, args, function(lines) emit(lines) end)
 
   elseif verb == "quit" then
     emit({ "Closing panel." })
@@ -252,62 +265,91 @@ local function dispatch(input)
       local root = kb.root()
       kb.ensure_layout(root)
       emit({ "kb root: " .. root })
+    elseif sub == "init" then
+      local kb_types = require("auto-agents.kb.types")
+      local type = toks[3]
+      if not type then
+        local lines = { "kb init: pick a type", "" }
+        for _, t in ipairs(kb_types.list()) do
+          table.insert(lines, string.format("  %-9s %s", t.name, t.description))
+        end
+        table.insert(lines, "  custom    (provide a path: 'kb init custom <path>')")
+        table.insert(lines, "")
+        emit(lines)
+      else
+        local cfg2 = require("auto-agents").state.config
+        cfg2.kb = cfg2.kb or {}
+        local seed_path
+        if type == "custom" then
+          seed_path = toks[4] and vim.fn.expand(toks[4]) or nil
+          if not seed_path or vim.fn.filereadable(seed_path) ~= 1 then
+            emit({ "kb init custom: needs a readable .md path — got '" .. tostring(toks[4]) .. "'" })
+            return
+          end
+          cfg2.kb.seed_path = seed_path
+        else
+          if not kb_types.seed_path(type) then
+            emit({ "kb init: unknown type '" .. type .. "'. try 'kb init' to list." })
+            return
+          end
+          cfg2.kb.seed_path = nil
+        end
+        cfg2.kb.type = type
+        local root = kb.root()
+        kb.ensure_layout(root, { type = type, seed_path = seed_path, force_schema = true })
+        require("auto-agents.config.store").save_current()
+        emit({ "kb init (" .. type .. "): ensured at " .. root, "  AGENTS.md refreshed from seed." })
+      end
     elseif sub == "scope" then
       local n = tonumber(toks[3])
-      local mode = toks[4]
-      local valid = { shared = true, private = true, isolated = true }
-      if not n or not mode or not valid[mode] then
-        emit({ "kb scope: usage 'kb scope <slot> <shared|private|isolated>'" })
-      else
-        local cfg = require("auto-agents").state.config or {}
-        cfg.agents = cfg.agents or {}
-        cfg.agents.bootstrap = cfg.agents.bootstrap or {}
-        local found
-        for _, e in ipairs(cfg.agents.bootstrap) do
-          if e.slot == n then e.kb_scope = mode; found = e; break end
-        end
-        if found then
-          pcall(function() require("auto-agents.agent.persist").save_current() end)
-          emit({ "Set kb_scope of slot " .. n .. " to " .. mode .. " (effective at next spawn)" })
-        else
-          emit({ "kb scope: slot " .. n .. " has no bootstrap entry" })
-        end
-      end
-    elseif sub == "new" or sub == "open" then
+      local specs = require("auto-agents.panel.wizard_specs")
+      require("auto-agents.panel.wizard").start(specs.kb_scope(n), function(lines) emit(lines) end)
+    elseif sub == "new" then
       local rel = toks[3]
-      if not rel then
-        emit({ "kb " .. sub .. ": usage 'kb " .. sub .. " <relative-path>' (e.g. shared/notes/foo.md)" })
-      else
+      if rel and rel ~= "" then
+        -- Power-user form: 'kb new <relative>' bypasses the wizard.
         local path = kb.resolve(rel)
-        if sub == "new" then
-          local dir = vim.fn.fnamemodify(path, ":h")
-          vim.fn.mkdir(dir, "p")
-          if vim.fn.filereadable(path) == 0 then
-            local f = io.open(path, "w"); if f then f:close() end
-            kb.log("new: " .. rel)
-          end
+        local dir = vim.fn.fnamemodify(path, ":h")
+        vim.fn.mkdir(dir, "p")
+        if vim.fn.filereadable(path) == 0 then
+          local f = io.open(path, "w"); if f then f:close() end
+          kb.log("new: " .. rel)
         end
         emit({ "Opening " .. path })
         vim.schedule(function()
-          local target = M.get_bufnr() and require("auto-agents").state.panel_winid
-          -- Open in a non-panel, non-float window so the file lands in
-          -- the editor area, not in the panel.
+          local panel = require("auto-agents").state.panel_winid
+          local target_win
+          for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            if vim.api.nvim_win_is_valid(w) and w ~= panel then
+              local cfg2 = vim.api.nvim_win_get_config(w)
+              if cfg2.relative == "" or cfg2.relative == nil then target_win = w; break end
+            end
+          end
+          if target_win then pcall(vim.api.nvim_set_current_win, target_win) end
+          vim.cmd("edit " .. vim.fn.fnameescape(path))
+        end)
+      else
+        local specs = require("auto-agents.panel.wizard_specs")
+        require("auto-agents.panel.wizard").start(specs.kb_new(), function(lines) emit(lines) end)
+      end
+    elseif sub == "open" then
+      local rel = toks[3]
+      if not rel then
+        emit({ "kb open: usage 'kb open <relative-path>' (e.g. shared/notes/foo.md)" })
+      else
+        local path = kb.resolve(rel)
+        emit({ "Opening " .. path })
+        vim.schedule(function()
           local panel = require("auto-agents").state.panel_winid
           local target_win
           for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
             if vim.api.nvim_win_is_valid(w) and w ~= panel then
               local cfg = vim.api.nvim_win_get_config(w)
-              if cfg.relative == "" or cfg.relative == nil then
-                target_win = w; break
-              end
+              if cfg.relative == "" or cfg.relative == nil then target_win = w; break end
             end
           end
-          if target_win then
-            pcall(vim.api.nvim_set_current_win, target_win)
-            vim.cmd("edit " .. vim.fn.fnameescape(path))
-          else
-            vim.cmd("edit " .. vim.fn.fnameescape(path))
-          end
+          if target_win then pcall(vim.api.nvim_set_current_win, target_win) end
+          vim.cmd("edit " .. vim.fn.fnameescape(path))
         end)
       end
     elseif sub == "log" then
@@ -388,35 +430,46 @@ local function dispatch(input)
 
   elseif verb == "config" then
     local sub = toks[2]
+    local store = require("auto-agents.config.store")
+    local aa = require("auto-agents")
     if sub == "save" then
-      local persist = require("auto-agents.agent.persist")
-      local ok = persist.save_current()
-      emit({ ok and ("Saved bootstrap to " .. persist.file_path())
-                or "Failed to save persisted state" })
+      local ok, path = store.save_current()
+      emit({ ok and ("Saved → " .. path) or "Failed to save config" })
     elseif sub == "reset" then
-      local persist = require("auto-agents.agent.persist")
-      local path = persist.file_path()
-      local ok = persist.reset()
-      emit({ ok and ("Reset persisted state at " .. path .. " (lazy-spec will be used on next setup)")
-                or "Failed to reset persisted state" })
+      local key = aa.state.session_project_key
+      if not key then
+        emit({ "config reset: session not initialized" })
+      else
+        local removed, path = store.remove_project(key)
+        emit({ removed
+          and ("Removed " .. path .. " (next read falls back to global)")
+          or  ("No per-project config to remove (" .. path .. " did not exist)") })
+      end
     elseif sub == "show" then
-      local persist = require("auto-agents.agent.persist")
-      local cfg = require("auto-agents").state.config or {}
+      local cfg = aa.state.config or {}
+      local key = aa.state.session_project_key or "?"
+      local active_path, target = store.active_path(key)
       local lines = {
         "",
         "Effective config:",
+        "  config_source     = " .. tostring(aa.state.config_source),
+        "  active_target     = " .. target .. "  → " .. active_path,
+        "  project_path      = " .. store.project_path(key),
+        "  global_path       = " .. store.global_path(),
+        "  session_cwd       = " .. tostring(aa.state.session_cwd),
+        "  session_project   = " .. tostring(aa.state.session_project_root),
         "  panel.percentage  = " .. tostring(((cfg.panel or {}).percentage)),
         "  panel.min_width   = " .. tostring(((cfg.panel or {}).min_width)),
         "  panel.max_width   = " .. tostring(((cfg.panel or {}).max_width)),
         "  panel.side        = " .. tostring(((cfg.panel or {}).side)),
         "  log_level         = " .. tostring(cfg.log_level),
-        "  persist file      = " .. persist.file_path(),
-        "  persisted exists  = " .. tostring(vim.uv.fs_stat(persist.file_path()) ~= nil),
         "",
       }
       emit(lines)
     elseif sub == "path" then
-      emit({ "persist file: " .. require("auto-agents.agent.persist").file_path() })
+      local key = aa.state.session_project_key or "?"
+      local active_path, target = store.active_path(key)
+      emit({ "active config (" .. target .. "): " .. active_path })
     else
       emit({ "config: unknown subverb '" .. tostring(sub) .. "' — try 'save', 'reset', 'show', 'path'" })
     end
@@ -434,15 +487,15 @@ local function dispatch(input)
     elseif sub == "list" then
       emit(status_lines())
     elseif sub == "add" then
-      emit({ "Opening new-agent form…" })
-      vim.schedule(function() require("auto-agents.panel.form").open_add() end)
+      local specs = require("auto-agents.panel.wizard_specs")
+      require("auto-agents.panel.wizard").start(specs.agent("add"), function(lines) emit(lines) end)
     elseif sub == "edit" then
       local n = tonumber(toks[3])
       if not n then
         emit({ "agent edit: missing slot number (1..9)" })
       else
-        emit({ "Opening edit form for slot " .. n .. "…" })
-        vim.schedule(function() require("auto-agents.panel.form").open_edit(n) end)
+        local specs = require("auto-agents.panel.wizard_specs")
+        require("auto-agents.panel.wizard").start(specs.agent("edit", n), function(lines) emit(lines) end)
       end
     elseif sub == "kill" then
       local n = tonumber(toks[3])
@@ -629,8 +682,12 @@ local function complete_at(prompt, cursor_col)
     candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
   elseif #prev_toks == 1 and prev_toks[1] == "config" then
     candidates = { "save", "reset", "show", "path" }
+  elseif #prev_toks == 1 and prev_toks[1] == "project" then
+    candidates = { "init", "import", "remove", "list", "show" }
   elseif #prev_toks == 1 and prev_toks[1] == "kb" then
-    candidates = { "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
+    candidates = { "init", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
+  elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "init" then
+    candidates = { "coding", "wiki", "research", "ops", "general", "custom" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb"
     and (prev_toks[2] == "scope" or prev_toks[2] == "attach") then
     candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
@@ -706,12 +763,32 @@ function M.get_or_create_buffer()
 
   vim.fn.prompt_setprompt(bufnr, PROMPT)
   vim.fn.prompt_setcallback(bufnr, function(input)
-    -- Defer dispatch so vim has time to add the new prompt line. Without
-    -- this, our emit() (which inserts before the last/prompt line) would
-    -- land in the wrong slot — between the user's input and the new
-    -- prompt rather than above the new prompt.
-    vim.schedule(function() dispatch(input) end)
+    -- Defer so vim has time to add the new prompt line. Without this,
+    -- emit() would land between the user's input and the new prompt
+    -- rather than above the new prompt.
+    vim.schedule(function()
+      local wizard = require("auto-agents.panel.wizard")
+      if wizard.is_active() then
+        wizard.feed(input or "")
+      else
+        dispatch(input)
+      end
+    end)
   end)
+
+  -- <C-c> aborts an active wizard (terminal-style interrupt). When no
+  -- wizard is running, the keymap is a no-op so the prompt buffer's
+  -- usual behavior is preserved (^C cancels current input).
+  vim.keymap.set({ "i", "n" }, "<C-c>", function()
+    local wizard = require("auto-agents.panel.wizard")
+    if wizard.is_active() then
+      wizard.cancel()
+    else
+      -- Fall through to default — feed a literal <C-c> to vim.
+      local termcoded = vim.api.nvim_replace_termcodes("<C-c>", true, false, true)
+      vim.api.nvim_feedkeys(termcoded, "n", false)
+    end
+  end, { buffer = bufnr, silent = true })
 
   -- Tab completion (D15). Buffer-local so we don't interfere with <Tab>
   -- elsewhere. Falls through to <C-n> if the popup is already showing.
@@ -757,6 +834,28 @@ function M.get_or_create_buffer()
   vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, banner)
 
   M._bufnr = bufnr
+
+  -- First-run auto-engage (M6): if the resolved config has zero agents,
+  -- proactively start the agent.add wizard so a fresh nvim begins with
+  -- a creation flow instead of an empty admin REPL. Defer with schedule
+  -- so the prompt line is fully rendered before the wizard emits.
+  vim.schedule(function()
+    if not buf_valid() then return end
+    local aa = require("auto-agents")
+    local cfg = aa.state.config or {}
+    local count = ((cfg.agents and cfg.agents.bootstrap) and #cfg.agents.bootstrap) or 0
+    if count > 0 then return end
+    local wizard = require("auto-agents.panel.wizard")
+    if wizard.is_active() then return end
+    emit({
+      "",
+      "(no agents configured — starting 'agent add' wizard)",
+      "(<C-c> to cancel; type 'project init' first if you want a per-project config)",
+    })
+    local specs = require("auto-agents.panel.wizard_specs")
+    wizard.start(specs.agent("add"), function(lines) emit(lines) end)
+  end)
+
   return bufnr
 end
 

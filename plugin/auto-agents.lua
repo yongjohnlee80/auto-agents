@@ -39,3 +39,19 @@ vim.api.nvim_create_user_command("AutoAgentsDock", function()
 end, {
   desc = "Toggle the auto-agents navigation dock (rightmost float, single-key dispatch)",
 })
+
+vim.api.nvim_create_user_command("AutoAgentsProject", function(opts)
+  local sub = opts.fargs[1]
+  local args = {}
+  for i = 2, #opts.fargs do args[#args + 1] = opts.fargs[i] end
+  require("auto-agents.project").dispatch(sub, args, nil)
+end, {
+  nargs = "*",
+  complete = function(_, line)
+    local subs = { "init", "import", "remove", "list", "show", "help" }
+    local n_words = #vim.split(line, "%s+", { trimempty = true })
+    if n_words <= 2 then return subs end
+    return {}
+  end,
+  desc = "Manage auto-agents project config (init|import|remove|list|show)",
+})

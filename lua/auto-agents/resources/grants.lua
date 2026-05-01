@@ -9,9 +9,11 @@
 ---  env     (M5.C) An env var name to pass through.
 ---  cmd     (M5.C) Whitelisted command for manager-routed dispatch.
 ---
----Persistence: per-project JSON keyed by sha256(git_root || cwd) —
----same key strategy as agent/persist.lua so grants and bootstrap
----live in the same `<stdpath('data')>/auto-agents/<key>` namespace.
+---Persistence: per-project JSON keyed by sha256(git_root || cwd) under
+---`<stdpath('data')>/auto-agents/<key>-grants.json`. Bootstrap lives in
+---a TOML in `<stdpath('config')>/auto-agents/<key>.toml` (see
+---`auto-agents.config.store`); grants stay JSON for now since they're
+---internal coordination state, not human-edited.
 ---@module 'auto-agents.resources.grants'
 
 local M = {}
@@ -29,9 +31,14 @@ M._grants = {}
 
 ---@return string  -- absolute file path
 function M.file_path()
-  local cwd_mod = require("auto-agents.cwd")
-  local root = cwd_mod.git_root(vim.fn.getcwd()) or vim.fn.getcwd()
-  local key = vim.fn.sha256(root):sub(1, 16)
+  -- Prefer the session-cached project key so :cd doesn't move our state.
+  -- Falls back to live resolution if setup() hasn't run yet (e.g. tests).
+  local key = (require("auto-agents").state or {}).session_project_key
+  if not key then
+    local cwd_mod = require("auto-agents.cwd")
+    local root = cwd_mod.git_root(vim.fn.getcwd()) or vim.fn.getcwd()
+    key = vim.fn.sha256(root):sub(1, 16)
+  end
   local dir = vim.fn.stdpath("data") .. "/auto-agents"
   vim.fn.mkdir(dir, "p")
   return dir .. "/" .. key .. "-grants.json"

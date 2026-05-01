@@ -19,34 +19,58 @@ M.MAX_SLOT = 9
 ---@field panel_winid integer|nil
 ---@field slot_terminals table<integer, AutoAgentsTerminalInstance>  -- main slots 1..4
 ---@field focused_slot integer  -- last-focused slot 0..4; restored on panel reopen
+---@field session_cwd string|nil          -- raw cwd at setup() time
+---@field session_project_root string|nil -- git_root(session_cwd) or session_cwd
+---@field session_project_key string|nil  -- sha16(session_project_root) — TOML filename
+---@field config_source string|nil        -- "project"|"global"|"none"; resolved at setup
 M.state = {
   config = nil,
   initialized = false,
   panel_winid = nil,
   slot_terminals = {},
   focused_slot = 1,
+  session_cwd = nil,
+  session_project_root = nil,
+  session_project_key = nil,
+  config_source = nil,
 }
 
 ---@param opts table?
 function M.setup(opts)
   local config = require("auto-agents.config").apply(opts or {})
   require("auto-agents.logger").setup(config)
-  -- M3.4 persistence: if a per-project JSON exists, it overrides the
-  -- lazy-spec bootstrap. User mutations via the form / rename / move
-  -- survive across restarts. Reset via `config reset` in admin.
-  local persisted = require("auto-agents.agent.persist").load()
-  if persisted then
-    config.agents = config.agents or {}
-    config.agents.bootstrap = persisted
-    require("auto-agents.logger").info("init",
-      "loaded " .. #persisted .. " persisted bootstrap entries")
+
+  -- Cache the session's project identity once. :cd doesn't move agents
+  -- or KB — we resolve everything against the cwd we saw at setup().
+  local cwd_mod = require("auto-agents.cwd")
+  local raw_cwd = vim.fn.getcwd()
+  local root = cwd_mod.git_root(raw_cwd) or raw_cwd
+  M.state.session_cwd = raw_cwd
+  M.state.session_project_root = root
+  M.state.session_project_key = vim.fn.sha256(root):sub(1, 16)
+
+  -- M6: TOML config store replaces the lazy-spec bootstrap entirely.
+  -- Resolution order: per-project file → global file → empty.
+  local store = require("auto-agents.config.store")
+  local loaded, source = store.load(M.state.session_project_key)
+  config.agents = config.agents or {}
+  config.agents.bootstrap = (loaded and loaded.agents) or {}
+  if loaded and loaded.kb then
+    config.kb = config.kb or {}
+    if loaded.kb.root then config.kb.root_override = loaded.kb.root end
+    if loaded.kb.type then config.kb.type = loaded.kb.type end
+    if loaded.kb.seed then config.kb.seed_path = loaded.kb.seed end
   end
+  M.state.config_source = source
+
   -- M5: load resource grants for this project.
   require("auto-agents.resources.grants").load()
   M.state.config = config
   M.state.initialized = true
   require("auto-agents.float").install_auto_hide()
-  require("auto-agents.logger").info("init", "auto-agents v" .. M.version .. " initialized")
+  require("auto-agents.logger").info("init",
+    string.format("auto-agents v%s initialized; config_source=%s, agents=%d",
+      M.version, source, #config.agents.bootstrap))
 end
 
 -- ── local helpers ──────────────────────────────────────────────────────────
@@ -108,18 +132,45 @@ end
 ---Build the env table merged for an agent's spawn — KB scope vars
 ---(M4) + resource grants (M5). Returns nil if no env extras to keep
 ---snacks's defaulting clean.
+---
+---Side effects (M6, KB-aware launch): ensures the KB layout and writes
+---the per-kind instruction file (CLAUDE.md/AGENTS.md/GEMINI.md) at the
+---agent's cwd so the TUI auto-loads project conventions on startup.
+---Logs a one-line confirmation banner so the user sees it landed.
 ---@param spec AutoAgentsResolvedSpec
+---@param cwd string|nil
 ---@return table<string,string>|nil
-local function build_agent_env(spec)
+local function build_agent_env(spec, cwd)
   local cfg = M.state.config
   if not cfg then return nil end
   local kb = require("auto-agents.kb")
   local kb_root = kb.root()
-  kb.ensure_layout(kb_root)
+  kb.ensure_layout(kb_root, {
+    type = (cfg.kb or {}).type,
+    seed_path = (cfg.kb or {}).seed_path,
+  })
   local env = require("auto-agents.kb.scope").env_for(spec, kb_root)
   -- M5: merge in resource grants (AUTO_AGENTS_ALLOWED_PATHS, etc.).
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
   for k, v in pairs(resources_env) do env[k] = v end
+
+  -- M6 KB-aware launch: write the per-kind instruction file (idempotent)
+  -- and emit a visible confirmation. This is the durable, TUI-safe way
+  -- to inform the agent — sending stdin to claude/codex would be parsed
+  -- as a prompt, so we lean on each kind's auto-loaded markdown.
+  if spec.configured ~= false then  -- skip empty-slot shells
+    local instr_path = require("auto-agents.kb.instruct").ensure(spec, kb_root, cwd)
+    local logger = require("auto-agents.logger")
+    logger.info("spawn",
+      string.format("slot %s (%s/%s) → KB=%s scope=%s%s",
+        tostring(spec.slot or "?"),
+        spec.kind or "?",
+        spec.name or "anon",
+        kb_root,
+        spec.kb_scope or "shared",
+        instr_path and (" instr=" .. instr_path) or ""))
+  end
+
   if next(env) == nil then return nil end
   return env
 end
@@ -196,7 +247,7 @@ local function ensure_main_slot_terminal(slot, winid)
   term = require("auto-agents.terminal").new(cfg, {
     cmd = spec.cmd,
     cwd = cwd,
-    env = build_agent_env(spec),
+    env = build_agent_env(spec, cwd),
     on_exit = function(code)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
     end,
@@ -309,7 +360,7 @@ function M.toggle_sub(slot)
   float.toggle(cfg, slot, {
     cmd = spec.cmd,
     cwd = cwd,
-    env = build_agent_env(spec),
+    env = build_agent_env(spec, cwd),
     -- Metadata for the float title (snacks renders this in the bordered
     -- title position). Lets users distinguish e.g. two Claude floats.
     kind = spec.kind,
@@ -439,7 +490,7 @@ function M.task_add(slot, text)
   if not entry then return false end
   entry.tasks = entry.tasks or {}
   table.insert(entry.tasks, text)
-  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  pcall(function() require("auto-agents.config.store").save_current() end)
   return true
 end
 
@@ -454,7 +505,7 @@ function M.task_done(slot, index)
   if not entry or not entry.tasks then return false end
   if index < 1 or index > #entry.tasks then return false end
   local text = table.remove(entry.tasks, index)
-  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  pcall(function() require("auto-agents.config.store").save_current() end)
   return true, text
 end
 
@@ -647,7 +698,7 @@ function M.move_slot(from, to, swap)
       winbar.render(M.state.focused_slot or 1, w),
       { win = M.state.panel_winid })
   end
-  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  pcall(function() require("auto-agents.config.store").save_current() end)
   return true, nil
 end
 
@@ -675,7 +726,7 @@ function M.rename_slot(slot, new_name)
           { win = M.state.panel_winid })
       end
       M.refresh_keymaps()
-      pcall(function() require("auto-agents.agent.persist").save_current() end)
+      pcall(function() require("auto-agents.config.store").save_current() end)
       return true
     end
   end

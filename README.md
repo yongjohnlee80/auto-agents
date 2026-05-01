@@ -16,14 +16,16 @@ split, and [`PERFORMANCE.md`](./PERFORMANCE.md) for the memory/CPU budget.
 
 - [Why](#why)
 - [Install](#install)
+- [First run](#first-run)
 - [Slot model](#slot-model)
 - [Keymaps & commands](#keymaps--commands)
-- [Bootstrap config](#bootstrap-config)
+- [TOML config](#toml-config)
+- [Project commands](#project-commands)
 - [Admin panel](#admin-panel)
+- [Wizards](#wizards)
 - [Agent kinds](#agent-kinds)
 - [Knowledge base](#knowledge-base)
 - [Resource grants](#resource-grants)
-- [Persistence](#persistence)
 - [Status](#status)
 - [Attribution](#attribution)
 - [License](#license)
@@ -47,24 +49,24 @@ without losing the main view.
   "yongjohnlee80/auto-agents",
   version = "^0.1.0",
   dependencies = { "folke/snacks.nvim" },
-  opts = {
-    agents = {
-      bootstrap = {
-        { slot = 1, kind = "claude", name = "main",     title = "Claude" },
-        { slot = 2, kind = "codex",  name = "reviewer", title = "Codex",
-          bottom_margin = 0 },                  -- codex pads its own footer
-        { slot = 5, kind = "claude", name = "scout",    title = "Claude scout" },
-        -- floats:
-        { slot = 6, kind = "codex",   name = "side",       title = "Codex side" },
-        { slot = 7, kind = "copilot", name = "gh-copilot", title = "Copilot" },
-      },
-    },
-  },
+  opts = {},  -- agents/KB live in TOML — see below
 }
 ```
 
 `snacks.nvim` is required for the sub-agent floats and the navigation dock.
-Empty slots fall back to `$SHELL`, so you can leave any of them unconfigured.
+
+**Agents are not configured in your lazy spec.** They live in TOML files
+under `<stdpath('config')>/auto-agents/`:
+
+- `<sha16-of-project-root>.toml` — per-project (overrides global)
+- `global.toml`                  — shared default across all projects
+
+On first run with no TOML, `:AutoAgents` opens slot 0 (admin) and auto-engages
+an `agent add` wizard. Step through the prompts and you get a working agent
+plus a saved TOML. See [First run](#first-run) below.
+
+The session pins its project key at startup — `:cd` does not move agents or
+KB mid-session, so you can wander the file tree freely.
 
 ## Slot model
 
@@ -121,28 +123,82 @@ For an example wiring (with dynamic `which-key` descriptions per slot), see
 [`examples/lazy-spec.lua`](./examples/lazy-spec.lua) — or the maintainer's live
 config at [`autovim`](https://github.com/yongjohnlee80/autovim/blob/main/lua/plugins/auto-agents.lua).
 
-## Bootstrap config
+## First run
 
-Each entry in `agents.bootstrap` declares one slot. All fields except `slot`
-are optional.
+Open `nvim` in a project directory, then `:AutoAgents`. With no TOML
+configured, the panel opens at slot 0 (admin) and auto-starts the
+`agent add` wizard:
 
-```lua
-{
-  slot          = 2,                       -- 1..9
-  kind          = "codex",                 -- claude|codex|gemini|copilot|generic
-  name          = "reviewer",              -- handle (used for kb dir, grants)
-  title         = "Codex",                 -- shown in winbar / float title
-  role          = "review code changes",   -- free-text prompt hint
-  cwd           = "~/Source/proj",         -- explicit cwd; defaults to git root
-  cmd           = { "codex", "--mini" },   -- override adapter cmd
-  allowed_paths = { "src/", "tests/" },    -- exported as AUTO_AGENTS_ALLOWED_PATHS
-  manager       = nil,                     -- slot N that manages this one (M5)
-  kb_scope      = "shared",                -- shared|private|isolated
-  bottom_margin = 0,                       -- override panel.bottom_margin for this slot
-}
+```text
+auto-agents v0.1.0 — orchestration admin (slot 0)
+Type ? for help. Try 'status' to see slot states.
+
+(no agents configured — starting 'agent add' wizard)
+(<C-c> to cancel; type 'project init' first if you want a per-project config)
+
+auto-agents: new agent
+  <C-c> to cancel.
+  slot  [1..9]:
+> 1
+  kind (claude|codex|gemini|copilot|generic)  [claude]:
+> 
+  name (handle, used for KB dir + grants)  [(blank to auto-generate)]:
+> main
+  ...
+  Create / ensure KB for this project? (y|N)  [N]:
+> y
+
+✓ Slot 1 added (claude/main)
+  saved → ~/.config/nvim/auto-agents/<project-key>.toml
+  KB ensured at <project-root>/.auto-agents/kb
 ```
 
-Top-level `opts`:
+Each step shows the current/default value in `[…]`. Press Enter to keep it,
+or type a new value. **`<C-c>` cancels** the wizard at any step (terminal
+convention).
+
+If you'd rather configure a **per-project** TOML before adding agents, type
+`project init` first — then run `agent add`.
+
+## TOML config
+
+Agents and KB are stored in TOML files under
+`<stdpath('config')>/auto-agents/`:
+
+| File                     | Used for                                          |
+|--------------------------|---------------------------------------------------|
+| `<project-sha16>.toml`   | Per-project agents — wins if it exists.           |
+| `global.toml`            | Default agents for any project without its own.   |
+
+The session resolves its project key at nvim startup (`sha16(git_root || cwd)`)
+and **caches it** — `:cd` does not move agents/KB mid-session.
+
+```toml
+[project]
+cwd = "/abs/path"
+created_at = "2026-05-01T12:34:56Z"
+
+[kb]
+root = "/abs/path/.auto-agents/kb"   # absolute; can be shared across projects
+
+[[agents]]
+slot          = 1
+kind          = "claude"             # claude|codex|gemini|copilot|generic
+name          = "main"
+title         = "Claude"
+role          = "primary engineering pair"   # optional
+cwd           = "/abs/path"                  # optional; defaults to project root
+cmd           = ["claude", "--mini"]         # optional override
+allowed_paths = ["src/", "tests/"]           # exported as AUTO_AGENTS_ALLOWED_PATHS
+manager       = 0                            # optional: managing slot
+kb_scope      = "shared"                     # shared|private|isolated
+bottom_margin = 1                            # optional: per-slot TUI footer override
+```
+
+You can hand-edit the TOML, or use the wizard inside the admin panel. Either
+way, mutations from the wizard land back in the same file.
+
+Top-level lua `opts` is now small — just runtime settings:
 
 ```lua
 {
@@ -151,16 +207,46 @@ Top-level `opts`:
     side          = "right",   -- left|right
     min_width     = 50,
     max_width     = 120,
-    percentage    = 0.30,      -- of editor cols
-    editor_floor  = 40,        -- refuse to open if editor would be narrower
+    percentage    = 0.30,
+    editor_floor  = 40,
     slot_rail     = "winbar",  -- winbar|vertical|off
-    bottom_margin = 1,         -- TUI footer breathing room (0 for codex)
+    bottom_margin = 1,         -- TUI footer breathing room (overridden per-slot in TOML)
   },
-  agents   = { default_kind = "claude", primary_kind = "claude", bootstrap = { ... } },
   kb       = { default_scope = "shared" },
   terminal = { provider = "auto", git_repo_cwd = true },
 }
 ```
+
+## Project commands
+
+`:AutoAgentsProject <sub>` and the admin `project ...` verb manage TOML files.
+
+| Command                                 | Effect                                                            |
+|-----------------------------------------|-------------------------------------------------------------------|
+| `project init`                          | Create a fresh per-project TOML for the cached cwd.               |
+| `project import <key\|path\|cwd>`       | Copy `[[agents]]` from another project; **shares its `[kb].root`**. |
+| `project import` (no args)              | List candidates, ask you to re-run with the chosen one.           |
+| `project remove`                        | Delete the per-project TOML. **KB on disk survives.** Falls back to global. |
+| `project list`                          | Show every TOML in the config dir + which is active.              |
+| `project show`                          | Print the active resolution (`project`/`global`/`none`) + paths.  |
+
+`project import` exists for the case where you have the same project mirrored
+at multiple paths (a clone, a worktree, a sibling repo) — agents are
+duplicated, but the KB is shared so notes don't fragment.
+
+## Wizards
+
+The wizard runs **inside the admin prompt buffer** — it's not a modal float.
+Each step shows the field name, choices (if any), and `[current]` default.
+Press Enter to keep, type to change, **`<C-c>` to abort.**
+
+| Verb                        | Wizard                                                            |
+|-----------------------------|-------------------------------------------------------------------|
+| `agent add`                 | New agent. Pre-filled with sensible defaults. Final step offers KB init. |
+| `agent edit <slot>`         | Edit existing agent. Every field pre-fills with the current value.|
+| `kb new`                    | Create + open a KB file. Single prompt.                           |
+| `kb scope <slot>`           | Change a slot's `kb_scope` interactively (pre-fills current).     |
+| `project import` (no arg)   | Pick a source project from a listing.                             |
 
 ## Admin panel
 
@@ -224,8 +310,33 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 
 ## Knowledge base
 
-A project-local KB lives at `<git-root>/.auto-agents/kb`. `kb_scope` controls
-each agent's read/write window via env vars injected at spawn:
+A project-local KB lives at `<git-root>/.auto-agents/kb` (or wherever
+`[kb].root` in the TOML points). Every KB has an immutable `raw/` directory
+for source material — agents read it, never edit it.
+
+### KB types
+
+When you create a KB (via `agent add` wizard or `kb init <type>`), pick a
+specialized seed that comes with its own layout, conventions, and operations.
+The seed is copied to `<kb_root>/AGENTS.md` and is the canonical contract for
+that KB.
+
+| Type       | When to use                                                                  |
+|------------|------------------------------------------------------------------------------|
+| `coding`   | **Default for nvim users.** Codebase conventions, ADRs, review playbooks.    |
+| `wiki`     | LLM-wiki / Zettelkasten-flavored — durable, interlinked knowledge that compounds. |
+| `research` | Paper-driven research notebook — papers, hypotheses, experiments, synthesis. |
+| `ops`      | Runbook / SRE — alerts, runbooks, incidents, postmortems.                    |
+| `general`  | Living KB — minimal seed; structure emerges from real work.                  |
+| `custom`   | You supply the seed `.md`. Everything else (layout, raw immutability) still applies. |
+
+The seeds ship under the plugin's `kb-seeds/` directory. They're
+self-documenting markdown — open `kb-seeds/coding.md` (or any of the others)
+to see the full contract before picking a type.
+
+### Scope (per-agent)
+
+`kb_scope` controls each agent's read/write window via env vars injected at spawn:
 
 | Scope      | Reads                                         | Writes                  |
 |------------|-----------------------------------------------|-------------------------|
@@ -244,6 +355,24 @@ The plugin exports:
 wikilinks). `kb obsidian-init` scaffolds an Obsidian vault config in the kb
 root so you can browse the same files visually.
 
+### Telling the agent about the KB
+
+Two layers cooperate:
+
+1. **`<kb_root>/AGENTS.md`** — the canonical KB contract (copied from the
+   seed when you ran `kb init`). Defines the layout, operations, frontmatter,
+   immutability rule, and things to avoid for *this* KB. `<kb_root>/CLAUDE.md`
+   and `<kb_root>/GEMINI.md` sit alongside as thin pointers so each kind
+   auto-loads the same source of truth.
+2. **Per-kind instruction file at the agent's cwd** — `CLAUDE.md` /
+   `AGENTS.md` / `GEMINI.md` (per kind), with a small auto-agents block
+   between `<!-- auto-agents:begin -->` and `<!-- auto-agents:end -->`
+   markers. The block lists the env vars (`$AUTO_AGENTS_KB_ROOT` etc.) and
+   directs the agent to read `<kb_root>/AGENTS.md` for the full schema.
+
+Your hand-written content above or below the block is preserved on every
+re-spawn — the plugin only rewrites the delimited section.
+
 ## Resource grants
 
 Per-slot allowlists exposed to the agent process via env vars:
@@ -255,14 +384,6 @@ Per-slot allowlists exposed to the agent process via env vars:
 Grants are **best-effort coordination, not OS sandboxing** — the agent has to
 honor them. Use them for prompt-shaping ("only touch these paths") and for
 documenting boundaries between sub-agents.
-
-## Persistence
-
-Bootstrap mutations (form save, rename, move, `config save`) write to
-`<stdpath('data')>/auto-agents/<sha16-of-cwd>.json`. On next startup the
-plugin merges the persisted bootstrap on top of the lazy spec, so live
-edits survive a restart. `config reset` deletes the JSON and reverts to the
-spec baseline.
 
 ## Status
 

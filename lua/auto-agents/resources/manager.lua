@@ -46,7 +46,7 @@ function M.set(subordinate, manager_slot)
     end
   end
   entry.manager = manager_slot  -- nil clears
-  pcall(function() require("auto-agents.agent.persist").save_current() end)
+  pcall(function() require("auto-agents.config.store").save_current() end)
   return true, nil
 end
 

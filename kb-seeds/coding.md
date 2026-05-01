@@ -1,0 +1,233 @@
+# Knowledge Base — Coding Project Contract
+
+This knowledge base is a **coding-project KB**. It exists to make every
+agent (Claude, Codex, Gemini, Copilot, …) a disciplined contributor on
+this codebase: planning code changes, implementing them, reviewing PRs,
+debugging incidents, and explaining systems to humans.
+
+The KB is **the contract** — conventions in here are followed
+**rigorously**. If you (the agent) disagree with a rule, surface the
+disagreement explicitly *before* writing code that violates it. Do not
+silently ignore a convention.
+
+This file is the canonical schema. `CLAUDE.md` and `GEMINI.md` (if
+present) are thin pointers to this file.
+
+---
+
+## Layout
+
+```text
+<kb-root>/
+├── AGENTS.md                 ← this file (canonical schema)
+├── CLAUDE.md                 ← pointer to AGENTS.md
+├── GEMINI.md                 ← pointer to AGENTS.md
+├── log.md                    ← append-only chronology
+├── index.md                  ← catalog of pages, ADRs, playbooks
+├── raw/                      ← IMMUTABLE — agents do not edit (see below)
+│   ├── specs/                ← product specs, RFCs, design docs
+│   ├── issues/               ← bug reports, incident reports
+│   └── transcripts/          ← meeting notes, customer calls
+├── shared/                   ← agent-shared durable knowledge
+│   ├── conventions/          ← coding conventions per language/area
+│   ├── adrs/                 ← Architecture Decision Records
+│   ├── playbooks/            ← reusable runbooks (review-pr, debug-X, …)
+│   ├── glossary/             ← project-specific terminology
+│   └── synthesis/            ← cross-cutting analyses worth keeping
+└── agents/<agent-name>/      ← agent-private operational scratch
+    ├── tasks/                ← in-flight task notes
+    ├── reviews/              ← per-PR review drafts
+    └── scratch/              ← throwaway reasoning
+```
+
+---
+
+## Hard Rules (Non-Negotiable)
+
+1. **`raw/` is immutable.** Agents read from it but never edit, rename,
+   or delete. To retire a raw doc, move it to `archive/raw/` (create if
+   missing) and update citations. Outright deletion only for wrong,
+   private/sensitive, or accidentally-clipped sources.
+2. **Conventions in `shared/conventions/` are binding.** When planning
+   or implementing code in a covered area, read the convention file
+   first. If the convention is wrong, surface the conflict — don't
+   silently bypass.
+3. **ADRs are the source of truth for architectural decisions.** If the
+   work conflicts with an ADR in `shared/adrs/`, you must either
+   (a) follow the ADR, or (b) propose a new ADR that supersedes it.
+4. **Cite, don't fabricate.** Every non-obvious claim about the codebase
+   ("this function returns X", "the migration runs at startup") must be
+   verifiable — link to the file/line/PR/commit, or grep first.
+5. **Update before duplicating.** Extend an existing convention or
+   playbook before creating a near-duplicate. The KB is small on
+   purpose.
+6. **No secrets, ever.** Describe where a credential lives ("set
+   `FOO_TOKEN` in `~/.config/foo.toml`"), never copy the value.
+
+---
+
+## Operations
+
+### Plan code changes
+
+Before writing code:
+
+1. Read `index.md` → find the relevant convention(s), ADR(s),
+   playbook(s).
+2. Read each one end-to-end. Don't skim.
+3. Read the current code (use ripgrep / file reads) to confirm
+   assumptions.
+4. Propose the plan to the human in 3–5 bullets:
+   - what changes, where, and which conventions/ADRs apply
+   - explicit callout of any rule the work would bend or break
+5. Wait for approval before editing. (Exception: trivial fixes the
+   human explicitly delegated.)
+
+### Implement
+
+While editing:
+
+1. Honor the conventions you flagged in the plan.
+2. Keep diffs minimal — no drive-by reformats, no out-of-scope refactors.
+3. Run the project's lint/typecheck/test suite (or call it out if you
+   can't).
+4. Append a one-liner to `log.md`:
+   `## [YYYY-MM-DD HH:MM] impl | <one-line summary>`
+5. If the work surfaced a missing or wrong convention, propose an
+   update — don't silently fix it elsewhere.
+
+### Review a PR
+
+When reviewing code (yours or someone else's):
+
+1. Read `shared/playbooks/review-pr.md` first (create one if missing).
+2. Cross-check against `shared/conventions/*` and `shared/adrs/*`.
+3. Draft the review in `agents/<your-name>/reviews/<pr-id>.md`.
+4. Surface findings as: **must-fix**, **should-fix**, **nit**,
+   **question**. No vague "consider X" — be concrete.
+5. Append a `log.md` entry: `## [YYYY-MM-DD HH:MM] review | <pr-id>`.
+
+### Debug
+
+When investigating a bug:
+
+1. Reproduce first. If you can't, say so explicitly.
+2. Hypothesize → instrument → test → narrow. Document the trail in
+   `agents/<your-name>/scratch/<slug>.md`.
+3. When you find the cause, write a `shared/synthesis/<slug>.md` if the
+   pattern is likely to recur. Otherwise just fix and move on.
+4. If the fix touches a convention or ADR, update both in the same change.
+
+### Onboard a new convention
+
+New conventions land in `shared/conventions/`:
+
+```yaml
+---
+type: convention
+area: <language|framework|module>     # e.g. go, react, db-migrations
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+status: active | superseded | proposal
+sources: [<raw/path/to/source>, …]    # optional
+---
+```
+
+Each convention has:
+
+- **What** — the rule, in one sentence.
+- **Why** — the reason behind it (incident, principle, taste, etc.).
+- **How to apply** — when this kicks in, with concrete examples.
+- **Exceptions** — listed explicitly, if any.
+
+Reviewers and implementers read this first.
+
+### File an ADR
+
+ADRs are immutable once accepted. Format (`shared/adrs/NNNN-slug.md`):
+
+```yaml
+---
+type: adr
+number: 0042
+status: proposed | accepted | superseded
+date: YYYY-MM-DD
+supersedes: [0017]      # optional
+superseded-by: [0099]   # optional
+---
+
+# ADR 0042 — <title>
+
+## Context
+<the forces in tension>
+
+## Decision
+<what we chose>
+
+## Consequences
+<what becomes easier / harder>
+```
+
+To change a decision: write a new ADR that supersedes the old one.
+Never edit an accepted ADR's substance.
+
+---
+
+## Conventions for Wiki Pages
+
+All `shared/` pages have YAML frontmatter:
+
+```yaml
+---
+type: convention | adr | playbook | glossary | synthesis
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+status: active | draft | superseded
+sources: [<raw/path/to/source>, …]
+tags: [<tag>, …]
+---
+```
+
+Other rules:
+
+- Filenames are **kebab-case**, descriptive. `react-hooks-rules.md`,
+  not `RH.md` or `react_hooks_rules.md`.
+- Pages are **dense and factual**, not essays. 200–800 words is the
+  sweet spot. Split anything past ~1,500.
+- Cross-link with `[[wikilinks]]` for intra-KB references.
+- Append to `sources:`, never silently drop.
+- Mark unsourced-but-useful claims with `> [unsourced]`.
+
+---
+
+## index.md and log.md
+
+- **index.md** is content-oriented: every convention, ADR, playbook
+  listed with a one-line summary. Updated after every new shared/ page.
+- **log.md** is chronological: append-only, one line per operation.
+  Format: `## [YYYY-MM-DD HH:MM] <op> | <summary>`.
+  Tail it with `grep "^## \[" log.md | tail -10`.
+
+---
+
+## Things To Avoid
+
+- Editing or deleting `raw/` content.
+- Silently bypassing a convention because "it's just one line."
+- Writing essays in `shared/` — keep pages tight.
+- Putting in-flight task state in `shared/` (it belongs in `agents/<name>/`).
+- Inventing ADR numbers — always check `shared/adrs/` for the next free
+  number first.
+- Pasting credentials, API keys, tokens, or private data anywhere.
+- Touching another agent's `agents/<name>/` directory without permission.
+- Skipping `log.md` entries — they're how we audit each other.
+
+---
+
+## Why This Style
+
+A coding KB only earns its keep if it makes the **next** PR better. The
+structure above is biased toward decisions you'll reuse (conventions,
+ADRs, playbooks) and against scratch state that decays. The KB doesn't
+need to know what every commit did; `git log` already does that. It
+needs to know what we'd *do differently* next time.
