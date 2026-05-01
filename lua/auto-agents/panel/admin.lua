@@ -50,6 +50,15 @@ local function help_lines()
     "  agent task done <N> <index>    mark task #<index> done (removes it)",
     "  agent task list [<N>]          show tasks for slot N (or all)",
     "  agent mem                      report RSS per running agent",
+    "  kb path                        print kb root + ensure layout",
+    "  kb scope <N> <mode>            change kb_scope (shared|private|isolated)",
+    "  kb sync                        regenerate manifest.json per namespace",
+    "  kb new <relative>              create + open a kb file in the editor",
+    "  kb open <relative>             open a kb file in the editor",
+    "  kb attach <N> <relative>       send a kb-relative path to slot N",
+    "  kb tail                        open log.md in editor (autoread)",
+    "  kb log                         print path of kb log.md",
+    "  kb obsidian-init               scaffold .obsidian/ in kb root",
     "  config save                    persist current bootstrap to JSON",
     "  config reset                   delete persisted JSON (revert to lazy spec)",
     "  config show                    show effective config + persistence path",
@@ -138,6 +147,147 @@ local function dispatch(input)
   elseif verb == "quit" then
     emit({ "Closing panel." })
     vim.schedule(function() require("auto-agents").close() end)
+
+  elseif verb == "kb" then
+    local sub = toks[2]
+    local kb = require("auto-agents.kb")
+    if sub == "path" then
+      local root = kb.root()
+      kb.ensure_layout(root)
+      emit({ "kb root: " .. root })
+    elseif sub == "scope" then
+      local n = tonumber(toks[3])
+      local mode = toks[4]
+      local valid = { shared = true, private = true, isolated = true }
+      if not n or not mode or not valid[mode] then
+        emit({ "kb scope: usage 'kb scope <slot> <shared|private|isolated>'" })
+      else
+        local cfg = require("auto-agents").state.config or {}
+        cfg.agents = cfg.agents or {}
+        cfg.agents.bootstrap = cfg.agents.bootstrap or {}
+        local found
+        for _, e in ipairs(cfg.agents.bootstrap) do
+          if e.slot == n then e.kb_scope = mode; found = e; break end
+        end
+        if found then
+          pcall(function() require("auto-agents.agent.persist").save_current() end)
+          emit({ "Set kb_scope of slot " .. n .. " to " .. mode .. " (effective at next spawn)" })
+        else
+          emit({ "kb scope: slot " .. n .. " has no bootstrap entry" })
+        end
+      end
+    elseif sub == "new" or sub == "open" then
+      local rel = toks[3]
+      if not rel then
+        emit({ "kb " .. sub .. ": usage 'kb " .. sub .. " <relative-path>' (e.g. shared/notes/foo.md)" })
+      else
+        local path = kb.resolve(rel)
+        if sub == "new" then
+          local dir = vim.fn.fnamemodify(path, ":h")
+          vim.fn.mkdir(dir, "p")
+          if vim.fn.filereadable(path) == 0 then
+            local f = io.open(path, "w"); if f then f:close() end
+            kb.log("new: " .. rel)
+          end
+        end
+        emit({ "Opening " .. path })
+        vim.schedule(function()
+          local target = M.get_bufnr() and require("auto-agents").state.panel_winid
+          -- Open in a non-panel, non-float window so the file lands in
+          -- the editor area, not in the panel.
+          local panel = require("auto-agents").state.panel_winid
+          local target_win
+          for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            if vim.api.nvim_win_is_valid(w) and w ~= panel then
+              local cfg = vim.api.nvim_win_get_config(w)
+              if cfg.relative == "" or cfg.relative == nil then
+                target_win = w; break
+              end
+            end
+          end
+          if target_win then
+            pcall(vim.api.nvim_set_current_win, target_win)
+            vim.cmd("edit " .. vim.fn.fnameescape(path))
+          else
+            vim.cmd("edit " .. vim.fn.fnameescape(path))
+          end
+        end)
+      end
+    elseif sub == "log" then
+      emit({ "kb log: " .. kb.root() .. "/log.md" })
+    elseif sub == "sync" then
+      local summary = require("auto-agents.kb.sync").sync_all(kb.root())
+      local lines = { "", "kb sync: " .. summary.kb_root }
+      if #summary.namespaces == 0 then
+        table.insert(lines, "  (no namespaces)")
+      else
+        for _, ns in ipairs(summary.namespaces) do
+          if ns.error then
+            table.insert(lines, string.format("  %-22s ERROR: %s", ns.name, ns.error))
+          else
+            local broken = ns.broken or 0
+            local broken_suffix = broken > 0 and string.format("  (%d broken link%s)", broken, broken == 1 and "" or "s") or ""
+            table.insert(lines, string.format("  %-22s %d entries%s", ns.name, ns.count, broken_suffix))
+          end
+        end
+        if summary.total_broken > 0 then
+          table.insert(lines, "")
+          table.insert(lines, string.format("  total broken wikilinks: %d", summary.total_broken))
+        end
+      end
+      table.insert(lines, "")
+      emit(lines)
+    elseif sub == "obsidian-init" then
+      local result = require("auto-agents.kb.obsidian").init(kb.root())
+      local lines = { "", "kb obsidian-init: " .. result.dir }
+      for _, p in ipairs(result.written_files) do
+        table.insert(lines, "  wrote   " .. p)
+      end
+      for _, p in ipairs(result.skipped_files) do
+        table.insert(lines, "  skipped " .. p .. " (already exists)")
+      end
+      table.insert(lines, "")
+      table.insert(lines, "Open " .. kb.root() .. " in Obsidian as a vault.")
+      table.insert(lines, "")
+      emit(lines)
+    elseif sub == "attach" then
+      local n = tonumber(toks[3])
+      local rel = toks[4]
+      if not n or not rel then
+        emit({ "kb attach: usage 'kb attach <slot> <relative-path>'" })
+      else
+        local abs = kb.resolve(rel)
+        local ok, err = require("auto-agents").attach_slot(n, { abs })
+        if ok then
+          emit({ "Attached " .. abs .. " → slot " .. n })
+        else
+          emit({ "kb attach: " .. (err or "failed") })
+        end
+      end
+    elseif sub == "tail" then
+      -- Open log.md in the editor area (non-panel non-float window).
+      local log_path = kb.root() .. "/log.md"
+      kb.ensure_layout(kb.root())
+      emit({ "Opening " .. log_path .. " (autoread on)" })
+      vim.schedule(function()
+        local panel = require("auto-agents").state.panel_winid
+        local target_win
+        for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.api.nvim_win_is_valid(w) and w ~= panel then
+            local cfg = vim.api.nvim_win_get_config(w)
+            if cfg.relative == "" or cfg.relative == nil then
+              target_win = w; break
+            end
+          end
+        end
+        if target_win then pcall(vim.api.nvim_set_current_win, target_win) end
+        vim.cmd("edit " .. vim.fn.fnameescape(log_path))
+        vim.bo.autoread = true
+        vim.cmd("normal! G")
+      end)
+    else
+      emit({ "kb: unknown subverb '" .. tostring(sub) .. "' — try path/scope/sync/new/open/attach/tail/log" })
+    end
 
   elseif verb == "config" then
     local sub = toks[2]
@@ -365,9 +515,16 @@ local function complete_at(prompt, cursor_col)
 
   local candidates
   if #prev_toks == 0 then
-    candidates = { "help", "?", ":h", "status", "agent", "config", "clear", "quit" }
+    candidates = { "help", "?", ":h", "status", "agent", "kb", "config", "clear", "quit" }
   elseif #prev_toks == 1 and prev_toks[1] == "config" then
     candidates = { "save", "reset", "show", "path" }
+  elseif #prev_toks == 1 and prev_toks[1] == "kb" then
+    candidates = { "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
+  elseif #prev_toks == 2 and prev_toks[1] == "kb"
+    and (prev_toks[2] == "scope" or prev_toks[2] == "attach") then
+    candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+  elseif #prev_toks == 3 and prev_toks[1] == "kb" and prev_toks[2] == "scope" then
+    candidates = { "shared", "private", "isolated" }
   elseif #prev_toks == 1 and prev_toks[1] == "agent" then
     candidates = { "focus", "list", "add", "edit", "kill", "restart", "rename", "send", "attach", "move", "task", "mem" }
   elseif #prev_toks == 2 and prev_toks[1] == "agent" and prev_toks[2] == "task" then

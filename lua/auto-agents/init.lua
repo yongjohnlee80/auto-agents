@@ -85,6 +85,8 @@ local function resolve_slot_spec(slot)
         name = entry.name,
         title = entry.title,
         cmd = agent.cmd_for(kind, entry),
+        kb_scope = entry.kb_scope,
+        slot = slot,
         configured = true,
       }
     end
@@ -95,8 +97,26 @@ local function resolve_slot_spec(slot)
     name = nil,
     title = nil,
     cmd = agent.cmd_for("generic", {}),
+    kb_scope = "shared",
+    slot = slot,
     configured = false,
   }
+end
+
+---Build the env table merged for an agent's spawn — KB scope vars +
+---memory path (M3.x). Returns nil if no env extras to keep snacks's
+---defaulting clean.
+---@param spec AutoAgentsResolvedSpec
+---@return table<string,string>|nil
+local function build_agent_env(spec)
+  local cfg = M.state.config
+  if not cfg then return nil end
+  local kb = require("auto-agents.kb")
+  local kb_root = kb.root()
+  kb.ensure_layout(kb_root)
+  local env = require("auto-agents.kb.scope").env_for(spec, kb_root)
+  if next(env) == nil then return nil end
+  return env
 end
 
 ---Ensure the main panel window exists (open it if not) and return its winid.
@@ -169,7 +189,7 @@ local function ensure_main_slot_terminal(slot, winid)
   term = require("auto-agents.terminal").new(cfg, {
     cmd = spec.cmd,
     cwd = cwd,
-    env = nil,
+    env = build_agent_env(spec),
     on_exit = function(code)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
     end,
@@ -281,7 +301,7 @@ function M.toggle_sub(slot)
   float.toggle(cfg, slot, {
     cmd = spec.cmd,
     cwd = cwd,
-    env = nil,
+    env = build_agent_env(spec),
     -- Metadata for the float title (snacks renders this in the bordered
     -- title position). Lets users distinguish e.g. two Claude floats.
     kind = spec.kind,
