@@ -90,7 +90,43 @@ function M.setup(opts)
           .. "diff splits will be unavailable. Add `coder/claudecode.nvim` "
           .. "to your plugin list.")
     else
-      pcall(claudecode.setup, claudecode.state and claudecode.state.config or {})
+      -- Configure claudecode.nvim with auto-agents-friendly defaults.
+      -- The headline issue we're fixing: claudecode's diff handler
+      -- resizes whatever terminal it finds (including OUR agent panel)
+      -- to `terminal.split_width_percentage * total_columns` after a
+      -- diff opens / accepts / rejects. Our panel is clamped to
+      -- [min_width, max_width] (default 50..120), so on a wide screen
+      -- claudecode's 0.3 * cols disagrees with our resolved width and
+      -- the panel jumps in size mid-conversation. Three opts together
+      -- avoid this:
+      --
+      --   open_in_new_tab        — diff opens in its own tab; the
+      --                            agent panel in the original tab is
+      --                            never touched by the resize math.
+      --   hide_terminal_in_new_tab — keeps the diff tab uncluttered;
+      --                              also makes claudecode's
+      --                              "resize the terminal in this tab"
+      --                              path skip cleanly (the agent
+      --                              terminal isn't in the new tab).
+      --   keep_terminal_focus    — after the diff opens, focus
+      --                            returns to the agent terminal
+      --                            (in the original tab) so the user's
+      --                            next Enter goes to the agent
+      --                            prompt, not to accept/reject the
+      --                            diff. They tab over to review when
+      --                            ready.
+      --
+      -- We force these three keys (rather than tbl_deep_extend with
+      -- "keep" priority) because claudecode's defaults explicitly set
+      -- them to `false`, not nil — so a "keep" merge would preserve
+      -- the bad-for-us defaults. Other diff_opts and unrelated config
+      -- the user supplied are left intact.
+      local cc_user = (claudecode.state and claudecode.state.config) or {}
+      cc_user.diff_opts = cc_user.diff_opts or {}
+      cc_user.diff_opts.open_in_new_tab = true
+      cc_user.diff_opts.hide_terminal_in_new_tab = true
+      cc_user.diff_opts.keep_terminal_focus = true
+      pcall(claudecode.setup, cc_user)
       if not (claudecode.state and claudecode.state.server) then
         local ok2, _err = pcall(claudecode.start, false)
         if not ok2 then
