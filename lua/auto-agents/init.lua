@@ -57,18 +57,38 @@ M.state = {
 --      restore panel width again — claudecode resizes a second time on
 --      accept/reject.
 
-local function _resolved_panel_width()
-  local cfg = M.state.config
-  if not cfg then return nil end
-  return require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
-end
-
+---Use the cached width set when the panel was opened (or last
+---updated by VimResized). We deliberately do NOT recompute from
+---`vim.o.columns` per restore, because if the terminal got resized
+---between open and restore, recomputing gives a different value than
+---what the user is currently looking at, and the panel would snap.
 local function _restore_panel_width()
   local panel = M.state.panel_winid
   if not panel or not vim.api.nvim_win_is_valid(panel) then return end
-  local width = _resolved_panel_width()
-  if not width then return end
+  local width = M.state.panel_width
+  if not width then
+    -- Fallback if the cache is missing (panel was opened before this
+    -- code path landed): recompute and stash.
+    local cfg = M.state.config
+    if not cfg then return end
+    width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
+    M.state.panel_width = width
+  end
   pcall(vim.api.nvim_win_set_width, panel, width)
+end
+
+---Refresh the cached panel width from the new terminal columns.
+---Called from a VimResized autocmd so the cache stays current as the
+---user resizes their terminal — the next diff-restore uses the value
+---matching the user's current screen.
+local function _refresh_panel_width_cache()
+  local panel = M.state.panel_winid
+  if not panel or not vim.api.nvim_win_is_valid(panel) then return end
+  local cfg = M.state.config
+  if not cfg then return end
+  M.state.panel_width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
+  -- Apply the new width too so the panel tracks the resize.
+  pcall(vim.api.nvim_win_set_width, panel, M.state.panel_width)
 end
 
 ---Open a 1x1 invisible "ghost" float at row 0 col 0 that grabs focus
@@ -157,6 +177,15 @@ local function install_diff_parity_hooks()
     callback = function()
       vim.defer_fn(_restore_panel_width, 50)
     end,
+  })
+
+  -- Terminal resize → recompute the cached panel width so subsequent
+  -- diff-restore calls use the value matching the user's new screen
+  -- size (otherwise we'd lock to whatever width was current at panel
+  -- open and never adapt).
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = group,
+    callback = _refresh_panel_width_cache,
   })
 end
 
@@ -407,6 +436,12 @@ local function ensure_main_window(force)
   vim.cmd(placement .. " " .. width .. "vsplit")
   local winid = vim.api.nvim_get_current_win()
   M.state.panel_winid = winid
+  -- Cache the resolved width so the diff-parity restore path uses the
+  -- value the panel was opened at (not a fresh recompute) — otherwise
+  -- a terminal resize between open and restore would make us snap to
+  -- a different width than the user is currently looking at. The
+  -- VimResized autocmd below updates this on terminal-size change.
+  M.state.panel_width = width
 
   -- Window-local appearance (issue #2): drop line numbers and signs on
   -- the agent panel — terminals don't benefit from them and they collide
