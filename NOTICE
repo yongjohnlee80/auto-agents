@@ -1,0 +1,11 @@
+auto-agents.nvim
+Copyright (c) 2026 Yong Sung John Lee
+
+This product includes modules adapted from coder/claudecode.nvim
+(https://github.com/coder/claudecode.nvim), which is licensed under
+the MIT License:
+
+  Copyright (c) 2025 Coder Technologies Inc.
+
+The vendored modules are listed in PLAN.md §Reuse Assessment. Each
+adapted file carries a top-of-file comment naming its upstream source.
