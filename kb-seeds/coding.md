@@ -55,13 +55,34 @@ present) are thin pointers to this file.
 3. **ADRs are the source of truth for architectural decisions.** If the
    work conflicts with an ADR in `shared/adrs/`, you must either
    (a) follow the ADR, or (b) propose a new ADR that supersedes it.
-4. **Cite, don't fabricate.** Every non-obvious claim about the codebase
+4. **Detail is load-bearing — DO NOT condense rules.** Conventions,
+   ADRs, and playbooks are **rules**, not summaries. Every clause,
+   exception, code example, and edge case from the raw source carries
+   enforcement weight. When a reviewer or implementer reads
+   `shared/conventions/<area>.md`, they need the *exact* wording — a
+   "high-level direction" cannot be cited, cannot resolve disputes,
+   and cannot be enforced.
+
+   **Therefore, on ingest:** copy convention / ADR / playbook content
+   **verbatim** from `raw/`. A short TL;DR at the top is fine, but the
+   body must preserve full detail. Strip nothing. Compress nothing.
+   Paraphrase nothing. If a 400-line convention doc lands in `raw/`,
+   the corresponding `shared/conventions/<area>.md` page is roughly
+   400 lines too — plus frontmatter, plus optionally a TL;DR.
+
+   This rule explicitly **inverts** the wiki-style "synthesize once at
+   ingest" pattern for the rule-bearing categories. Synthesize freely
+   for `shared/synthesis/` (cross-cutting analyses) and `shared/glossary/`
+   (term definitions); do NOT synthesize for `shared/conventions/`,
+   `shared/adrs/`, or `shared/playbooks/`. When in doubt: keep the
+   detail.
+5. **Cite, don't fabricate.** Every non-obvious claim about the codebase
    ("this function returns X", "the migration runs at startup") must be
    verifiable — link to the file/line/PR/commit, or grep first.
-5. **Update before duplicating.** Extend an existing convention or
+6. **Update before duplicating.** Extend an existing convention or
    playbook before creating a near-duplicate. The KB is small on
    purpose.
-6. **No secrets, ever.** Describe where a credential lives ("set
+7. **No secrets, ever.** Describe where a credential lives ("set
    `FOO_TOKEN` in `~/.config/foo.toml`"), never copy the value.
 
 ---
@@ -158,7 +179,12 @@ When investigating a bug:
 
 ### Onboard a new convention
 
-New conventions land in `shared/conventions/`:
+New conventions land in `shared/conventions/`. **The convention page
+mirrors the raw rule document — preserve every clause, every example,
+every exception, verbatim.** A condensed paraphrase is not a
+convention; it's an opinion. See Hard Rule #4.
+
+Frontmatter:
 
 ```yaml
 ---
@@ -167,22 +193,38 @@ area: <language|framework|module>     # e.g. go, react, db-migrations
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 status: active | superseded | proposal
-sources: [<raw/path/to/source>, …]    # optional
+sources: [<raw/path/to/source>, …]    # required when imported from raw/
+source_sha: <sha256 of raw source at this ingest>   # required for re-ingest detection
+ingested_at: YYYY-MM-DD
 ---
 ```
 
-Each convention has:
+Suggested structure (keep all four; do NOT collapse into prose):
 
-- **What** — the rule, in one sentence.
+- **TL;DR** — optional, 1–3 lines. Does not replace the body.
+- **What** — the rule, with every sub-clause preserved.
 - **Why** — the reason behind it (incident, principle, taste, etc.).
-- **How to apply** — when this kicks in, with concrete examples.
-- **Exceptions** — listed explicitly, if any.
+- **How to apply** — when this kicks in, with **concrete code examples
+  carried over verbatim** from the source.
+- **Exceptions** — listed explicitly, with examples.
+
+If the raw doc has 12 numbered rules, the shared convention page has
+12 numbered rules. If the raw doc has 30 code examples, the shared
+page has 30 code examples. Importing from raw/ is **mirroring**, not
+synthesizing — a reviewer must be able to cite the shared page word-
+for-word against the same wording in raw/.
 
 Reviewers and implementers read this first.
 
 ### File an ADR
 
-ADRs are immutable once accepted. Format (`shared/adrs/NNNN-slug.md`):
+ADRs are immutable once accepted. **Preserve the full text** — Context,
+Decision, Consequences, alternatives considered, and any
+implementation notes from the raw source carry weight when a future
+disagreement re-litigates the decision. A condensed ADR cannot
+adjudicate a tie. See Hard Rule #4.
+
+Format (`shared/adrs/NNNN-slug.md`):
 
 ```yaml
 ---
@@ -251,8 +293,14 @@ Other rules:
 ## Things To Avoid
 
 - Editing or deleting `raw/` content.
+- **Condensing convention / ADR / playbook content during ingest.**
+  Detail is the value; strip it and the rule becomes advisory. If a
+  raw convention has 200 lines of numbered rules with code examples,
+  the shared page is **not** a 30-line summary — it carries the same
+  rules with the same examples. (See Hard Rule #4.)
 - Silently bypassing a convention because "it's just one line."
-- Writing essays in `shared/` — keep pages tight.
+- Writing essays for `shared/synthesis/` is fine — but never as a
+  *substitute* for a faithful convention page in `shared/conventions/`.
 - Putting in-flight task state in `shared/` (it belongs in `agents/<name>/`).
 - Inventing ADR numbers — always check `shared/adrs/` for the next free
   number first.

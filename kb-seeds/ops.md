@@ -61,7 +61,25 @@ pointers to this file.
    chat message, ticket).
 6. **Update runbooks at the end of every shift.** If the runbook was
    wrong, missing, or stale, fix it before logging off.
-7. **No PII / customer data.** Describe an incident's impact in
+7. **Detail is load-bearing — DO NOT condense runbooks or
+   postmortems.** Runbooks are operational scripts: at 3am, the on-
+   call needs the **exact** command, the **exact** flag, the
+   **exact** dashboard URL — not a paraphrase. Postmortem timelines,
+   action items, and root-cause chains carry weight in audits and
+   future incident triage; collapsing them into a 3-bullet summary
+   destroys the value.
+
+   **Therefore, on ingest:** copy runbook and postmortem content
+   **verbatim** from `raw/`. Mirror the raw structure step-for-step.
+   A short TL;DR at the top is fine, but the body must preserve full
+   detail. When in doubt: keep the detail.
+
+   This applies to `shared/runbooks/`, `shared/postmortems/`,
+   `shared/incidents/`, `shared/alerts/`, and `shared/playbooks/`.
+   Synthesize freely for cross-incident analyses if you create a
+   `shared/synthesis/` page; do NOT synthesize the operational pages
+   themselves.
+8. **No PII / customer data.** Describe an incident's impact in
    aggregate ("3.2% of EU traffic returned 500"). Don't paste customer
    IDs, emails, or payloads.
 
@@ -209,8 +227,12 @@ prod.
 
 ### Update runbooks
 
-A runbook is the doc you wish you'd had at 3am. Format
-`shared/runbooks/<slug>.md`:
+A runbook is the doc you wish you'd had at 3am. **Preserve every step
+from the source verbatim** — exact commands, exact flags, exact
+dashboard URLs. Detail is the entire reason this page exists; a
+condensed runbook is a fiction. See Hard Rule #7.
+
+Format `shared/runbooks/<slug>.md`:
 
 ```yaml
 ---
@@ -270,6 +292,10 @@ On demand:
 
 ## Things To Avoid
 
+- **Condensing runbook or postmortem content during ingest.** A
+  paraphrased runbook is worse than no runbook — it implies coverage
+  it doesn't have. Mirror the raw source step-for-step. (See Hard
+  Rule #7.)
 - Naming individuals as causes — name the system gap instead.
 - Pasting customer PII, emails, or payloads anywhere.
 - Closing an incident without action items if anything went poorly.
