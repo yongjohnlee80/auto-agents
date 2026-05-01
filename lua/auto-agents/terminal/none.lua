@@ -7,13 +7,24 @@ local M = {}
 local Instance = {}
 Instance.__index = Instance
 
-function Instance:start()
+function Instance:start(winid)
   if self.state == "running" then
     return self.bufnr
   end
-  self.bufnr = vim.api.nvim_create_buf(true, false)
+  local buf = vim.api.nvim_create_buf(false, false)  -- listed=false, mirrors native provider
+  vim.bo[buf].bufhidden = "hide"
+  vim.bo[buf].swapfile = false
+  if winid and vim.api.nvim_win_is_valid(winid) then
+    vim.api.nvim_win_set_buf(winid, buf)
+  end
+  self.bufnr = buf
   self.state = "running"
-  return self.bufnr
+  return buf
+end
+
+---@param _winid integer
+function Instance:resize_to(_winid)
+  -- no-op for the none provider (no underlying process to SIGWINCH)
 end
 
 ---@param text string

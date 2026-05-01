@@ -9,7 +9,7 @@ M.defaults = {
   panel = {
     side = "right",
     min_width = 50,
-    max_width = 80,
+    max_width = 120,
     percentage = 0.30,
     editor_floor = 40,
     slot_rail = "winbar",
@@ -17,7 +17,7 @@ M.defaults = {
   agents = {
     default_kind = "claude",
     primary_kind = "claude",
-    bootstrap = true,
+    bootstrap = {},
   },
   kb = {
     default_scope = "shared",
@@ -69,8 +69,8 @@ function M.validate(cfg)
   if not KINDS[a.primary_kind] then
     return "agents.primary_kind must be one of claude|codex|gemini|generic"
   end
-  if type(a.bootstrap) ~= "boolean" then
-    return "agents.bootstrap must be boolean"
+  if type(a.bootstrap) ~= "table" then
+    return "agents.bootstrap must be a list of slot specs"
   end
   if not SCOPES[cfg.kb.default_scope] then
     return "kb.default_scope must be one of shared|private|isolated"

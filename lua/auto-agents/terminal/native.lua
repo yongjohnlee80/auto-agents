@@ -11,17 +11,29 @@ local M = {}
 local Instance = {}
 Instance.__index = Instance
 
----Spawn the agent process in a new buffer. Does not create a window —
----the panel is responsible for placing the buffer into its slot window.
+---Spawn the agent process in a new buffer. If `winid` is supplied, the
+---buffer is placed in that window BEFORE termopen so the terminal
+---inherits the window's dimensions immediately (avoiding a TUI render
+---at default 80×24 followed by a misaligned redraw on later placement).
+---Without a winid, the buffer is created window-less and the caller is
+---responsible for placing it + calling Instance:resize_to(winid).
+---@param winid integer|nil
 ---@return integer|nil bufnr
-function Instance:start()
+function Instance:start(winid)
   if self.state == "running" then
     return self.bufnr
   end
 
-  local buf = vim.api.nvim_create_buf(true, false)
+  local buf = vim.api.nvim_create_buf(false, false)  -- listed=false — see flag block below
   local self_ref = self
   local jobid
+
+  -- Place buffer in target window FIRST so termopen sees its dimensions.
+  -- This is the same flow snacks.terminal uses (see lua/snacks/terminal.lua
+  -- line ~160: terminal:show() → vim.api.nvim_buf_call(terminal.buf, jobstart)).
+  if winid and vim.api.nvim_win_is_valid(winid) then
+    vim.api.nvim_win_set_buf(winid, buf)
+  end
 
   vim.api.nvim_buf_call(buf, function()
     jobid = vim.fn.termopen(self_ref.spec.cmd, {
@@ -48,6 +60,30 @@ function Instance:start()
   end
 
   vim.bo[buf].bufhidden = "hide"
+  vim.bo[buf].buflisted = false  -- hide from bufferline + :bnext/:bprev (issue #4/#5)
+  vim.bo[buf].swapfile = false
+
+  -- Buffer-local terminal-mode keymaps so the user can escape the agent
+  -- window without reaching for the mouse (issue #3). These exit terminal
+  -- mode and switch windows in one keystroke.
+  local kopts = { buffer = buf, silent = true }
+  vim.keymap.set("t", "<C-h>", [[<C-\><C-n><C-w>h]], kopts)
+  vim.keymap.set("t", "<C-j>", [[<C-\><C-n><C-w>j]], kopts)
+  vim.keymap.set("t", "<C-k>", [[<C-\><C-n><C-w>k]], kopts)
+  vim.keymap.set("t", "<C-l>", [[<C-\><C-n><C-w>l]], kopts)
+
+  -- Auto-enter terminal mode whenever this buffer is entered via window
+  -- navigation (e.g. <C-l> from the editor). Cursor lands at the agent's
+  -- input position without requiring a manual `i`.
+  vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+    buffer = buf,
+    callback = function()
+      if vim.bo[buf].buftype == "terminal" then
+        vim.cmd("startinsert")
+      end
+    end,
+  })
+
   self.bufnr = buf
   self.jobid = jobid
   self.state = "running"
@@ -81,6 +117,17 @@ end
 
 function Instance:get_bufnr() return self.bufnr end
 function Instance:get_jobid() return self.jobid end
+
+---Resize the terminal to the given window's dimensions. Sends SIGWINCH
+---to the underlying process so TUIs (claude, codex, etc.) redraw at
+---the correct size. Cheap to call defensively after every buffer/window
+---swap.
+---@param winid integer
+function Instance:resize_to(winid)
+  if not self.jobid or self.jobid <= 0 then return end
+  if not winid or not vim.api.nvim_win_is_valid(winid) then return end
+  pcall(vim.fn.jobresize, self.jobid, vim.api.nvim_win_get_width(winid), vim.api.nvim_win_get_height(winid))
+end
 
 ---@param spec AutoAgentsTerminalSpec
 ---@return AutoAgentsTerminalInstance

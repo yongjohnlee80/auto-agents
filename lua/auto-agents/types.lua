@@ -40,13 +40,17 @@
 ---@field cwd string|nil
 ---@field env table<string,string>|nil
 ---@field on_exit (fun(exit_code: integer))|nil
+---@field kind AutoAgentsAgentKind|nil              -- metadata: agent kind for float title
+---@field name string|nil                            -- metadata: handle for float title
+---@field title string|nil                           -- metadata: display label for float title
 
 ---@class AutoAgentsTerminalInstance
 ---@field bufnr integer|nil
 ---@field jobid integer|nil
 ---@field state AutoAgentsAgentState
 ---@field exit_code integer|nil
----@field start fun(self: AutoAgentsTerminalInstance): integer|nil
+---@field start fun(self: AutoAgentsTerminalInstance, winid: integer|nil): integer|nil
+---@field resize_to fun(self: AutoAgentsTerminalInstance, winid: integer)
 ---@field send fun(self: AutoAgentsTerminalInstance, text: string): boolean
 ---@field kill fun(self: AutoAgentsTerminalInstance, signal: string|nil)
 ---@field is_alive fun(self: AutoAgentsTerminalInstance): boolean
