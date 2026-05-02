@@ -18,17 +18,26 @@
 ---
 ---    [[agents]]
 ---    slot          = 1
----    kind          = "claude"          # claude|codex|gemini|junie|aider|copilot|generic
+---    kind          = "claude"          # claude|codex|gemini|junie|aider|
+---                                      #   goose|opencode|copilot|generic
 ---    name          = "main"
 ---    title         = "Claude"
 ---    role          = "..."             # optional
----    model         = "..."             # optional: passed as --model when set
----                                      #   (claude/codex/gemini/junie/aider);
----                                      #   ignored for copilot/generic and when
----                                      #   `cmd` is overridden
----    api_base      = "..."             # optional, aider-only: passed as
----                                      #   --api-base; required for ollama,
----                                      #   openrouter, lm-studio, etc.
+---    model         = "..."             # optional, per-kind handling:
+---                                      #   claude/codex/gemini/junie/aider →
+---                                      #     passed as --model <id>
+---                                      #   goose → exported as GOOSE_MODEL env
+---                                      #   opencode → passed as --model <id>
+---                                      #     (format: "<provider>/<model>")
+---                                      #   ignored for copilot/generic and
+---                                      #   when `cmd` is overridden
+---    provider      = "..."             # optional, goose-only: exported as
+---                                      #   GOOSE_PROVIDER (ollama/anthropic/
+---                                      #   openai/openrouter/...).
+---    api_base      = "..."             # optional: aider → --api-base;
+---                                      #   goose → GOOSE_PROVIDER__HOST.
+---                                      #   Required for ollama / openrouter /
+---                                      #   lm-studio / OpenAI-compatible local.
 ---    cwd           = "..."             # optional override
 ---    cmd           = ["bin", "--flag"] # optional override
 ---    allowed_paths = ["src/", "tests/"]
@@ -44,7 +53,7 @@ local M = {}
 
 local SECTION_ORDER = { "project", "kb", "agents" }
 local AGENT_KEY_ORDER = {
-  "slot", "kind", "name", "title", "role", "model", "api_base", "cwd", "cmd",
+  "slot", "kind", "name", "title", "role", "model", "provider", "api_base", "cwd", "cmd",
   "allowed_paths", "manager", "kb_scope", "bottom_margin", "diff_review",
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }

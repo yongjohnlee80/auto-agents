@@ -173,23 +173,38 @@ bottom.
 
 ## model (preferred CLI model)
 
-Optional `[[agents]].model` field. When set, the per-kind adapter
-appends `--model <id>` to the launch argv on every spawn (claude,
-codex, gemini, junie, aider). Ignored for `copilot` and `generic`,
-and skipped when the user has overridden `cmd = [...]` — in that case
-the user's argv is used verbatim.
+Optional `[[agents]].model` field. Per-kind handling at spawn:
+
+- claude/codex/gemini/junie/aider/opencode → appended as `--model <id>`
+- goose → exported as `GOOSE_MODEL` env var (env vars override
+  `goose configure`). `goose` also reads `GOOSE_PROVIDER` (from
+  `[[agents]].provider`) and `GOOSE_PROVIDER__HOST` (from
+  `api_base`).
+- opencode model id is `<provider>/<id>` format
+  (e.g. `anthropic/claude-sonnet-4-5`, `ollama/llama3.1`).
+
+Ignored for `copilot` and `generic`, and skipped when the user has
+overridden `cmd = [...]` — in that case the user's argv is used
+verbatim.
 
 There's no curated allow-list of model ids — each CLI evolves on its
 own cadence and an allow-list rots immediately. Whatever string you
 set is passed through verbatim; if the CLI rejects it, you'll see
 the error in the agent's terminal.
 
-### Aider-specific: `api_base`
+### Local-LLM connection settings: `model`, `provider`, `api_base`
 
-Aider takes the model id as a CLI flag *and* often needs a separate
-`--api-base <url>` to talk to local/proxy backends (ollama,
-openrouter, lm-studio, vLLM). The wizard asks for both `model` and
-`api_base` whenever `kind = "aider"`, and persists them to TOML:
+Aider, goose, and opencode all take per-spawn connection settings.
+The wizard prompts for them only when relevant (other kinds skip
+these steps and use whatever `:AutoAgentsModel` set instead).
+
+| field | aider | goose | opencode |
+|-------|-------|-------|----------|
+| `model` | ✓ `--model` | ✓ `GOOSE_MODEL` env | ✓ `--model` |
+| `provider` | — | ✓ `GOOSE_PROVIDER` env | — (encoded in model id) |
+| `api_base` | ✓ `--api-base` | ✓ `GOOSE_PROVIDER__HOST` env | — (configure in `opencode.json`) |
+
+Example aider slot pointing at ollama on the LAN:
 
 ```toml
 [[agents]]
@@ -200,10 +215,27 @@ model    = "ollama_chat/llama3.1"
 api_base = "http://192.168.1.10:11434"
 ```
 
-The adapter renders this as `aider --model ollama_chat/llama3.1
---api-base http://192.168.1.10:11434 --read AGENTS.md` at spawn.
-For cloud providers (anthropic/openai) where the base URL is
-implicit, leave `api_base` blank — env vars handle auth.
+Renders to `aider --model ollama_chat/llama3.1 --api-base
+http://192.168.1.10:11434 --read AGENTS.md` at spawn.
+
+Equivalent goose slot:
+
+```toml
+[[agents]]
+slot     = 5
+kind     = "goose"
+name     = "gander"
+model    = "llama3.1"
+provider = "ollama"
+api_base = "http://192.168.1.10:11434"
+```
+
+Spawned as `goose session` with `GOOSE_MODEL`, `GOOSE_PROVIDER`,
+`GOOSE_PROVIDER__HOST` exported into the agent's env.
+
+For cloud providers (anthropic/openai/etc.) where the base URL is
+implicit, leave `api_base` blank — provider auth env vars
+(`ANTHROPIC_API_KEY` etc.) carry the connection.
 
 ### `:AutoAgentsModel <name> [<model>|-]`
 

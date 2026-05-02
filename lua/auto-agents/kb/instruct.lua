@@ -1,10 +1,11 @@
 ---KB-aware spawn (M6, "double-down" approach).
 ---
 ---Each agent kind auto-loads a per-project instruction file from its
----cwd: claude reads `CLAUDE.md`, codex/copilot/generic/aider read
----`AGENTS.md`, gemini reads `GEMINI.md`, junie reads
----`.junie/guidelines.md`. (Aider doesn't auto-load AGENTS.md — its
----adapter passes `--read AGENTS.md` explicitly so the same file works.)
+---cwd: claude reads `CLAUDE.md`, gemini reads `GEMINI.md`, junie reads
+---`.junie/guidelines.md`, and codex/copilot/generic/aider/goose/opencode
+---all converge on `AGENTS.md` (the de-facto multi-vendor standard).
+---(Aider doesn't auto-load AGENTS.md by default — its adapter passes
+---`--read AGENTS.md` explicitly so the same file works there too.)
 ---We inject a delimited "auto-agents" block into that file so the
 ---agent learns its KB location and read/write convention without us
 ---having to send anything via stdin (which TUIs would treat as a
@@ -34,13 +35,17 @@ function M.filename_for(kind)
 end
 
 ---Kinds the auto-injected sections (Model preference, Status reporting)
----apply to. claude/codex/gemini/junie/aider all accept a `--model <id>`
----flag *and* can run shell tools (or, in aider's case, the `/run` slash
----command) to invoke `nvim --server "$NVIM" --remote-expr ...` themselves.
+---apply to. claude/codex/gemini/junie/aider/goose/opencode all accept a
+---per-spawn model selector (CLI flag for most, env var for goose) *and*
+---can run shell tools (or, in aider's case, the `/run` slash command)
+---to invoke `nvim --server "$NVIM" --remote-expr ...` themselves.
 ---copilot is a recommender, not a runner; generic is a plain shell —
 ---neither has the same self-instrumentation surface, so the sections
 ---are skipped for them.
-local INTERACTIVE_KINDS = { claude = true, codex = true, gemini = true, junie = true, aider = true }
+local INTERACTIVE_KINDS = {
+  claude = true, codex = true, gemini = true, junie = true,
+  aider = true, goose = true, opencode = true,
+}
 
 ---Render the auto-agents block content for a slot.
 ---@param spec table  -- { kind, name, slot, kb_scope, model }

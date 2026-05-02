@@ -142,7 +142,7 @@ auto-agents: new agent
   <C-c> to cancel.
   slot  [1..9]:
 > 1
-  kind (claude|codex|gemini|junie|aider|copilot|generic)  [claude]:
+  kind (claude|codex|gemini|junie|aider|goose|opencode|copilot|generic)  [claude]:
 > 
   name (handle, used for KB dir + grants)  [(blank to auto-generate)]:
 > main
@@ -185,7 +185,7 @@ root = "/abs/path/.auto-agents/kb"   # absolute; can be shared across projects
 
 [[agents]]
 slot          = 1
-kind          = "claude"             # claude|codex|gemini|junie|aider|copilot|generic
+kind          = "claude"             # claude|codex|gemini|junie|aider|goose|opencode|copilot|generic
 name          = "main"
 title         = "Claude"
 role          = "primary engineering pair"   # optional
@@ -371,6 +371,8 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 | `gemini`  | `gemini`               | Google Gemini CLI                                                                |
 | `junie`   | `junie`                | JetBrains [Junie CLI](https://junie.jetbrains.com/docs/junie-cli.html); install via `npm i -g @jetbrains/junie-cli` |
 | `aider`   | `aider --read AGENTS.md` | [aider.chat](https://aider.chat/docs/usage.html); also takes `model` + `api_base` in TOML for ollama/openrouter/lm-studio (`aider --model ollama_chat/llama3 --api-base http://host:11434`) |
+| `goose`   | `goose session`        | [goose-docs.ai](https://goose-docs.ai/); env-var-driven (`GOOSE_MODEL`, `GOOSE_PROVIDER`, `GOOSE_PROVIDER__HOST` for ollama). Wizard prompts for `model` / `provider` / `api_base`. |
+| `opencode`| `opencode`             | [opencode.ai](https://opencode.ai/docs); takes `--model <provider>/<id>`. Local LLMs configured in `~/.config/opencode/opencode.json` (no CLI flag for base URL). |
 | `copilot` | `gh copilot`           | GitHub CLI extension                                                             |
 | `generic` | `spec.cmd` or `$SHELL` | Catch-all for shells / homegrown tools                                           |
 
@@ -455,7 +457,7 @@ documenting boundaries between sub-agents.
 
 - [x] **M1** scaffold, terminal providers (snacks/native/none), per-instance state
 - [x] **M2** panel, slots, admin buffer, tab completion, form buffer
-- [x] **M3** agent registry, adapters (claude/codex/gemini/junie/aider/copilot/generic), persistence
+- [x] **M3** agent registry, adapters (claude/codex/gemini/junie/aider/goose/opencode/copilot/generic), persistence
 - [x] **M4** knowledge base (shared/private/isolated, manifest, Obsidian compat)
 - [x] **M5** resource grants, manager designation
 - [ ] **M6** README polish, ARCHITECTURE.md, test suite, `v0.1.0` tag
