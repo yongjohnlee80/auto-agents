@@ -29,7 +29,8 @@ local function slot_label(slot)
   for _, e in ipairs(bs) do
     if e.slot == slot then
       local label = e.title or e.name or e.kind or "agent"
-      local status = aa.state.agent_status[slot]
+      -- Defensive read — see winbar.lua slot_render for the rationale.
+      local status = (aa.state.agent_status or {})[slot]
       if status then
         return label .. " (" .. status .. ")"
       end

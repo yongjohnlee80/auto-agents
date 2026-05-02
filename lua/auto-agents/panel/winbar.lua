@@ -36,7 +36,10 @@ local function slot_render(slot)
   for _, e in ipairs(bs) do
     if e.slot == slot then
       local label = e.title or e.name or e.kind or "agent"
-      local status = aa.state.agent_status[slot]
+      -- Defensive read: if `agent_status` was wiped or never initialized
+      -- (e.g. stale module load after a hot upgrade), treat it as empty
+      -- so we degrade to "everyone is idle" instead of throwing.
+      local status = (aa.state.agent_status or {})[slot]
       local sigil = (status == "waiting" and "*")
         or (status == "working" and "+")
         or ""

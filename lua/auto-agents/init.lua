@@ -505,7 +505,7 @@ local function ensure_main_slot_terminal(slot, winid)
     env = build_agent_env(spec, cwd),
     on_exit = function(code)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
-      M.state.agent_status[slot] = nil
+      if M.state.agent_status then M.state.agent_status[slot] = nil end
       M.refresh_winbar()
     end,
   })
@@ -648,7 +648,7 @@ function M.toggle_sub(slot)
     title = spec.title,
     on_exit = function(code)
       logger.info("float", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
-      M.state.agent_status[slot] = nil
+      if M.state.agent_status then M.state.agent_status[slot] = nil end
       M.refresh_winbar()
     end,
   })
@@ -1038,7 +1038,7 @@ end
 ---@param slot integer
 ---@return "idle"|"waiting"|"working"
 function M.get_status(slot)
-  return M.state.agent_status[slot] or "idle"
+  return (M.state.agent_status or {})[slot] or "idle"
 end
 
 ---Set an agent slot's runtime status. Slot identified by numeric slot
@@ -1061,6 +1061,9 @@ function M.set_status(slot_or_name, state)
   if not slot or slot < 0 or slot > M.MAX_SLOT then
     return false, "no slot/agent matched '" .. tostring(slot_or_name) .. "'"
   end
+  -- Lazy-init in case state was loaded by a stale module (the original
+  -- init.lua before this field was added). Belt-and-suspenders.
+  M.state.agent_status = M.state.agent_status or {}
   if state == "idle" then
     M.state.agent_status[slot] = nil
   else
