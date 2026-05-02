@@ -33,6 +33,11 @@ M.state = {
   session_project_root = nil,
   session_project_key = nil,
   config_source = nil,
+  -- Per-slot runtime status. nil ≡ "idle"; "waiting" / "working" come
+  -- from agent self-reports via :AutoAgentsStatus. Ephemeral — never
+  -- written to TOML, cleared on agent exit.
+  ---@type table<integer, "waiting"|"working">
+  agent_status = {},
 }
 
 -- ── diff-review parity hooks (route B) ────────────────────────────────────
@@ -313,6 +318,7 @@ end
 ---@field kind string             -- agent kind or "shell" for fallback
 ---@field name string|nil
 ---@field title string|nil
+---@field model string|nil        -- preferred model id (passed as --model to claude/codex/gemini)
 ---@field cmd string[]
 ---@field configured boolean      -- false → empty-slot shell fallback
 
@@ -332,6 +338,7 @@ local function resolve_slot_spec(slot)
         kind = kind,
         name = entry.name,
         title = entry.title,
+        model = entry.model,
         cmd = agent.cmd_for(kind, entry),
         kb_scope = entry.kb_scope,
         diff_review = entry.diff_review == true,
@@ -498,6 +505,8 @@ local function ensure_main_slot_terminal(slot, winid)
     env = build_agent_env(spec, cwd),
     on_exit = function(code)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
+      M.state.agent_status[slot] = nil
+      M.refresh_winbar()
     end,
   })
   local bufnr = term:start(winid)
@@ -639,6 +648,8 @@ function M.toggle_sub(slot)
     title = spec.title,
     on_exit = function(code)
       logger.info("float", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
+      M.state.agent_status[slot] = nil
+      M.refresh_winbar()
     end,
   })
 end
@@ -962,15 +973,24 @@ function M.move_slot(from, to, swap)
 
   -- Refresh keymap descriptions and panel winbar.
   M.refresh_keymaps()
-  if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
-    local winbar = require("auto-agents.panel.winbar")
-    local w = vim.api.nvim_win_get_width(M.state.panel_winid)
-    pcall(vim.api.nvim_set_option_value, "winbar",
-      winbar.render(M.state.focused_slot or 1, w),
-      { win = M.state.panel_winid })
-  end
+  M.refresh_winbar()
   pcall(function() require("auto-agents.config.store").save_current() end)
   return true, nil
+end
+
+---Re-render the panel winbar with the current focused slot + slot
+---statuses. Idempotent — bails silently if the panel isn't open. Called
+---after any state change that affects what the winbar displays
+---(focused slot, slot rename, slot move, status transition, agent exit).
+function M.refresh_winbar()
+  if not (M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid)) then
+    return
+  end
+  local winbar = require("auto-agents.panel.winbar")
+  local w = vim.api.nvim_win_get_width(M.state.panel_winid)
+  pcall(vim.api.nvim_set_option_value, "winbar",
+    winbar.render(M.state.focused_slot or 1, w),
+    { win = M.state.panel_winid })
 end
 
 ---Rename a slot's bootstrap entry (mutates config.agents.bootstrap).
@@ -987,14 +1007,8 @@ function M.rename_slot(slot, new_name)
   for _, e in ipairs(cfg.agents.bootstrap) do
     if e.slot == slot then
       e.name = new_name
-      -- Refresh the panel winbar if this slot is on the main panel.
-      if slot >= 0 and slot <= M.MAIN_SLOT_MAX and M.state.panel_winid
-        and vim.api.nvim_win_is_valid(M.state.panel_winid) then
-        local winbar = require("auto-agents.panel.winbar")
-        local w = vim.api.nvim_win_get_width(M.state.panel_winid)
-        pcall(vim.api.nvim_set_option_value, "winbar",
-          winbar.render(M.state.focused_slot or 1, w),
-          { win = M.state.panel_winid })
+      if slot >= 0 and slot <= M.MAIN_SLOT_MAX then
+        M.refresh_winbar()
       end
       M.refresh_keymaps()
       pcall(function() require("auto-agents.config.store").save_current() end)
@@ -1002,6 +1016,58 @@ function M.rename_slot(slot, new_name)
     end
   end
   return false
+end
+
+local STATUSES = { idle = true, waiting = true, working = true }
+
+---Resolve a numeric slot or agent name to a slot number.
+---@param slot_or_name integer|string
+---@return integer|nil slot
+local function resolve_status_slot(slot_or_name)
+  if type(slot_or_name) == "number" then return slot_or_name end
+  local n = tonumber(slot_or_name)
+  if n then return n end
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.name == slot_or_name then return e.slot end
+  end
+  return nil
+end
+
+---@param slot integer
+---@return "idle"|"waiting"|"working"
+function M.get_status(slot)
+  return M.state.agent_status[slot] or "idle"
+end
+
+---Set an agent slot's runtime status. Slot identified by numeric slot
+---or by configured agent name. State must be one of idle/waiting/working.
+---"idle" clears the entry (kept sparse). Triggers a winbar refresh so
+---the sigil updates without waiting for the next focus event.
+---
+---Used by `:AutoAgentsStatus`, which agents themselves invoke via
+---`nvim --server "$NVIM" --remote-expr 'execute("AutoAgentsStatus ...")'`.
+---
+---@param slot_or_name integer|string
+---@param state "idle"|"waiting"|"working"
+---@return boolean ok
+---@return string message
+function M.set_status(slot_or_name, state)
+  if not STATUSES[state] then
+    return false, "state must be one of idle|waiting|working, got " .. tostring(state)
+  end
+  local slot = resolve_status_slot(slot_or_name)
+  if not slot or slot < 0 or slot > M.MAX_SLOT then
+    return false, "no slot/agent matched '" .. tostring(slot_or_name) .. "'"
+  end
+  if state == "idle" then
+    M.state.agent_status[slot] = nil
+  else
+    M.state.agent_status[slot] = state
+  end
+  M.refresh_winbar()
+  return true, "slot " .. slot .. " → " .. state
 end
 
 -- ── focus (existing) ───────────────────────────────────────────────────────

@@ -5,11 +5,16 @@
 
 local M = {}
 
----@param spec table  -- bootstrap entry: { slot, kind, name, title, ..., cmd? }
+---@param spec table  -- bootstrap entry: { slot, kind, name, title, ..., cmd?, model? }
 ---@return string[]
 function M.cmd(spec)
   if spec and spec.cmd then return spec.cmd end
-  return { "claude" }
+  local argv = { "claude" }
+  if spec and spec.model and spec.model ~= "" then
+    argv[#argv + 1] = "--model"
+    argv[#argv + 1] = spec.model
+  end
+  return argv
 end
 
 ---@param spec table

@@ -22,6 +22,10 @@
 ---    name          = "main"
 ---    title         = "Claude"
 ---    role          = "..."             # optional
+---    model         = "..."             # optional: passed as --model when set
+---                                      #   (claude/codex/gemini); ignored for
+---                                      #   copilot/generic and when `cmd` is
+---                                      #   overridden
 ---    cwd           = "..."             # optional override
 ---    cmd           = ["bin", "--flag"] # optional override
 ---    allowed_paths = ["src/", "tests/"]
@@ -37,7 +41,7 @@ local M = {}
 
 local SECTION_ORDER = { "project", "kb", "agents" }
 local AGENT_KEY_ORDER = {
-  "slot", "kind", "name", "title", "role", "cwd", "cmd",
+  "slot", "kind", "name", "title", "role", "model", "cwd", "cmd",
   "allowed_paths", "manager", "kb_scope", "bottom_margin", "diff_review",
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }

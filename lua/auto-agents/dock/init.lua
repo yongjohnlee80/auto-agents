@@ -14,16 +14,26 @@ M._state = { winid = nil, bufnr = nil, prev_winid = nil }
 
 ---Determine the label rendered next to a slot. Pulls from
 ---agents.bootstrap when configured; falls back to "shell" / "(empty)".
+---When the slot has reported a status (idle/waiting/working) via
+---`:AutoAgentsStatus`, that status is appended in parens — explicit
+---naming is more useful in the dock than the panel-strip's terse sigil
+---because the dock shows full lines.
 ---@param slot integer
 ---@return string
 local function slot_label(slot)
-  local cfg = require("auto-agents").state.config
+  local aa = require("auto-agents")
+  local cfg = aa.state.config
   if not cfg then return "(empty)" end
   if slot == 0 then return "admin" end
   local bs = (cfg.agents or {}).bootstrap or {}
   for _, e in ipairs(bs) do
     if e.slot == slot then
-      return e.title or e.name or e.kind or "agent"
+      local label = e.title or e.name or e.kind or "agent"
+      local status = aa.state.agent_status[slot]
+      if status then
+        return label .. " (" .. status .. ")"
+      end
+      return label .. " (idle)"
     end
   end
   return "shell"
@@ -176,7 +186,14 @@ function M.open()
   M._state.prev_winid = vim.api.nvim_get_current_win()
 
   local lines, focused_idx = build_lines()
-  local width = 22
+  -- Width adapts to the longest line so "(working)" / "(waiting)"
+  -- suffixes don't get clipped on agents with longer names. Floor at
+  -- 22 (the previous fixed width) so it doesn't shrink below comfort.
+  local max_len = 22
+  for _, l in ipairs(lines) do
+    if #l > max_len then max_len = #l end
+  end
+  local width = max_len + 1
   local height = #lines
 
   local buf = vim.api.nvim_create_buf(false, true)

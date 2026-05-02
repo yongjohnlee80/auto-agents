@@ -171,6 +171,98 @@ Reports RSS per running agent (Linux `/proc` only — silently empty on
 other platforms). Useful for spotting runaways. Shows total at the
 bottom.
 
+## model (preferred CLI model)
+
+Optional `[[agents]].model` field. When set, the per-kind adapter
+appends `--model <id>` to the launch argv on every spawn (claude,
+codex, gemini). Ignored for `copilot` and `generic`, and skipped
+when the user has overridden `cmd = [...]` — in that case the user's
+argv is used verbatim.
+
+There's no curated allow-list of model ids — each CLI evolves on its
+own cadence and an allow-list rots immediately. Whatever string you
+set is passed through verbatim; if the CLI rejects it, you'll see
+the error in the agent's terminal.
+
+### `:AutoAgentsModel <name> [<model>|-]`
+
+- `:AutoAgentsModel jarvis` — show the agent's current preference.
+- `:AutoAgentsModel jarvis claude-opus-4-7` — set.
+- `:AutoAgentsModel jarvis -` — clear (back to CLI default).
+
+Mutates the live in-memory bootstrap entry **and** persists to the
+active TOML (project file if present, else global) via the same
+`save_current()` path the wizard uses. The change takes effect on
+the **next** spawn of that slot — the running session keeps the
+model it was launched with.
+
+### Agents persist their own preference
+
+The auto-injected instruction file (`CLAUDE.md` / `AGENTS.md` /
+`GEMINI.md` at the agent's cwd) carries the agent's current
+preference and tells it how to update the config when the user
+asks for a model change mid-session: run
+
+    nvim --server "$NVIM" --remote-expr 'execute("AutoAgentsModel <name> <new-model>")'
+
+…from any shell tool the agent has. `$NVIM` is set automatically
+inside the agent's terminal and points at the parent nvim's socket,
+so the remote expression invokes `:AutoAgentsModel` in your editor
+session — no manual `:` typing needed. The user is still the gate
+because the agent must surface the question first; the persistence
+itself is automated.
+
+## status (idle / waiting / working)
+
+Each agent slot carries a runtime status that surfaces in the panel
+winbar and the navigator dock. Three states:
+
+| State | Panel sigil | Dock label   | Meaning |
+|-------|-------------|--------------|---------|
+| `idle`    | (none)  | `(idle)`     | done with the previous turn, ready for the next prompt |
+| `waiting` | `*`     | `(waiting)`  | needs user input; about to ask a question |
+| `working` | `+`     | `(working)`  | running a non-trivial unit of work right now |
+
+Wide panel: ` 1: *Jarvis ` (sigil precedes the name). Narrow panel
+(when the strip wouldn't fit): ` 1* `. The sigil's color comes from
+the `AutoAgentsStatusWaiting` (linked to `WarningMsg`) and
+`AutoAgentsStatusWorking` (linked to `MoreMsg`) highlight groups
+— override in your colorscheme to taste.
+
+Status is **ephemeral** — never written to TOML, cleared whenever
+the agent process exits. A stale `working` will not survive a kill
+or a vim restart.
+
+### `:AutoAgentsStatus <slot|name> <state>`
+
+- `:AutoAgentsStatus 1 working` — by slot
+- `:AutoAgentsStatus jarvis waiting` — by name
+- `:AutoAgentsStatus 1 idle` — clears (back to no sigil)
+
+Useful for manual override; in normal use the agent reports its own
+transitions (see below).
+
+### Agents self-report their own status
+
+The auto-injected instruction file tells each interactive agent
+(claude/codex/gemini) the three transitions and the exact shell
+commands to run for each. Inside the agent's terminal, `$NVIM` is
+set to the parent nvim's socket, so a one-liner like
+
+    nvim --server "$NVIM" --remote-expr 'execute("AutoAgentsStatus 1 working")'
+
+invokes `:AutoAgentsStatus 1 working` in your editor without any
+`:` typing. The agent runs `working` at the start of a non-trivial
+turn, `waiting` if it stops to ask a question, and `idle` when
+done. Status pings are silent on success — failures land in
+`:messages` but never block the agent's real work.
+
+The user is **not** in the loop for these transitions, by design.
+They fire constantly and would be intolerable otherwise. Compare
+with `:AutoAgentsModel`, where the agent surfaces a question first
+and persists only if the user agrees — model preferences are
+durable, status pings are not.
+
 ## diff_review (in-editor diff splits for proposed edits)
 
 Per-agent boolean. The wizard asks **"Show diff views from this agent

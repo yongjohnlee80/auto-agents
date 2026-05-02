@@ -90,6 +90,66 @@ end, {
   desc = "Paste-safe send to a playground terminal (slot 1..4)",
 })
 
+vim.api.nvim_create_user_command("AutoAgentsStatus", function(opts)
+  local target = opts.fargs[1]
+  local state = opts.fargs[2]
+  if not target or not state then
+    vim.notify(
+      "AutoAgentsStatus: usage — :AutoAgentsStatus <slot|name> <idle|waiting|working>",
+      vim.log.levels.ERROR)
+    return
+  end
+  local slot_or_name = tonumber(target) or target
+  local ok, msg = require("auto-agents").set_status(slot_or_name, state)
+  -- Status pings fire often (working → idle on every tool round-trip);
+  -- keep success quiet, surface only failures.
+  if not ok then
+    vim.notify("AutoAgentsStatus: " .. msg, vim.log.levels.ERROR)
+  end
+end, {
+  nargs = "+",
+  complete = function(_, line)
+    local words = vim.split(line, "%s+", { trimempty = true })
+    -- words = { "AutoAgentsStatus", <target?>, <state?> }
+    if #words <= 2 then
+      local out = require("auto-agents.agent").names()
+      for n = 0, 9 do out[#out + 1] = tostring(n) end
+      return out
+    end
+    if #words == 3 then
+      return { "idle", "waiting", "working" }
+    end
+    return {}
+  end,
+  desc = "Set an agent slot's runtime status (idle|waiting|working) — "
+    .. "agents typically self-report via remote-expr",
+})
+
+vim.api.nvim_create_user_command("AutoAgentsModel", function(opts)
+  local name = opts.fargs[1]
+  local model = opts.fargs[2]
+  if not name then
+    vim.notify(
+      "AutoAgentsModel: usage — :AutoAgentsModel <name> [<model>|-]",
+      vim.log.levels.ERROR)
+    return
+  end
+  local ok, msg = require("auto-agents.agent").set_model(name, model)
+  vim.notify("AutoAgentsModel: " .. msg, ok and vim.log.levels.INFO or vim.log.levels.ERROR)
+end, {
+  nargs = "+",
+  complete = function(_, line)
+    local words = vim.split(line, "%s+", { trimempty = true })
+    -- words = { "AutoAgentsModel", <name?>, <model?> }
+    if #words <= 2 then
+      return require("auto-agents.agent").names()
+    end
+    return {}
+  end,
+  desc = "Set, show, or clear an agent's preferred model "
+    .. "(writes to TOML config; effective next restart)",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsProject", function(opts)
   local sub = opts.fargs[1]
   local args = {}

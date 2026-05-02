@@ -27,8 +27,16 @@ function M.filename_for(kind)
   return "AGENTS.md"  -- codex, copilot, generic, anything else
 end
 
+---Kinds the auto-injected sections (Model preference, Status reporting)
+---apply to. claude/codex/gemini all accept a `--model <id>` flag *and*
+---can run shell tools to invoke `nvim --server "$NVIM" --remote-expr ...`
+---themselves. copilot is a recommender, not a runner; generic is a plain
+---shell — neither has the same self-instrumentation surface, so the
+---sections are skipped for them.
+local INTERACTIVE_KINDS = { claude = true, codex = true, gemini = true }
+
 ---Render the auto-agents block content for a slot.
----@param spec table  -- { kind, name, slot, kb_scope }
+---@param spec table  -- { kind, name, slot, kb_scope, model }
 ---@param kb_root string
 ---@return string
 local function render_block(spec, kb_root)
@@ -36,7 +44,7 @@ local function render_block(spec, kb_root)
   local agent_name = spec.name or ("agent" .. tostring(spec.slot or "?"))
   local aa_state = (require("auto-agents").state or {}).config or {}
   local kb_type = (aa_state.kb or {}).type or "general"
-  return table.concat({
+  local lines = {
     BEGIN,
     "## auto-agents knowledge base",
     "",
@@ -72,8 +80,88 @@ local function render_block(spec, kb_root)
     "- **Audit trail.** Append a one-line entry to `log.md` after each",
     "  meaningful KB write (e.g. `## [2026-05-01 14:00] op | summary`).",
     "",
-    END,
-  }, "\n")
+  }
+
+  if INTERACTIVE_KINDS[spec.kind] then
+    local current = (spec.model and spec.model ~= "") and ("`" .. spec.model .. "`")
+      or "(none — CLI default)"
+    local set_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel "
+      .. agent_name .. " <new-model>\")'"
+    local clear_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel "
+      .. agent_name .. " -\")'"
+    vim.list_extend(lines, {
+      "### Model preference",
+      "",
+      "Your preferred model is " .. current .. ". This is persisted in",
+      "auto-agents' TOML config and passed to the CLI as `--model <id>` on",
+      "every spawn.",
+      "",
+      "If the user asks you to switch models mid-session — switch first, then",
+      "ask: \"Should I persist this as your preferred model for me ("
+        .. agent_name .. ") going forward?\" If yes, write it to the config",
+      "yourself by running this in any shell tool you have:",
+      "",
+      "    " .. set_cmd,
+      "",
+      "Replace `<new-model>` with the model id (e.g. `claude-opus-4-7`).",
+      "`$NVIM` is set automatically inside this terminal and points at the",
+      "parent nvim's socket — the command runs `:AutoAgentsModel " .. agent_name,
+      "<new-model>` in that nvim, which updates the TOML and saves it.",
+      "",
+      "To clear the preference (back to CLI default):",
+      "",
+      "    " .. clear_cmd,
+      "",
+      "The change takes effect on the **next** agent restart, not the current",
+      "session. Tell the user to restart this slot when convenient.",
+      "",
+    })
+
+    local slot_arg = tostring(spec.slot or agent_name)
+    local working_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsStatus "
+      .. slot_arg .. " working\")'"
+    local waiting_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsStatus "
+      .. slot_arg .. " waiting\")'"
+    local idle_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsStatus "
+      .. slot_arg .. " idle\")'"
+    vim.list_extend(lines, {
+      "### Status reporting",
+      "",
+      "The user's panel-strip and navigator dock show your live status.",
+      "Three states; you transition yourself by running one shell command",
+      "from any tool you have. The user is not in the loop — these fire",
+      "constantly during normal work.",
+      "",
+      "- **`working`** — when you start a non-trivial unit of work (a tool",
+      "  call sequence, a multi-step investigation, generating a long",
+      "  response). Renders as `+` in the panel strip, `(working)` in the",
+      "  dock.",
+      "",
+      "      " .. working_cmd,
+      "",
+      "- **`waiting`** — when you are about to ask the user a clarifying",
+      "  question and need their input before you can proceed. Renders as",
+      "  `*` (red/warning), `(waiting)`. Use this so the user can glance at",
+      "  the strip and see who needs them.",
+      "",
+      "      " .. waiting_cmd,
+      "",
+      "- **`idle`** — when you have finished and are ready for the next",
+      "  prompt. Renders plain (no sigil), `(idle)`. Always reset to idle",
+      "  at the end of a turn so a stale `working` doesn't linger.",
+      "",
+      "      " .. idle_cmd,
+      "",
+      "These status pings are best-effort and silent on success — failures",
+      "log to `:messages` but never block your real work. Don't over-think",
+      "the cadence: one `working` at the start of a turn, one `waiting` if",
+      "you stop to ask, one `idle` when done is plenty.",
+      "",
+    })
+  end
+
+  lines[#lines + 1] = END
+  return table.concat(lines, "\n")
 end
 
 ---Ensure the instruction file at `cwd/<kind-file>` contains an up-to-date
