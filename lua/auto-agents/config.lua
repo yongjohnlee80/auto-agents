@@ -46,7 +46,7 @@ M.defaults = {
 local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace = true }
 local SIDES = { left = true, right = true }
 local RAILS = { winbar = true, vertical = true, off = true }
-local KINDS = { claude = true, codex = true, gemini = true, copilot = true, generic = true }
+local KINDS = { claude = true, codex = true, gemini = true, junie = true, copilot = true, generic = true }
 local SCOPES = { shared = true, private = true, isolated = true }
 local PROVIDERS = { auto = true, snacks = true, native = true, none = true }
 
@@ -80,10 +80,10 @@ function M.validate(cfg)
   end
   local a = cfg.agents
   if not KINDS[a.default_kind] then
-    return "agents.default_kind must be one of claude|codex|gemini|generic"
+    return "agents.default_kind must be one of claude|codex|gemini|junie|copilot|generic"
   end
   if not KINDS[a.primary_kind] then
-    return "agents.primary_kind must be one of claude|codex|gemini|generic"
+    return "agents.primary_kind must be one of claude|codex|gemini|junie|copilot|generic"
   end
   if type(a.bootstrap) ~= "table" then
     return "agents.bootstrap must be a list of slot specs"

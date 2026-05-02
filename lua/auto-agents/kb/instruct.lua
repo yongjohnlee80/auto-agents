@@ -2,10 +2,10 @@
 ---
 ---Each agent kind auto-loads a per-project instruction file from its
 ---cwd: claude reads `CLAUDE.md`, codex/copilot/generic read `AGENTS.md`,
----gemini reads `GEMINI.md`. We inject a delimited "auto-agents" block
----into that file so the agent learns its KB location and read/write
----convention without us having to send anything via stdin (which TUIs
----would treat as a prompt).
+---gemini reads `GEMINI.md`, junie reads `.junie/guidelines.md`. We
+---inject a delimited "auto-agents" block into that file so the agent
+---learns its KB location and read/write convention without us having
+---to send anything via stdin (which TUIs would treat as a prompt).
 ---
 ---The block is bounded by `<!-- auto-agents:begin -->` /
 ---`<!-- auto-agents:end -->`. Re-running `ensure()` rewrites just the
@@ -18,22 +18,25 @@ local M = {}
 local BEGIN = "<!-- auto-agents:begin -->"
 local END   = "<!-- auto-agents:end -->"
 
----Map an agent kind to the filename it auto-loads at its cwd.
+---Map an agent kind to the filename it auto-loads at its cwd. Some
+---kinds (junie) use a multi-segment path; the writer mkdirs the parent
+---before writing.
 ---@param kind string
 ---@return string filename
 function M.filename_for(kind)
   if kind == "claude"  then return "CLAUDE.md"  end
   if kind == "gemini"  then return "GEMINI.md"  end
+  if kind == "junie"   then return ".junie/guidelines.md"  end
   return "AGENTS.md"  -- codex, copilot, generic, anything else
 end
 
 ---Kinds the auto-injected sections (Model preference, Status reporting)
----apply to. claude/codex/gemini all accept a `--model <id>` flag *and*
----can run shell tools to invoke `nvim --server "$NVIM" --remote-expr ...`
+---apply to. claude/codex/gemini/junie all accept a `--model <id>` flag
+---*and* can run shell tools to invoke `nvim --server "$NVIM" --remote-expr ...`
 ---themselves. copilot is a recommender, not a runner; generic is a plain
 ---shell — neither has the same self-instrumentation surface, so the
 ---sections are skipped for them.
-local INTERACTIVE_KINDS = { claude = true, codex = true, gemini = true }
+local INTERACTIVE_KINDS = { claude = true, codex = true, gemini = true, junie = true }
 
 ---Render the auto-agents block content for a slot.
 ---@param spec table  -- { kind, name, slot, kb_scope, model }
@@ -175,6 +178,13 @@ function M.ensure(spec, kb_root, cwd)
   end
 
   if new_content == existing then return path end  -- no-op
+
+  -- Ensure parent dir exists for kinds whose filename is multi-segment
+  -- (e.g. junie's `.junie/guidelines.md`). mkdir -p is idempotent.
+  local parent = path:match("^(.*)/[^/]+$")
+  if parent and parent ~= "" and parent ~= cwd then
+    pcall(vim.fn.mkdir, parent, "p")
+  end
 
   local out, err = io.open(path, "w")
   if not out then

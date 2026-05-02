@@ -175,7 +175,7 @@ bottom.
 
 Optional `[[agents]].model` field. When set, the per-kind adapter
 appends `--model <id>` to the launch argv on every spawn (claude,
-codex, gemini). Ignored for `copilot` and `generic`, and skipped
+codex, gemini, junie). Ignored for `copilot` and `generic`, and skipped
 when the user has overridden `cmd = [...]` — in that case the user's
 argv is used verbatim.
 
@@ -199,7 +199,7 @@ model it was launched with.
 ### Agents persist their own preference
 
 The auto-injected instruction file (`CLAUDE.md` / `AGENTS.md` /
-`GEMINI.md` at the agent's cwd) carries the agent's current
+`GEMINI.md` / `.junie/guidelines.md` at the agent's cwd) carries the agent's current
 preference and tells it how to update the config when the user
 asks for a model change mid-session: run
 
@@ -245,7 +245,7 @@ transitions (see below).
 ### Agents self-report their own status
 
 The auto-injected instruction file tells each interactive agent
-(claude/codex/gemini) the three transitions and the exact shell
+(claude/codex/gemini/junie) the three transitions and the exact shell
 commands to run for each. Inside the agent's terminal, `$NVIM` is
 set to the parent nvim's socket, so a one-liner like
 

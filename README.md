@@ -142,7 +142,7 @@ auto-agents: new agent
   <C-c> to cancel.
   slot  [1..9]:
 > 1
-  kind (claude|codex|gemini|copilot|generic)  [claude]:
+  kind (claude|codex|gemini|junie|copilot|generic)  [claude]:
 > 
   name (handle, used for KB dir + grants)  [(blank to auto-generate)]:
 > main
@@ -185,7 +185,7 @@ root = "/abs/path/.auto-agents/kb"   # absolute; can be shared across projects
 
 [[agents]]
 slot          = 1
-kind          = "claude"             # claude|codex|gemini|copilot|generic
+kind          = "claude"             # claude|codex|gemini|junie|copilot|generic
 name          = "main"
 title         = "Claude"
 role          = "primary engineering pair"   # optional
@@ -364,13 +364,14 @@ F-keys with `opts.term.fkeys = { "<F1>", "<F2>", ... }`.
 Each kind ships a small adapter that resolves the launch command and any
 extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 
-| `kind`    | Default cmd            | Notes                                    |
-|-----------|------------------------|------------------------------------------|
-| `claude`  | `claude`               | Anthropic Claude Code CLI                |
-| `codex`   | `codex`                | OpenAI Codex CLI; pads its own footer    |
-| `gemini`  | `gemini`               | Google Gemini CLI                        |
-| `copilot` | `gh copilot`           | GitHub CLI extension                     |
-| `generic` | `spec.cmd` or `$SHELL` | Catch-all for shells / homegrown tools   |
+| `kind`    | Default cmd            | Notes                                                                            |
+|-----------|------------------------|----------------------------------------------------------------------------------|
+| `claude`  | `claude`               | Anthropic Claude Code CLI                                                        |
+| `codex`   | `codex`                | OpenAI Codex CLI; pads its own footer                                            |
+| `gemini`  | `gemini`               | Google Gemini CLI                                                                |
+| `junie`   | `junie`                | JetBrains [Junie CLI](https://junie.jetbrains.com/docs/junie-cli.html); install via `npm i -g @jetbrains/junie-cli` |
+| `copilot` | `gh copilot`           | GitHub CLI extension                                                             |
+| `generic` | `spec.cmd` or `$SHELL` | Catch-all for shells / homegrown tools                                           |
 
 ## Knowledge base
 
@@ -453,7 +454,7 @@ documenting boundaries between sub-agents.
 
 - [x] **M1** scaffold, terminal providers (snacks/native/none), per-instance state
 - [x] **M2** panel, slots, admin buffer, tab completion, form buffer
-- [x] **M3** agent registry, adapters (claude/codex/gemini/copilot/generic), persistence
+- [x] **M3** agent registry, adapters (claude/codex/gemini/junie/copilot/generic), persistence
 - [x] **M4** knowledge base (shared/private/isolated, manifest, Obsidian compat)
 - [x] **M5** resource grants, manager designation
 - [ ] **M6** README polish, ARCHITECTURE.md, test suite, `v0.1.0` tag
