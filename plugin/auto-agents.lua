@@ -140,6 +140,88 @@ end, {
   desc = "Print a snapshot of every running agent's status",
 })
 
+-- Manually sync the running model of one slot (or the focused slot)
+-- to its TOML config. Reads the model from the terminal buffer via the
+-- status/model_reader, then calls agent.set_model. Useful when
+-- auto-sync hasn't fired yet or the user wants an immediate write.
+vim.api.nvim_create_user_command("AutoAgentsModelSync", function(opts)
+  local aa = require("auto-agents")
+  local obs_mod = require("auto-agents.status.observer")
+  local reader = require("auto-agents.status.model_reader")
+  local agent = require("auto-agents.agent")
+
+  -- Resolve slot: explicit arg, or focused slot.
+  local slot
+  if opts.fargs[1] then
+    slot = tonumber(opts.fargs[1])
+    if not slot then
+      vim.notify("AutoAgentsModelSync: slot must be a number", vim.log.levels.ERROR)
+      return
+    end
+  else
+    slot = aa.state.focused_slot or 1
+  end
+
+  -- Get the terminal buf for this slot.
+  local term = aa.state.slot_terminals and aa.state.slot_terminals[slot]
+  local bufnr = term and term.get_bufnr and term:get_bufnr()
+  if not bufnr then
+    -- Fallback: check observer.
+    local obs = obs_mod._by_slot[slot]
+    bufnr = obs and obs.bufnr
+  end
+  if not (bufnr and vim.api.nvim_buf_is_valid(bufnr)) then
+    vim.notify("AutoAgentsModelSync: no live terminal for slot " .. slot, vim.log.levels.WARN)
+    return
+  end
+
+  -- Resolve kind from bootstrap.
+  local kind
+  local cfg = aa.state.config
+  for _, e in ipairs((cfg and cfg.agents and cfg.agents.bootstrap) or {}) do
+    if e.slot == slot then kind = e.kind; break end
+  end
+  if not kind then
+    vim.notify("AutoAgentsModelSync: slot " .. slot .. " not in bootstrap config", vim.log.levels.WARN)
+    return
+  end
+
+  local info = reader.read(bufnr, kind)
+  if not info then
+    vim.notify("AutoAgentsModelSync: could not read model from terminal (status line not visible?)", vim.log.levels.WARN)
+    return
+  end
+
+  -- Find agent name for this slot.
+  local name
+  for _, e in ipairs((cfg and cfg.agents and cfg.agents.bootstrap) or {}) do
+    if e.slot == slot then name = e.name; break end
+  end
+  if not name then
+    vim.notify("AutoAgentsModelSync: no agent name for slot " .. slot, vim.log.levels.WARN)
+    return
+  end
+
+  local ok, msg = agent.set_model(name, info.api_id)
+  if ok then
+    -- Also update the observer's last_synced_model so auto-sync
+    -- doesn't immediately re-fire.
+    local obs = obs_mod._by_slot[slot]
+    if obs then obs.last_synced_model = info.api_id end
+    vim.notify("AutoAgentsModelSync: " .. msg, vim.log.levels.INFO)
+  else
+    vim.notify("AutoAgentsModelSync: " .. msg, vim.log.levels.ERROR)
+  end
+end, {
+  nargs = "?",
+  complete = function()
+    local out = {}
+    for n = 1, 9 do out[#out + 1] = tostring(n) end
+    return out
+  end,
+  desc = "Sync the focused slot's running model to its TOML config entry",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsModel", function(opts)
   local name = opts.fargs[1]
   local model = opts.fargs[2]

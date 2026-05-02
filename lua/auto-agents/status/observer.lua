@@ -27,9 +27,10 @@
 local M = {}
 
 -- Tunables.
-local TICK_MS = 250          -- timer cadence
-local IDLE_AFTER_MS = 1500   -- output silence threshold → drop to idle
-local WAITING_QUIET_MS = 600 -- waiting-pattern only counts after this much silence
+local TICK_MS = 250            -- timer cadence
+local IDLE_AFTER_MS = 1500     -- output silence threshold → drop to idle
+local WAITING_QUIET_MS = 600   -- waiting-pattern only counts after this much silence
+local MODEL_CHECK_TICKS = 30   -- check for model drift every N ticks (~7.5s)
 
 ---@class AutoAgentsStatusObserver
 ---@field slot integer
@@ -40,9 +41,80 @@ local WAITING_QUIET_MS = 600 -- waiting-pattern only counts after this much sile
 ---@field timer userdata|nil    -- uv timer handle
 ---@field user_pin "waiting"|nil  -- explicit override from :AutoAgentsStatus waiting
 ---@field last_emitted "idle"|"working"|"waiting"|nil
+---@field tick_count integer         -- incremented each timer tick
+---@field last_synced_model string|nil  -- last model we confirmed matches TOML
 
 ---@type table<integer, AutoAgentsStatusObserver>
 M._by_slot = {}
+
+-- ── model drift detection ─────────────────────────────────────────────────
+
+---Resolve the agent name for a slot (needed by agent.set_model).
+---@param slot integer
+---@return string|nil
+local function name_for_slot(slot)
+  local cfg = (require("auto-agents").state or {}).config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == slot then return e.name end
+  end
+  return nil
+end
+
+---Return the TOML-configured model API ID for a slot, or nil (CLI default).
+---@param slot integer
+---@return string|nil
+local function toml_model_for_slot(slot)
+  local cfg = (require("auto-agents").state or {}).config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == slot then return e.model or nil end
+  end
+  return nil
+end
+
+---Check whether the running model differs from the TOML config and,
+---if so, sync the TOML and notify the user.
+---@param obs AutoAgentsStatusObserver
+local function check_model_drift(obs)
+  local ok, reader = pcall(require, "auto-agents.status.model_reader")
+  if not ok then return end
+
+  local info = reader.read(obs.bufnr, obs.kind)
+  if not info then return end  -- status line not parseable yet
+
+  local running = info.api_id
+  if running == obs.last_synced_model then return end  -- no change since last check
+
+  local toml_model = toml_model_for_slot(obs.slot)
+  if running == toml_model then
+    -- Already in sync (e.g. first tick after spawn with correct model).
+    obs.last_synced_model = running
+    return
+  end
+
+  -- Drift detected — running model ≠ TOML. Auto-sync.
+  local name = name_for_slot(obs.slot)
+  if not name then return end
+
+  local agent = require("auto-agents.agent")
+  local synced_ok, msg = agent.set_model(name, running)
+  if synced_ok then
+    obs.last_synced_model = running
+    local prev = toml_model or "(CLI default)"
+    vim.notify(
+      string.format("auto-agents: %s model synced  %s → %s", name, prev, running),
+      vim.log.levels.INFO,
+      { title = "auto-agents" }
+    )
+  else
+    vim.notify(
+      string.format("auto-agents: model sync failed for %s — %s", name, msg),
+      vim.log.levels.WARN,
+      { title = "auto-agents" }
+    )
+  end
+end
 
 local function now_ms()
   return vim.uv and vim.uv.now() or vim.loop.now()
@@ -146,6 +218,8 @@ function M.attach(slot, bufnr, kind)
     timer = nil,
     user_pin = nil,
     last_emitted = nil,
+    tick_count = 0,
+    last_synced_model = nil,
   }
   M._by_slot[slot] = obs
 
@@ -185,7 +259,12 @@ function M.attach(slot, bufnr, kind)
       M.detach(slot)
       return
     end
+    cur.tick_count = cur.tick_count + 1
     emit_if_changed(cur)
+    -- Model drift check at a slower cadence to avoid hammering buf_get_lines.
+    if cur.tick_count % MODEL_CHECK_TICKS == 0 then
+      pcall(check_model_drift, cur)
+    end
   end))
 
   return true
