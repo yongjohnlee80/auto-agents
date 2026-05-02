@@ -207,8 +207,8 @@ Top-level lua `opts` is now small — just runtime settings:
   log_level = "info",
   panel = {
     side          = "right",   -- left|right
-    min_width     = 50,
-    max_width     = 120,
+    min_width     = 60,
+    max_width     = 140,
     percentage    = 0.35,
     editor_floor  = 40,
     slot_rail     = "winbar",  -- winbar|vertical|off
