@@ -18,14 +18,14 @@
 ---
 ---    [[agents]]
 ---    slot          = 1
----    kind          = "claude"          # claude|codex|gemini|junie|copilot|generic
+---    kind          = "claude"          # claude|codex|gemini|junie|aider|copilot|generic
 ---    name          = "main"
 ---    title         = "Claude"
 ---    role          = "..."             # optional
 ---    model         = "..."             # optional: passed as --model when set
----                                      #   (claude/codex/gemini/junie); ignored
----                                      #   for copilot/generic and when `cmd`
----                                      #   is overridden
+---                                      #   (claude/codex/gemini/junie/aider);
+---                                      #   ignored for copilot/generic and when
+---                                      #   `cmd` is overridden
 ---    cwd           = "..."             # optional override
 ---    cmd           = ["bin", "--flag"] # optional override
 ---    allowed_paths = ["src/", "tests/"]

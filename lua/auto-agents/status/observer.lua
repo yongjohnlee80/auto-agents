@@ -195,7 +195,7 @@ end
 ---Attach an observer to a slot's terminal buffer.
 ---@param slot integer
 ---@param bufnr integer
----@param kind string  -- "claude"|"codex"|"gemini"|"junie"|"copilot"|"generic"
+---@param kind string  -- "claude"|"codex"|"gemini"|"junie"|"aider"|"copilot"|"generic"
 ---@return boolean attached
 function M.attach(slot, bufnr, kind)
   if not (slot and bufnr and vim.api.nvim_buf_is_valid(bufnr)) then return false end

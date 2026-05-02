@@ -9,7 +9,7 @@
 
 local M = {}
 
-local VALID_KINDS  = { claude = true, codex = true, gemini = true, junie = true, copilot = true, generic = true }
+local VALID_KINDS  = { claude = true, codex = true, gemini = true, junie = true, aider = true, copilot = true, generic = true }
 local VALID_SCOPES = { shared = true, private = true, isolated = true }
 
 local function find_entry(slot)
@@ -98,11 +98,11 @@ function M.agent(mode, slot)
     {
       field = "kind",
       prompt = "kind",
-      choices = { "claude", "codex", "gemini", "junie", "copilot", "generic" },
+      choices = { "claude", "codex", "gemini", "junie", "aider", "copilot", "generic" },
       default = default("kind", "claude"),
       validate = function(v)
         if not VALID_KINDS[v] then
-          return false, "kind must be one of claude|codex|gemini|junie|copilot|generic"
+          return false, "kind must be one of claude|codex|gemini|junie|aider|copilot|generic"
         end
         return true
       end,

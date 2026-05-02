@@ -318,7 +318,7 @@ end
 ---@field kind string             -- agent kind or "shell" for fallback
 ---@field name string|nil
 ---@field title string|nil
----@field model string|nil        -- preferred model id (passed as --model to claude/codex/gemini/junie)
+---@field model string|nil        -- preferred model id (passed as --model to claude/codex/gemini/junie/aider)
 ---@field cmd string[]
 ---@field configured boolean      -- false → empty-slot shell fallback
 

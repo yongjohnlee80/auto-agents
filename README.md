@@ -142,7 +142,7 @@ auto-agents: new agent
   <C-c> to cancel.
   slot  [1..9]:
 > 1
-  kind (claude|codex|gemini|junie|copilot|generic)  [claude]:
+  kind (claude|codex|gemini|junie|aider|copilot|generic)  [claude]:
 > 
   name (handle, used for KB dir + grants)  [(blank to auto-generate)]:
 > main
@@ -185,7 +185,7 @@ root = "/abs/path/.auto-agents/kb"   # absolute; can be shared across projects
 
 [[agents]]
 slot          = 1
-kind          = "claude"             # claude|codex|gemini|junie|copilot|generic
+kind          = "claude"             # claude|codex|gemini|junie|aider|copilot|generic
 name          = "main"
 title         = "Claude"
 role          = "primary engineering pair"   # optional
@@ -370,6 +370,7 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 | `codex`   | `codex`                | OpenAI Codex CLI; pads its own footer                                            |
 | `gemini`  | `gemini`               | Google Gemini CLI                                                                |
 | `junie`   | `junie`                | JetBrains [Junie CLI](https://junie.jetbrains.com/docs/junie-cli.html); install via `npm i -g @jetbrains/junie-cli` |
+| `aider`   | `aider --read AGENTS.md` | [aider.chat](https://aider.chat/docs/usage.html); auto-passes `--read AGENTS.md` since aider doesn't auto-load it |
 | `copilot` | `gh copilot`           | GitHub CLI extension                                                             |
 | `generic` | `spec.cmd` or `$SHELL` | Catch-all for shells / homegrown tools                                           |
 
@@ -454,7 +455,7 @@ documenting boundaries between sub-agents.
 
 - [x] **M1** scaffold, terminal providers (snacks/native/none), per-instance state
 - [x] **M2** panel, slots, admin buffer, tab completion, form buffer
-- [x] **M3** agent registry, adapters (claude/codex/gemini/junie/copilot/generic), persistence
+- [x] **M3** agent registry, adapters (claude/codex/gemini/junie/aider/copilot/generic), persistence
 - [x] **M4** knowledge base (shared/private/isolated, manifest, Obsidian compat)
 - [x] **M5** resource grants, manager designation
 - [ ] **M6** README polish, ARCHITECTURE.md, test suite, `v0.1.0` tag
