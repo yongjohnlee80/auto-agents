@@ -10,7 +10,7 @@ M.defaults = {
     side = "right",
     min_width = 50,
     max_width = 120,
-    percentage = 0.30,
+    percentage = 0.35,
     editor_floor = 40,
     slot_rail = "winbar",
     -- TUIs (claude/codex) draw a status line at the bottom; if the

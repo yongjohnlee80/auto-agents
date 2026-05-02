@@ -209,7 +209,7 @@ Top-level lua `opts` is now small — just runtime settings:
     side          = "right",   -- left|right
     min_width     = 50,
     max_width     = 120,
-    percentage    = 0.30,
+    percentage    = 0.35,
     editor_floor  = 40,
     slot_rail     = "winbar",  -- winbar|vertical|off
     bottom_margin = 1,         -- TUI footer breathing room (overridden per-slot in TOML)
