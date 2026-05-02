@@ -208,7 +208,7 @@ Top-level lua `opts` is now small — just runtime settings:
   panel = {
     side          = "right",   -- left|right
     min_width     = 60,
-    max_width     = 140,
+    max_width     = 130,
     percentage    = 0.35,
     editor_floor  = 40,
     slot_rail     = "winbar",  -- winbar|vertical|off
