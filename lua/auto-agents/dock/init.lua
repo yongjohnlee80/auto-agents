@@ -258,4 +258,19 @@ function M.toggle()
   if M.is_open() then M.close() else M.open() end
 end
 
+---Re-render the dock buffer in place. No-op when the dock isn't open.
+---Lets status transitions update labels live without forcing the user
+---to close+reopen the float.
+function M.refresh()
+  if not M.is_open() then return end
+  local buf = M._state.bufnr
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+  local lines = build_lines()
+  pcall(function()
+    vim.bo[buf].modifiable = true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+  end)
+end
+
 return M

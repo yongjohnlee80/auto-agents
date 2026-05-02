@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.1.0-pre.1"
+M.version = "0.1.5"
 
 -- Slot stratification (D17). Slots 0..MAIN_SLOT_MAX are main (right
 -- window, multi-buffer multiplex); slots MAIN_SLOT_MAX+1..MAX_SLOT are
@@ -505,13 +505,18 @@ local function ensure_main_slot_terminal(slot, winid)
     env = build_agent_env(spec, cwd),
     on_exit = function(code)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
+      pcall(function() require("auto-agents.status.observer").detach(slot) end)
       if M.state.agent_status then M.state.agent_status[slot] = nil end
       M.refresh_winbar()
+      M.refresh_dock()
     end,
   })
   local bufnr = term:start(winid)
   if not bufnr then return nil end
   M.state.slot_terminals[slot] = term
+  pcall(function()
+    require("auto-agents.status.observer").attach(slot, bufnr, spec.kind)
+  end)
   return bufnr
 end
 
@@ -637,7 +642,7 @@ function M.toggle_sub(slot)
 
   local cwd = require("auto-agents.cwd").resolve(cfg.terminal, build_cwd_ctx(cfg))
   cwd = require("auto-agents.resources").cwd_for(slot, cwd)
-  float.toggle(cfg, slot, {
+  local sub_term = float.toggle(cfg, slot, {
     cmd = spec.cmd,
     cwd = cwd,
     env = build_agent_env(spec, cwd),
@@ -648,10 +653,17 @@ function M.toggle_sub(slot)
     title = spec.title,
     on_exit = function(code)
       logger.info("float", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
+      pcall(function() require("auto-agents.status.observer").detach(slot) end)
       if M.state.agent_status then M.state.agent_status[slot] = nil end
       M.refresh_winbar()
+      M.refresh_dock()
     end,
   })
+  if sub_term and sub_term.buf and vim.api.nvim_buf_is_valid(sub_term.buf) then
+    pcall(function()
+      require("auto-agents.status.observer").attach(slot, sub_term.buf, spec.kind)
+    end)
+  end
 end
 
 -- ── lifecycle (M3) ─────────────────────────────────────────────────────────
@@ -993,6 +1005,13 @@ function M.refresh_winbar()
     { win = M.state.panel_winid })
 end
 
+---Re-render the navigator dock, if it's currently open. Cheap no-op
+---otherwise. Called from the same code paths as refresh_winbar so the
+---two surfaces stay in lock-step.
+function M.refresh_dock()
+  pcall(function() require("auto-agents.dock").refresh() end)
+end
+
 ---Rename a slot's bootstrap entry (mutates config.agents.bootstrap).
 ---No process restart — the new name surfaces in winbar/status on the
 ---next render cycle.
@@ -1041,6 +1060,48 @@ function M.get_status(slot)
   return (M.state.agent_status or {})[slot] or "idle"
 end
 
+---List every configured slot's current state. Intended for a manager
+---agent that wants a single-call snapshot of the panel without having
+---to read the underlying state table directly.
+---@return { slot: integer, name: string, kind: string, state: "idle"|"waiting"|"working", alive: boolean }[]
+function M.list_status()
+  local out = {}
+  local cfg = M.state.config
+  local bs = (cfg and cfg.agents and cfg.agents.bootstrap) or {}
+  local seen = {}
+  for _, e in ipairs(bs) do
+    local slot = e.slot
+    if slot and not seen[slot] then
+      seen[slot] = true
+      local term = M.state.slot_terminals[slot]
+      local alive = (term and term.is_alive and term:is_alive()) and true or false
+      table.insert(out, {
+        slot = slot,
+        name = e.name or ("agent" .. slot),
+        kind = e.kind or "?",
+        state = (M.state.agent_status or {})[slot] or "idle",
+        alive = alive,
+      })
+    end
+  end
+  table.sort(out, function(a, b) return a.slot < b.slot end)
+  return out
+end
+
+---Plain-text report — one line per slot. Used by
+---`:AutoAgentsStatusReport` and consumable by other agents via
+---`nvim --server "$NVIM" --remote-expr 'execute("AutoAgentsStatusReport")'`.
+---@return string[]
+function M.status_report()
+  local lines = {}
+  for _, e in ipairs(M.list_status()) do
+    local liveness = e.alive and "" or " [dead]"
+    table.insert(lines, string.format(
+      "slot %d  %-20s  (%s)  %s%s", e.slot, e.name, e.kind, e.state, liveness))
+  end
+  return lines
+end
+
 ---Set an agent slot's runtime status. Slot identified by numeric slot
 ---or by configured agent name. State must be one of idle/waiting/working.
 ---"idle" clears the entry (kept sparse). Triggers a winbar refresh so
@@ -1069,7 +1130,16 @@ function M.set_status(slot_or_name, state)
   else
     M.state.agent_status[slot] = state
   end
+  -- Cooperate with the passive observer. Explicit `waiting` becomes a
+  -- sticky pin (survives until output resumes). Explicit idle/working
+  -- clears any pin so the observer can take over again.
+  pcall(function()
+    local obs = require("auto-agents.status.observer")
+    if state == "waiting" then obs.pin_waiting(slot)
+    else obs.clear_pin(slot) end
+  end)
   M.refresh_winbar()
+  M.refresh_dock()
   return true, "slot " .. slot .. " → " .. state
 end
 

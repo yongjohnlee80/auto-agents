@@ -125,6 +125,21 @@ end, {
     .. "agents typically self-report via remote-expr",
 })
 
+-- Snapshot of every observed slot's status. Plain-text, one slot per
+-- line: "slot <N> <name> (<kind>) — <state>". Designed to be easy for
+-- a manager agent to parse via :execute("AutoAgentsStatusReport") +
+-- a redir capture, or for the user to glance at.
+vim.api.nvim_create_user_command("AutoAgentsStatusReport", function()
+  local report = require("auto-agents").status_report()
+  if #report == 0 then
+    print("(no agents running)")
+    return
+  end
+  for _, line in ipairs(report) do print(line) end
+end, {
+  desc = "Print a snapshot of every running agent's status",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsModel", function(opts)
   local name = opts.fargs[1]
   local model = opts.fargs[2]
