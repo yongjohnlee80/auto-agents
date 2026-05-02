@@ -82,6 +82,59 @@ local function _restore_panel_width()
   pcall(vim.api.nvim_win_set_width, panel, width)
 end
 
+-- Per-kind "force full redraw" nudge sent after a SIGWINCH, for TUIs
+-- that do partial redraws and leave stale cells (most visibly: leftmost
+-- 2-4 columns clipped or duplicated until manually refreshed).
+--
+--   junie/JLine        → F5 (\x1b[15~), the upstream's refresh key
+--   goose/Ratatui      → F5 (\x1b[15~), same convention
+--   aider/prompt_toolkit → Ctrl+L (\x0c), prompt_toolkit's default
+--                          "clear-screen" binding (preserves input buffer)
+--
+-- claude/codex/gemini full-clear on SIGWINCH and don't need a nudge.
+-- copilot/generic don't run a TUI at all.
+local REDRAW_NUDGE = {
+  junie = "\x1b[15~",
+  goose = "\x1b[15~",
+  aider = "\x0c",
+}
+
+---Look up the kind for a slot from the live bootstrap.
+---@param slot integer
+---@param cfg AutoAgentsConfig
+---@return string|nil
+local function _kind_for_slot(slot, cfg)
+  local bs = (cfg and cfg.agents and cfg.agents.bootstrap) or {}
+  for _, e in ipairs(bs) do
+    if e.slot == slot then return e.kind end
+  end
+  return nil
+end
+
+---After a jobresize, send the per-kind redraw-nudge sequence so TUIs
+---that don't full-clear on SIGWINCH (junie, goose, aider) repaint
+---every cell. Deferred ~60ms so the SIGWINCH from the preceding
+---jobresize lands in the TUI's signal handler before the input byte
+---arrives at its key dispatcher (otherwise the redraw can run at the
+---pre-resize width and re-stale itself).
+---@param slot integer
+---@param term AutoAgentsTerminalInstance
+---@param cfg AutoAgentsConfig
+local function _redraw_nudge(slot, term, cfg)
+  if not (term and term.jobid and term.is_alive) then return end
+  local kind = _kind_for_slot(slot, cfg)
+  local seq = kind and REDRAW_NUDGE[kind]
+  if not seq then return end
+  local jobid = term.jobid
+  vim.defer_fn(function()
+    -- Re-validate: term may have been killed during the defer window.
+    local cur = M.state.slot_terminals and M.state.slot_terminals[slot]
+    if cur and cur.jobid == jobid and cur.is_alive and cur:is_alive() then
+      pcall(vim.api.nvim_chan_send, jobid, seq)
+    end
+  end, 60)
+end
+
 ---Resolve the bottom_margin to use for a slot — per-slot bootstrap
 ---override first, then panel-level default. Mirrors the inline
 ---resolution in focus_slot so VimResized + focus pick the same value.
@@ -127,6 +180,7 @@ local function _refresh_panel_width_cache()
   for slot, term in pairs(M.state.slot_terminals or {}) do
     if term and term.resize_to and term.is_alive and term:is_alive() then
       term:resize_to(panel, { bottom_margin = _resolve_bottom_margin(slot, cfg) })
+      _redraw_nudge(slot, term, cfg)
     end
   end
 end
@@ -1299,6 +1353,7 @@ function M.focus_slot(slot)
         end
       end
       term:resize_to(winid, { bottom_margin = margin })
+      _redraw_nudge(slot, term, cfg)
     end
     vim.cmd("startinsert")
   else
