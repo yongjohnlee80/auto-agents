@@ -117,47 +117,12 @@ local function render_block(spec, kb_root)
       "",
     })
 
-    local slot_arg = tostring(spec.slot or agent_name)
-    local working_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsStatus "
-      .. slot_arg .. " working\")'"
-    local waiting_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsStatus "
-      .. slot_arg .. " waiting\")'"
-    local idle_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsStatus "
-      .. slot_arg .. " idle\")'"
-    vim.list_extend(lines, {
-      "### Status reporting",
-      "",
-      "The user's panel-strip and navigator dock show your live status.",
-      "Three states; you transition yourself by running one shell command",
-      "from any tool you have. The user is not in the loop — these fire",
-      "constantly during normal work.",
-      "",
-      "- **`working`** — when you start a non-trivial unit of work (a tool",
-      "  call sequence, a multi-step investigation, generating a long",
-      "  response). Renders as `+` in the panel strip, `(working)` in the",
-      "  dock.",
-      "",
-      "      " .. working_cmd,
-      "",
-      "- **`waiting`** — when you are about to ask the user a clarifying",
-      "  question and need their input before you can proceed. Renders as",
-      "  `*` (red/warning), `(waiting)`. Use this so the user can glance at",
-      "  the strip and see who needs them.",
-      "",
-      "      " .. waiting_cmd,
-      "",
-      "- **`idle`** — when you have finished and are ready for the next",
-      "  prompt. Renders plain (no sigil), `(idle)`. Always reset to idle",
-      "  at the end of a turn so a stale `working` doesn't linger.",
-      "",
-      "      " .. idle_cmd,
-      "",
-      "These status pings are best-effort and silent on success — failures",
-      "log to `:messages` but never block your real work. Don't over-think",
-      "the cadence: one `working` at the start of a turn, one `waiting` if",
-      "you stop to ask, one `idle` when done is plenty.",
-      "",
-    })
+    -- No status-reporting block: status is observed passively by
+    -- auto-agents.status.observer at the spawn path, no agent
+    -- cooperation needed. The cooperative `:AutoAgentsStatus` ex-
+    -- command still exists as an override for advanced cases, but we
+    -- don't surface it in the agent's instructions to avoid drift
+    -- between the observer's reading and the agent's self-report.
   end
 
   lines[#lines + 1] = END

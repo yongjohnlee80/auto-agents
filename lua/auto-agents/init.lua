@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.1.5"
+M.version = "0.1.6"
 
 -- Slot stratification (D17). Slots 0..MAIN_SLOT_MAX are main (right
 -- window, multi-buffer multiplex); slots MAIN_SLOT_MAX+1..MAX_SLOT are
