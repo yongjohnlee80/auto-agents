@@ -184,6 +184,27 @@ own cadence and an allow-list rots immediately. Whatever string you
 set is passed through verbatim; if the CLI rejects it, you'll see
 the error in the agent's terminal.
 
+### Aider-specific: `api_base`
+
+Aider takes the model id as a CLI flag *and* often needs a separate
+`--api-base <url>` to talk to local/proxy backends (ollama,
+openrouter, lm-studio, vLLM). The wizard asks for both `model` and
+`api_base` whenever `kind = "aider"`, and persists them to TOML:
+
+```toml
+[[agents]]
+slot     = 4
+kind     = "aider"
+name     = "lentil"
+model    = "ollama_chat/llama3.1"
+api_base = "http://192.168.1.10:11434"
+```
+
+The adapter renders this as `aider --model ollama_chat/llama3.1
+--api-base http://192.168.1.10:11434 --read AGENTS.md` at spawn.
+For cloud providers (anthropic/openai) where the base URL is
+implicit, leave `api_base` blank — env vars handle auth.
+
 ### `:AutoAgentsModel <name> [<model>|-]`
 
 - `:AutoAgentsModel jarvis` — show the agent's current preference.

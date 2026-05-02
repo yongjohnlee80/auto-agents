@@ -26,6 +26,9 @@
 ---                                      #   (claude/codex/gemini/junie/aider);
 ---                                      #   ignored for copilot/generic and when
 ---                                      #   `cmd` is overridden
+---    api_base      = "..."             # optional, aider-only: passed as
+---                                      #   --api-base; required for ollama,
+---                                      #   openrouter, lm-studio, etc.
 ---    cwd           = "..."             # optional override
 ---    cmd           = ["bin", "--flag"] # optional override
 ---    allowed_paths = ["src/", "tests/"]
@@ -41,7 +44,7 @@ local M = {}
 
 local SECTION_ORDER = { "project", "kb", "agents" }
 local AGENT_KEY_ORDER = {
-  "slot", "kind", "name", "title", "role", "model", "cwd", "cmd",
+  "slot", "kind", "name", "title", "role", "model", "api_base", "cwd", "cmd",
   "allowed_paths", "manager", "kb_scope", "bottom_margin", "diff_review",
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }

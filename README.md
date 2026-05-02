@@ -370,7 +370,7 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 | `codex`   | `codex`                | OpenAI Codex CLI; pads its own footer                                            |
 | `gemini`  | `gemini`               | Google Gemini CLI                                                                |
 | `junie`   | `junie`                | JetBrains [Junie CLI](https://junie.jetbrains.com/docs/junie-cli.html); install via `npm i -g @jetbrains/junie-cli` |
-| `aider`   | `aider --read AGENTS.md` | [aider.chat](https://aider.chat/docs/usage.html); auto-passes `--read AGENTS.md` since aider doesn't auto-load it |
+| `aider`   | `aider --read AGENTS.md` | [aider.chat](https://aider.chat/docs/usage.html); also takes `model` + `api_base` in TOML for ollama/openrouter/lm-studio (`aider --model ollama_chat/llama3 --api-base http://host:11434`) |
 | `copilot` | `gh copilot`           | GitHub CLI extension                                                             |
 | `generic` | `spec.cmd` or `$SHELL` | Catch-all for shells / homegrown tools                                           |
 

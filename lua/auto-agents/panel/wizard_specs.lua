@@ -169,6 +169,26 @@ function M.agent(mode, slot)
       end,
     },
     {
+      -- aider-only: aider takes the model id as a CLI flag and frequently
+      -- needs an api_base too (ollama / openrouter / lm-studio). Other
+      -- kinds use :AutoAgentsModel after the fact and infer api endpoints
+      -- from their own auth flow, so we don't ask them here.
+      field = "model",
+      prompt = "model (e.g. ollama_chat/llama3, anthropic/claude-..., gpt-4o)",
+      default = default("model", ""),
+      placeholder = (existing and existing.model) or "(blank → aider default)",
+      skip = function(values) return values.kind ~= "aider" end,
+      parse = blank_to_nil,
+    },
+    {
+      field = "api_base",
+      prompt = "api_base URL (e.g. http://192.168.1.10:11434 for ollama)",
+      default = default("api_base", ""),
+      placeholder = (existing and existing.api_base) or "(blank to skip; needed for ollama/openrouter/lm-studio)",
+      skip = function(values) return values.kind ~= "aider" end,
+      parse = blank_to_nil,
+    },
+    {
       field = "bottom_margin",
       prompt = "bottom_margin (integer, 'inherit' to use panel default)",
       default = default("bottom_margin", "inherit"),
@@ -263,7 +283,16 @@ function M.agent(mode, slot)
         kb_scope = values.kb_scope or "shared",
         bottom_margin = values.bottom_margin,
         diff_review = values.diff_review == true or nil,  -- omit when false to keep TOML clean
+        -- Aider-only fields (other kinds skip these wizard steps). When
+        -- editing a non-aider slot, the wizard didn't ask, so values.model
+        -- is nil — preserve whatever :AutoAgentsModel previously set.
+        -- api_base is meaningless for non-aider; clear it on kind change.
+        model = values.model,
+        api_base = values.api_base,
       }
+      if values.kind ~= "aider" and existing and existing.model then
+        entry.model = existing.model
+      end
       -- Preserve any tasks list from the existing entry on edit.
       if existing and existing.tasks then entry.tasks = existing.tasks end
 
