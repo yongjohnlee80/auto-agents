@@ -1012,6 +1012,51 @@ function M.refresh_dock()
   pcall(function() require("auto-agents.dock").refresh() end)
 end
 
+---Remove a slot's bootstrap entry. Kills any running terminal first,
+---then deletes the entry from config.agents.bootstrap and persists.
+---After removal the slot reverts to a plain shell on next focus
+---(generic adapter fallback).
+---
+---Idempotent on the missing-entry case: returns `true, "already empty"`
+---rather than failing, so re-running is safe.
+---
+---@param slot integer
+---@return boolean ok
+---@return string|nil note  -- e.g. "already empty" when nothing to remove
+function M.remove_slot(slot)
+  if type(slot) ~= "number" or slot < 1 or slot > M.MAX_SLOT then
+    return false, "slot must be 1.." .. tostring(M.MAX_SLOT)
+  end
+  -- Kill any running terminal first (idempotent — kill_slot returns
+  -- false if there's nothing running, which is fine).
+  pcall(M.kill_slot, slot)
+
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then
+    return true, "already empty"
+  end
+  local bs = cfg.agents.bootstrap
+  local removed = false
+  for i = #bs, 1, -1 do
+    if bs[i].slot == slot then
+      table.remove(bs, i)
+      removed = true
+    end
+  end
+
+  if removed then
+    if slot >= 0 and slot <= M.MAIN_SLOT_MAX then
+      M.refresh_winbar()
+    end
+    M.refresh_keymaps()
+    pcall(function() require("auto-agents.config.store").save_current() end)
+    require("auto-agents.logger").info("lifecycle",
+      "slot " .. slot .. " bootstrap entry removed")
+    return true, nil
+  end
+  return true, "already empty"
+end
+
 ---Rename a slot's bootstrap entry (mutates config.agents.bootstrap).
 ---No process restart — the new name surfaces in winbar/status on the
 ---next render cycle.

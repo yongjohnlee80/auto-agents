@@ -40,7 +40,8 @@ local function help_lines()
     "  agent list                     list configured agents",
     "  agent add                      open new-agent form (D14)",
     "  agent edit <N>                 open edit form for slot N",
-    "  agent kill <N>                 stop the agent in slot N",
+    "  agent remove <N>               kill slot N and delete its bootstrap entry",
+    "  agent kill <N>                 stop the agent in slot N (keep entry)",
     "  agent restart <N>              kill and re-spawn slot N",
     "  agent rename <N> <new-name>    rename the bootstrap entry",
     "  agent send <N> <text...>       write <text> to agent N's stdin",
@@ -600,6 +601,20 @@ local function dispatch(input)
       else
         local specs = require("auto-agents.panel.wizard_specs")
         require("auto-agents.panel.wizard").start(specs.agent("edit", n), function(lines) emit(lines) end)
+      end
+    elseif sub == "remove" or sub == "rm" then
+      local n = tonumber(toks[3])
+      if not n then
+        emit({ "agent remove: usage 'agent remove <slot>'" })
+      else
+        local ok, note = require("auto-agents").remove_slot(n)
+        if ok and not note then
+          emit({ "Removed slot " .. n })
+        elseif ok and note then
+          emit({ "agent remove: slot " .. n .. " " .. note })
+        else
+          emit({ "agent remove: " .. (note or "failed") })
+        end
       end
     elseif sub == "kill" then
       local n = tonumber(toks[3])

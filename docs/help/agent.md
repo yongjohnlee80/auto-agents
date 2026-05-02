@@ -66,6 +66,23 @@ Does **not** restart the running terminal — most fields take effect on
 next spawn (use `agent restart <N>` to apply immediately). Renames also
 update `<leader>aN` descriptions live.
 
+## remove
+
+```
+agent remove <N>      # alias: agent rm <N>
+```
+
+Kills any running terminal in slot `N` and **deletes** that slot's
+`[[agents]]` entry from the active TOML. After removal the slot
+reverts to a plain shell on next focus (the generic adapter
+fallback). Idempotent: removing an already-empty slot is a no-op.
+
+**Affects:** running process is terminated; bootstrap entry is
+deleted from disk. KB instruction files (CLAUDE.md / AGENTS.md /
+GEMINI.md / .junie/guidelines.md) and grants are **not** scrubbed —
+the auto-agents block in those files becomes stale but harmless,
+remove manually if the file matters.
+
 ## kill
 
 ```
@@ -75,8 +92,7 @@ agent kill <N>
 Stops the running terminal in slot `N`. Main slots (1–5): `jobstop` +
 buffer wipe; sub-floats (6–9): close the snacks float. Bootstrap entry
 is **not** removed — the agent reappears (unspawned) the next time you
-focus the slot. Use `agent edit` then leave kind/name blank to remove
-the bootstrap entry, or hand-edit the TOML.
+focus the slot. To delete the entry too, use `agent remove <N>`.
 
 **Affects:** running process is terminated. KB instruction files left
 intact; resource grants left intact.
