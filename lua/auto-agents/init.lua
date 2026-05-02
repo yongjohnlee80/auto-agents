@@ -82,10 +82,35 @@ local function _restore_panel_width()
   pcall(vim.api.nvim_win_set_width, panel, width)
 end
 
----Refresh the cached panel width from the new terminal columns.
----Called from a VimResized autocmd so the cache stays current as the
----user resizes their terminal — the next diff-restore uses the value
----matching the user's current screen.
+---Resolve the bottom_margin to use for a slot — per-slot bootstrap
+---override first, then panel-level default. Mirrors the inline
+---resolution in focus_slot so VimResized + focus pick the same value.
+---@param slot integer
+---@param cfg AutoAgentsConfig
+---@return integer
+local function _resolve_bottom_margin(slot, cfg)
+  local margin = (cfg.panel and cfg.panel.bottom_margin) or 0
+  local bs = (cfg.agents and cfg.agents.bootstrap) or {}
+  for _, e in ipairs(bs) do
+    if e.slot == slot and e.bottom_margin ~= nil then
+      return e.bottom_margin
+    end
+  end
+  return margin
+end
+
+---Refresh the cached panel width from the new terminal columns AND
+---re-issue jobresize on every running main-slot terminal so the TUI
+---gets a fresh SIGWINCH at the now-correct width.
+---
+---Called from a VimResized autocmd. Without the resize_to leg, TUIs
+---that drew at the previous width keep that grid in their head and
+---their next paint lands at stale column offsets — visible as the
+---leftmost 2-4 chars getting clipped or duplicated, particularly on
+---TUIs that do partial redraws on SIGWINCH (junie/JLine,
+---aider/prompt_toolkit, goose/ratatui). codex/claude/gemini full-clear
+---on SIGWINCH so they self-correct, but the others need this to
+---happen promptly after every resize, not just on focus_slot.
 local function _refresh_panel_width_cache()
   local panel = M.state.panel_winid
   if not panel or not vim.api.nvim_win_is_valid(panel) then return end
@@ -94,6 +119,16 @@ local function _refresh_panel_width_cache()
   M.state.panel_width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
   -- Apply the new width too so the panel tracks the resize.
   pcall(vim.api.nvim_win_set_width, panel, M.state.panel_width)
+
+  -- Forward the resize to every running main-slot TUI so its PTY
+  -- width matches the panel's new dims. Sub-slot floats are skipped
+  -- here — their own float lib handles resize. Cheap: ~one ioctl per
+  -- alive terminal per resize event.
+  for slot, term in pairs(M.state.slot_terminals or {}) do
+    if term and term.resize_to and term.is_alive and term:is_alive() then
+      term:resize_to(panel, { bottom_margin = _resolve_bottom_margin(slot, cfg) })
+    end
+  end
 end
 
 ---Open a 1x1 invisible "ghost" float at row 0 col 0 that grabs focus
