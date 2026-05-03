@@ -82,62 +82,9 @@ local function _restore_panel_width()
   pcall(vim.api.nvim_win_set_width, panel, width)
 end
 
--- Per-kind "force full redraw" nudge sent after a SIGWINCH, for TUIs
--- that do partial redraws and leave stale cells (most visibly: leftmost
--- 2-4 columns clipped or duplicated until manually refreshed).
---
---   junie/JLine        → F5 (\x1b[15~), the upstream's refresh key
---   goose/Ratatui      → F5 (\x1b[15~), same convention
---   aider/prompt_toolkit → Ctrl+L (\x0c), prompt_toolkit's default
---                          "clear-screen" binding (preserves input buffer)
---
--- claude/codex/gemini full-clear on SIGWINCH and don't need a nudge.
--- copilot/generic don't run a TUI at all.
-local REDRAW_NUDGE = {
-  junie = "\x1b[15~",
-  goose = "\x1b[15~",
-  aider = "\x0c",
-}
-
----Look up the kind for a slot from the live bootstrap.
----@param slot integer
----@param cfg AutoAgentsConfig
----@return string|nil
-local function _kind_for_slot(slot, cfg)
-  local bs = (cfg and cfg.agents and cfg.agents.bootstrap) or {}
-  for _, e in ipairs(bs) do
-    if e.slot == slot then return e.kind end
-  end
-  return nil
-end
-
----After a jobresize, send the per-kind redraw-nudge sequence so TUIs
----that don't full-clear on SIGWINCH (junie, goose, aider) repaint
----every cell. Deferred ~60ms so the SIGWINCH from the preceding
----jobresize lands in the TUI's signal handler before the input byte
----arrives at its key dispatcher (otherwise the redraw can run at the
----pre-resize width and re-stale itself).
----@param slot integer
----@param term AutoAgentsTerminalInstance
----@param cfg AutoAgentsConfig
-local function _redraw_nudge(slot, term, cfg)
-  if not (term and term.jobid and term.is_alive) then return end
-  local kind = _kind_for_slot(slot, cfg)
-  local seq = kind and REDRAW_NUDGE[kind]
-  if not seq then return end
-  local jobid = term.jobid
-  vim.defer_fn(function()
-    -- Re-validate: term may have been killed during the defer window.
-    local cur = M.state.slot_terminals and M.state.slot_terminals[slot]
-    if cur and cur.jobid == jobid and cur.is_alive and cur:is_alive() then
-      pcall(vim.api.nvim_chan_send, jobid, seq)
-    end
-  end, 60)
-end
-
 ---Resolve the bottom_margin to use for a slot — per-slot bootstrap
----override first, then panel-level default. Mirrors the inline
----resolution in focus_slot so VimResized + focus pick the same value.
+---override first, then panel-level default. Used by both focus_slot
+---and the VimResized handler so they pick the same value.
 ---@param slot integer
 ---@param cfg AutoAgentsConfig
 ---@return integer
@@ -153,34 +100,25 @@ local function _resolve_bottom_margin(slot, cfg)
 end
 
 ---Refresh the cached panel width from the new terminal columns AND
----re-issue jobresize on every running main-slot terminal so the TUI
----gets a fresh SIGWINCH at the now-correct width.
----
----Called from a VimResized autocmd. Without the resize_to leg, TUIs
----that drew at the previous width keep that grid in their head and
----their next paint lands at stale column offsets — visible as the
----leftmost 2-4 chars getting clipped or duplicated, particularly on
----TUIs that do partial redraws on SIGWINCH (junie/JLine,
----aider/prompt_toolkit, goose/ratatui). codex/claude/gemini full-clear
----on SIGWINCH so they self-correct, but the others need this to
----happen promptly after every resize, not just on focus_slot.
+---re-issue jobresize on every running main-slot terminal so each TUI
+---gets a fresh SIGWINCH at the now-correct width. Without the
+---resize_to leg, TUIs would keep drawing at the pre-resize width
+---until their slot is next focused (focus_slot also calls resize_to).
 local function _refresh_panel_width_cache()
   local panel = M.state.panel_winid
   if not panel or not vim.api.nvim_win_is_valid(panel) then return end
   local cfg = M.state.config
   if not cfg then return end
   M.state.panel_width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
-  -- Apply the new width too so the panel tracks the resize.
   pcall(vim.api.nvim_win_set_width, panel, M.state.panel_width)
 
-  -- Forward the resize to every running main-slot TUI so its PTY
-  -- width matches the panel's new dims. Sub-slot floats are skipped
-  -- here — their own float lib handles resize. Cheap: ~one ioctl per
-  -- alive terminal per resize event.
+  -- Forward the resize to every running main-slot TUI so its PTY width
+  -- matches the panel's new dims. Sub-slot floats are skipped here —
+  -- their own float lib handles resize. Cheap: ~one ioctl per alive
+  -- terminal per resize event.
   for slot, term in pairs(M.state.slot_terminals or {}) do
     if term and term.resize_to and term.is_alive and term:is_alive() then
       term:resize_to(panel, { bottom_margin = _resolve_bottom_margin(slot, cfg) })
-      _redraw_nudge(slot, term, cfg)
     end
   end
 end
@@ -1344,16 +1282,7 @@ function M.focus_slot(slot)
     -- internally; claude doesn't) so per-slot override is essential.
     local term = M.state.slot_terminals[slot]
     if term and term.resize_to then
-      local margin = cfg.panel.bottom_margin or 0
-      local bs = (cfg.agents and cfg.agents.bootstrap) or {}
-      for _, e in ipairs(bs) do
-        if e.slot == slot and e.bottom_margin ~= nil then
-          margin = e.bottom_margin
-          break
-        end
-      end
-      term:resize_to(winid, { bottom_margin = margin })
-      _redraw_nudge(slot, term, cfg)
+      term:resize_to(winid, { bottom_margin = _resolve_bottom_margin(slot, cfg) })
     end
     vim.cmd("startinsert")
   else

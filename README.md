@@ -453,6 +453,38 @@ Grants are **best-effort coordination, not OS sandboxing** — the agent has to
 honor them. Use them for prompt-shaping ("only touch these paths") and for
 documenting boundaries between sub-agents.
 
+## Known issues
+
+### Junie and Goose: leftmost columns clipped at spawn / on slot navigation
+
+When a `junie` or `goose` agent first spawns into the panel — and again
+when you navigate away and back — the leftmost ~2-4 columns of the TUI
+content render clipped (e.g. `Welcome to Junie` displays as `ome to
+Junie`). Once the artifact appears, simply re-focusing the slot does
+not clear it.
+
+**Workaround for the session:** press your panel-toggle key (default
+`<F5>` if you bound it that way, otherwise `:AutoAgents`) **twice** —
+once to close the panel, once to reopen it. The close-and-reopen
+forces nvim to re-instantiate the vterm-to-window binding for the
+agent's buffer, which produces a clean repaint. Subsequent slot
+navigation within the same session stays clean.
+
+**Why we haven't auto-fixed it:** investigated and unresolved. SIGWINCH
+delivery and per-kind redraw nudges (`Ctrl+L`, `F5`, FocusIn) all
+verified insufficient; only window/buffer rebind clears the artifact,
+and we don't yet have a non-disruptive way to trigger that rebind
+automatically without flickering the panel. Not present on
+`claude` / `codex` / `gemini` (which full-clear on SIGWINCH and self-correct).
+
+Goose has a known upstream cause:
+[block/goose#8177](https://github.com/block/goose/issues/8177) —
+goose has no SIGWINCH handler at all in its CLI, so the artifact will
+persist until upstream fixes it.
+
+Junie's compose-for-terminal renderer does handle SIGWINCH but its
+spawn-time render race remains undiagnosed.
+
 ## Status
 
 - [x] **M1** scaffold, terminal providers (snacks/native/none), per-instance state
