@@ -866,19 +866,25 @@ function M.send_slot(slot, text)
   return false
 end
 
----Read VmRSS for a pid (Linux). Returns kB or nil if unavailable.
+---Read RSS for a pid in kB. Tries Linux `/proc/<pid>/status` first (cheap,
+---no subprocess); falls back to `ps -o rss= -p <pid>` for platforms without
+---procfs (macOS, BSD). Returns nil if both probes fail.
 ---@param pid integer
 ---@return integer|nil rss_kb
 local function read_rss_kb(pid)
   local f = io.open("/proc/" .. tostring(pid) .. "/status", "r")
-  if not f then return nil end
-  local rss
-  for line in f:lines() do
-    local v = line:match("^VmRSS:%s+(%d+)")
-    if v then rss = tonumber(v); break end
+  if f then
+    local rss
+    for line in f:lines() do
+      local v = line:match("^VmRSS:%s+(%d+)")
+      if v then rss = tonumber(v); break end
+    end
+    f:close()
+    if rss then return rss end
   end
-  f:close()
-  return rss
+  local out = vim.fn.system({ "ps", "-o", "rss=", "-p", tostring(pid) })
+  if vim.v.shell_error ~= 0 then return nil end
+  return tonumber((out:gsub("%s+", "")))
 end
 
 ---Resolve the live PID for a slot (or nil if not running).
@@ -904,8 +910,9 @@ local function pid_for_slot(slot)
   return nil
 end
 
----Build a memory report across all running agents (Linux /proc only).
----Returns a list of strings suitable for printing into the admin buffer.
+---Build a memory report across all running agents. Uses `/proc` on Linux
+---and falls back to `ps` on macOS/BSD. Returns a list of strings suitable
+---for printing into the admin buffer.
 ---@return string[] lines
 function M.mem_report()
   local cfg = M.state.config or {}
