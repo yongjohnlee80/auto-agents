@@ -228,6 +228,17 @@ function M.open()
   vim.api.nvim_set_option_value("relativenumber", false, { win = winid })
   vim.api.nvim_set_option_value("signcolumn", "no", { win = winid })
 
+  -- Force normal mode on entry. The F6/F12 keymaps that open the dock
+  -- are bound on `n`+`t` modes; when invoked from a terminal-insert
+  -- agent buffer, the `<cmd>...<cr>` mapping preserves the source
+  -- mode through the command. Even though the dock buffer is
+  -- non-terminal/nomodifiable, nvim can carry an "insert intent" that
+  -- only resolves on the next mode-changing event — so the user has
+  -- to press <Esc> before single-keystroke dispatch keys (0-9, e)
+  -- fire. Explicit stopinsert here is the canonical fix and matches
+  -- the pattern dispatch() already uses on the editor path (line 170).
+  vim.cmd("stopinsert")
+
   M._state.winid = winid
   M._state.bufnr = buf
 
