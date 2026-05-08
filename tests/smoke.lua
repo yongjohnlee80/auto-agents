@@ -1,10 +1,10 @@
 -- Headless smoke tests for auto-agents.nvim. Run with:
 --   nvim --headless -u NONE -l tests/smoke.lua
 --
--- These tests focus on the panel surface and the buffer-guard added
--- to keep arbitrary file buffers out of the agent panel. Slot
+-- Tests focus on the panel surface and the winfixbuf-based protection
+-- that keeps arbitrary file buffers out of the agent panel. Slot
 -- terminals aren't actually spawned (no real CLI to drive); we
--- exercise admin-slot mounting plus the guard's bounce behavior.
+-- exercise admin-slot mounting plus the winfixbuf contract.
 
 local LAZY = vim.fn.expand("~/.local/share/nvim/lazy")
 for _, p in ipairs({
@@ -49,7 +49,6 @@ local setup_ok, err = pcall(aa.setup, {
 ok("setup returns without error", setup_ok, err)
 ok("state.config populated", aa.state.config ~= nil)
 ok("state.initialized true", aa.state.initialized == true)
-ok("state.mounting starts false", aa.state.mounting == false)
 
 -- ───────────────────────── 2. open + admin slot ────────────────────
 print("\n[2] open + focus_slot(0) — admin")
@@ -57,17 +56,17 @@ aa.open(true)
 local panel = aa.state.panel_winid
 ok("panel_winid set", panel ~= nil and vim.api.nvim_win_is_valid(panel))
 ok("winfixwidth set on panel", panel and vim.wo[panel].winfixwidth == true)
+ok("winfixbuf set on panel", panel and vim.wo[panel].winfixbuf == true)
 
 aa.focus_slot(0)
 ok("focused_slot == 0", aa.state.focused_slot == 0)
 local panel_buf = vim.api.nvim_win_get_buf(panel)
 local ft = vim.bo[panel_buf].filetype
 ok("panel filetype = auto-agents-admin", ft == "auto-agents-admin", "ft=" .. ft)
+ok("winfixbuf restored after focus_slot", vim.wo[panel].winfixbuf == true)
 
--- ───────────────────────── 3. _is_panel_buffer / guard semantics ───
-print("\n[3] guard semantics — :edit a regular file from panel")
--- Find a target window we expect the bounce to use. Headless starts
--- with the original main window; opening the panel made two.
+-- ───────────────────────── 3. winfixbuf blocks :edit ───────────────
+print("\n[3] winfixbuf blocks external :edit from inside panel")
 local main_win
 for _, w in ipairs(vim.api.nvim_list_wins()) do
   if w ~= panel then main_win = w end
@@ -77,81 +76,53 @@ ok("main_win exists", main_win ~= nil)
 vim.api.nvim_set_current_win(panel)
 local tmp = "/tmp/auto-agents-smoke-target.txt"
 vim.fn.writefile({ "hello" }, tmp)
-vim.cmd("edit " .. tmp)
-local target_bufnr = vim.fn.bufnr(tmp)
-
-vim.wait(200, function()
-  return vim.api.nvim_win_get_buf(panel) ~= target_bufnr
-end, 5)
-vim.wait(200, function()
-  return vim.api.nvim_win_get_buf(main_win) == target_bufnr
-end, 5)
-
+local edit_ok, edit_err = pcall(vim.cmd, "edit " .. tmp)
+ok(":edit errored with E1513 (winfixbuf)", not edit_ok and tostring(edit_err):find("winfixbuf"),
+  "ok=" .. tostring(edit_ok) .. " err=" .. tostring(edit_err))
 panel_buf = vim.api.nvim_win_get_buf(panel)
-ok("panel restored to admin buffer (filetype auto-agents-admin)",
+ok("panel still has admin buffer after blocked :edit",
   vim.bo[panel_buf].filetype == "auto-agents-admin",
   "ft=" .. vim.bo[panel_buf].filetype)
-local main_buf = main_win and vim.api.nvim_win_get_buf(main_win) or -1
-ok("file ended up in main_win", main_buf == target_bufnr,
-  "main_buf=" .. main_buf .. " expected=" .. target_bufnr)
 
--- ───────────────────────── 4. :buffer N (bufferline-click sim) ─────
-print("\n[4] guard semantics — :buffer N from panel")
+-- ───────────────────────── 4. winfixbuf blocks :buffer ─────────────
+print("\n[4] winfixbuf blocks :buffer N (bufferline-click sim)")
 vim.api.nvim_set_current_win(panel)
 local another = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_name(another, "/tmp/auto-agents-smoke-other.txt")
-vim.cmd("buffer " .. another)
-vim.wait(200, function() return vim.api.nvim_win_get_buf(panel) ~= another end, 5)
+local buf_ok, buf_err = pcall(vim.cmd, "buffer " .. another)
+ok(":buffer errored with E1513 (winfixbuf)", not buf_ok and tostring(buf_err):find("winfixbuf"))
 panel_buf = vim.api.nvim_win_get_buf(panel)
-ok("panel still admin after :buffer N",
-  vim.bo[panel_buf].filetype == "auto-agents-admin",
-  "ft=" .. vim.bo[panel_buf].filetype)
+ok("panel still admin after blocked :buffer", vim.bo[panel_buf].filetype == "auto-agents-admin")
 
--- ───────────────────────── 5. terminal buffers are allowed ─────────
-print("\n[5] slot-terminal buffers pass the guard")
--- Headless can't reliably spawn the agent CLIs, so we fake a slot
--- terminal entry: a thin object whose `get_bufnr()` returns a buffer
--- we control. The guard's `_is_panel_buffer` accepts any bufnr that
--- matches a slot_terminals[*]:get_bufnr() — which is the contract a
--- real auto-agents terminal satisfies.
+-- ───────────────────────── 5. legitimate slot swap works ───────────
+print("\n[5] focus_slot can still swap buffers (winfixbuf temp-disabled)")
+-- Faking a slot 1 entry so focus_slot(1) doesn't try to spawn.
 local fake_term_buf = vim.api.nvim_create_buf(false, true)
 aa.state.slot_terminals[1] = {
   get_bufnr = function() return fake_term_buf end,
   is_alive = function() return true end,
+  resize_to = function() end,
 }
-local saved_focused = aa.state.focused_slot
-aa.state.mounting = true
-pcall(vim.api.nvim_win_set_buf, panel, fake_term_buf)
-aa.state.mounting = false
--- Trigger the guard manually — same shape as the BufWinEnter callback.
-aa._guard_panel_buffer(fake_term_buf)
-ok("slot-terminal buffer not bounced (slot_terminals contract)",
-  vim.api.nvim_win_get_buf(panel) == fake_term_buf,
-  "panel_buf=" .. vim.api.nvim_win_get_buf(panel) .. " fake=" .. fake_term_buf)
--- Cleanup: drop the fake slot, restore admin.
-aa.state.slot_terminals[1] = nil
-aa.state.mounting = true
-local admin_buf = require("auto-agents.panel.admin").get_or_create_buffer()
-pcall(vim.api.nvim_win_set_buf, panel, admin_buf)
-aa.state.mounting = false
-aa.state.focused_slot = saved_focused
-
--- ───────────────────────── 6. mounting flag suppresses guard ───────
-print("\n[6] mounting flag short-circuits guard")
-aa.state.mounting = true
-local hostile = vim.api.nvim_create_buf(true, false)
-vim.api.nvim_buf_set_name(hostile, "/tmp/auto-agents-smoke-hostile.txt")
-pcall(vim.api.nvim_win_set_buf, panel, hostile)
-aa._guard_panel_buffer(hostile)
-ok("hostile buffer NOT bounced while mounting=true",
-  vim.api.nvim_win_get_buf(panel) == hostile,
+aa.focus_slot(1)
+ok("focused_slot == 1 after swap", aa.state.focused_slot == 1)
+ok("panel buf is the fake-terminal buf", vim.api.nvim_win_get_buf(panel) == fake_term_buf,
   "panel_buf=" .. vim.api.nvim_win_get_buf(panel))
--- Now flip mounting off and call the guard directly — should bounce.
-aa.state.mounting = false
-aa._guard_panel_buffer(hostile)
-vim.wait(200, function() return vim.api.nvim_win_get_buf(panel) ~= hostile end, 5)
-ok("hostile buffer IS bounced once mounting=false",
-  vim.api.nvim_win_get_buf(panel) ~= hostile)
+ok("winfixbuf re-enabled after slot swap", vim.wo[panel].winfixbuf == true)
+
+aa.focus_slot(0)
+ok("focused_slot == 0 after swap back", aa.state.focused_slot == 0)
+ok("panel back on admin", vim.bo[vim.api.nvim_win_get_buf(panel)].filetype == "auto-agents-admin")
+aa.state.slot_terminals[1] = nil
+
+-- ───────────────────────── 6. close + reopen ───────────────────────
+print("\n[6] close + reopen — winfixbuf reapplied on every open")
+aa.close()
+ok("panel_winid cleared after close", aa.state.panel_winid == nil
+  or not vim.api.nvim_win_is_valid(aa.state.panel_winid))
+aa.open(true)
+local panel2 = aa.state.panel_winid
+ok("panel reopens", panel2 ~= nil and vim.api.nvim_win_is_valid(panel2))
+ok("winfixbuf set on reopened panel", vim.wo[panel2].winfixbuf == true)
 
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
