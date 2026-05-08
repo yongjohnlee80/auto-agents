@@ -1393,8 +1393,22 @@ function M.focus_slot(slot)
     return
   end
 
+  -- Hold the panel-buffer guard off for the entire focus flow. termopen
+  -- inside ensure_main_slot_terminal fires BufWinEnter for the new
+  -- terminal *before* `buftype = "terminal"` is visible to the guard
+  -- AND before slot_terminals[slot] is registered — without this
+  -- flag, the guard would mis-classify the terminal as a foreign
+  -- buffer and bounce it to a sibling window. Result: the agent
+  -- terminal ends up in BOTH the main editor and the panel after a
+  -- subsequent re-focus puts a copy back in the panel. (v0.1.23
+  -- regression — see bug-fix doc / smoke 5).
+  M.state.mounting = true
+  local function _release_mounting()
+    M.state.mounting = false
+  end
+
   local winid = ensure_main_window(false)
-  if not winid then return end
+  if not winid then _release_mounting(); return end
 
   local bufnr
   local fresh_spawn = false
@@ -1405,21 +1419,18 @@ function M.focus_slot(slot)
     -- spawn will happen with the panel window as context (correct sizing).
     fresh_spawn = not (M.state.slot_terminals[slot] and M.state.slot_terminals[slot]:is_alive())
     bufnr = ensure_main_slot_terminal(slot, fresh_spawn and winid or nil)
-    if not bufnr then return end
+    if not bufnr then _release_mounting(); return end
   end
 
   -- For non-fresh spawns (re-focus / slot 0 admin), explicitly place the
   -- buffer in the panel window. Fresh spawns already did this inside
-  -- start(winid) so termopen could see the dimensions. Set the
-  -- mounting flag around the swap so the panel-buffer guard doesn't
-  -- bounce our own legitimate placement.
-  M.state.mounting = true
+  -- start(winid) so termopen could see the dimensions. (mounting flag
+  -- is held by the outer wrapper at the top of focus_slot.)
   if not fresh_spawn then
     vim.api.nvim_win_set_buf(winid, bufnr)
   end
   M.state.focused_slot = slot
   vim.api.nvim_set_current_win(winid)
-  M.state.mounting = false
 
   -- D10 winbar tab-strip: all main slots, focused one bracketed, each
   -- wrapped in a clickable region. Adaptive: full labels when panel is
@@ -1456,6 +1467,7 @@ function M.focus_slot(slot)
     vim.cmd("startinsert!")
   end
   logger.debug("panel", "focused slot=" .. slot .. " buf=" .. bufnr .. " fresh=" .. tostring(fresh_spawn))
+  _release_mounting()
 end
 
 return M
