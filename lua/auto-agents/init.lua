@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.1.7"
+M.version = "0.1.23"
 
 -- Slot stratification (D17). Slots 0..MAIN_SLOT_MAX are main (right
 -- window, multi-buffer multiplex); slots MAIN_SLOT_MAX+1..MAX_SLOT are
@@ -38,6 +38,11 @@ M.state = {
   -- written to TOML, cleared on agent exit.
   ---@type table<integer, "waiting"|"working">
   agent_status = {},
+  -- Re-entrancy flag for the panel buffer guard. Set to true by
+  -- focus_slot and any other code path that legitimately swaps a
+  -- buffer into the panel window. The guard skips bouncing while
+  -- this is set so we don't fight ourselves.
+  mounting = false,
 }
 
 -- ── diff-review parity hooks (route B) ────────────────────────────────────
@@ -332,6 +337,24 @@ function M.setup(opts)
   -- loaded, the previous focused_slot (or 1) still applies.
   if #config.agents.bootstrap == 0 then
     M.state.focused_slot = 0
+  end
+
+  -- Panel buffer guard: keep arbitrary file buffers out of the panel
+  -- window. Without this, `:edit foo.txt` from inside an admin/terminal
+  -- slot — or clicking a tab in bufferline while focused on the panel
+  -- — replaces the slot's buffer with the file in the panel window
+  -- and breaks the multiplex. Mirrors auto-finder's guard_buffer
+  -- pattern. Allowed buffers: anything `buftype = "terminal"` (slot
+  -- TUIs), and anything whose filetype starts with `auto-agents`
+  -- (admin, dock, etc.).
+  do
+    local guard_group = vim.api.nvim_create_augroup("AutoAgentsPanelGuard", { clear = true })
+    vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter" }, {
+      group = guard_group,
+      callback = function(ev)
+        M._guard_panel_buffer(ev.buf)
+      end,
+    })
   end
 
   require("auto-agents.float").install_auto_hide()
@@ -1247,6 +1270,106 @@ function M.set_status(slot_or_name, state)
   return true, "slot " .. slot .. " → " .. state
 end
 
+-- ── panel buffer guard ────────────────────────────────────────────────────
+
+---Is `bufnr` an acceptable occupant of the agent panel? Terminals
+---(buftype=terminal) and any filetype starting with `auto-agents` are
+---allowed; everything else gets bounced back to a sibling window.
+---@param bufnr integer
+---@return boolean
+local function _is_panel_buffer(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return false end
+  local ok_bt, bt = pcall(function() return vim.bo[bufnr].buftype end)
+  if ok_bt and bt == "terminal" then return true end
+  local ok_ft, ft = pcall(function() return vim.bo[bufnr].filetype end)
+  if ok_ft and type(ft) == "string" and ft:sub(1, 11) == "auto-agents" then
+    return true
+  end
+  -- The cached slot terminals are also panel buffers even if their
+  -- buftype isn't yet "terminal" (the very brief window before
+  -- termopen completes). Cover that race explicitly.
+  for _, term in pairs(M.state.slot_terminals or {}) do
+    if term and term.get_bufnr and term:get_bufnr() == bufnr then return true end
+  end
+  return false
+end
+
+---Find a non-panel, non-float, non-sidebar window we can open a
+---bounced file in. If nothing suitable exists, split a new one off
+---in the direction opposite to the panel side.
+---@param panel_winid integer
+---@return integer winid
+local function _find_or_create_target_window(panel_winid)
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if w ~= panel_winid then
+      local b = vim.api.nvim_win_get_buf(w)
+      local bt = vim.bo[b].buftype
+      local ft = vim.bo[b].filetype
+      local cfg_ok, is_float = pcall(function()
+        return vim.api.nvim_win_get_config(w).relative ~= ""
+      end)
+      if cfg_ok and not is_float and bt ~= "prompt"
+          and ft ~= "neo-tree" and ft ~= "auto-finder-config"
+          and not (type(ft) == "string" and ft:sub(1, 11) == "auto-agents") then
+        return w
+      end
+    end
+  end
+  local cfg = M.state.config
+  local placement = "leftabove"  -- panel is on the right by default
+  if cfg and cfg.panel and cfg.panel.side == "left" then
+    placement = "rightbelow"
+  end
+  vim.cmd(placement .. " vsplit")
+  return vim.api.nvim_get_current_win()
+end
+
+---Guard the panel against arbitrary buffers landing in it. Called from
+---a BufWinEnter / BufEnter autocmd. Restores the focused slot's
+---buffer in the panel and reschedules the bounced buffer in a
+---sibling window.
+---@param buf integer
+function M._guard_panel_buffer(buf)
+  if M.state.mounting then return end
+  local panel = M.state.panel_winid
+  if not panel or not vim.api.nvim_win_is_valid(panel) then return end
+  local panel_buf = vim.api.nvim_win_get_buf(panel)
+  if panel_buf ~= buf then return end
+  if _is_panel_buffer(buf) then return end
+
+  -- Restore the focused slot's buffer (terminal or admin) into the
+  -- panel. Mounting flag prevents recursive bounces.
+  local slot = M.state.focused_slot
+  local restore_buf
+  if slot == 0 then
+    restore_buf = require("auto-agents.panel.admin").get_or_create_buffer()
+  else
+    local term = M.state.slot_terminals and M.state.slot_terminals[slot]
+    if term and term.get_bufnr then restore_buf = term:get_bufnr() end
+  end
+  M.state.mounting = true
+  if restore_buf and vim.api.nvim_buf_is_valid(restore_buf) then
+    pcall(vim.api.nvim_win_set_buf, panel, restore_buf)
+  else
+    -- Nothing valid to restore — fall back to a scratch so we don't
+    -- keep the hijacked file buffer in the panel.
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.bo[scratch].bufhidden = "wipe"
+    vim.bo[scratch].buftype = "nofile"
+    pcall(vim.api.nvim_win_set_buf, panel, scratch)
+  end
+  M.state.mounting = false
+
+  -- Re-route the bounced buffer to a sibling window. Defer so we
+  -- don't recurse into BufWinEnter on the same buffer.
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local target = _find_or_create_target_window(panel)
+    pcall(vim.api.nvim_set_current_win, target)
+    pcall(vim.api.nvim_win_set_buf, target, buf)
+  end)
+end
+
 -- ── focus (existing) ───────────────────────────────────────────────────────
 
 ---Universal slot router (D17). Slots 0..4 → main right window (buffer
@@ -1287,12 +1410,16 @@ function M.focus_slot(slot)
 
   -- For non-fresh spawns (re-focus / slot 0 admin), explicitly place the
   -- buffer in the panel window. Fresh spawns already did this inside
-  -- start(winid) so termopen could see the dimensions.
+  -- start(winid) so termopen could see the dimensions. Set the
+  -- mounting flag around the swap so the panel-buffer guard doesn't
+  -- bounce our own legitimate placement.
+  M.state.mounting = true
   if not fresh_spawn then
     vim.api.nvim_win_set_buf(winid, bufnr)
   end
   M.state.focused_slot = slot
   vim.api.nvim_set_current_win(winid)
+  M.state.mounting = false
 
   -- D10 winbar tab-strip: all main slots, focused one bracketed, each
   -- wrapped in a clickable region. Adaptive: full labels when panel is
