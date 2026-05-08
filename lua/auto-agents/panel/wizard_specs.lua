@@ -502,4 +502,62 @@ function M.project_import()
   }
 end
 
+---panel.resize — single-step prompt for the panel width override.
+---Default value is the current override if set, else the
+---currently-resolved effective width (so Enter == "keep what's on
+---screen now"). Caller is the `panel resize` admin verb (no arg).
+---@return table  -- AutoAgentsWizardSpec
+function M.panel_resize()
+  local cfg_mod = require("auto-agents.config")
+  local aa = require("auto-agents")
+  local cfg = aa.state.config or {}
+  local p = cfg.panel or {}
+  local current = p.width_override
+  -- Effective width: either the override, or the percentage-resolved
+  -- value at the present terminal columns. We use this as the default
+  -- so the user gets a sensible starting point even when no override
+  -- is set yet.
+  local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
+  local default_val = current or effective
+  local lo, hi = cfg_mod.PANEL_OVERRIDE_MIN, cfg_mod.PANEL_OVERRIDE_MAX
+
+  local label = string.format("panel width override (%d..%d)", lo, hi)
+  local placeholder
+  if current then
+    placeholder = string.format("%d (currently set; effective=%d)", current, effective)
+  else
+    placeholder = string.format("none (effective=%d)", effective)
+  end
+
+  return {
+    name = "panel.resize",
+    banner = "auto-agents: resize panel — `panel reset` clears the override.",
+    steps = {
+      {
+        field = "width",
+        prompt = label,
+        default = tostring(default_val),
+        placeholder = placeholder,
+        parse = function(v)
+          if type(v) == "number" then return v end
+          local n = tonumber(v)
+          if not n then error("must be an integer (got '" .. tostring(v) .. "')") end
+          if n ~= math.floor(n) then error("must be a whole number") end
+          return n
+        end,
+        validate = function(n)
+          if type(n) ~= "number" then return false, "must be a number" end
+          if n < lo or n > hi then
+            return false, string.format("must be in %d..%d", lo, hi)
+          end
+          return true
+        end,
+      },
+    },
+    on_complete = function(values, emit)
+      require("auto-agents.panel.admin")._apply_panel_width(values.width, emit)
+    end,
+  }
+end
+
 return M

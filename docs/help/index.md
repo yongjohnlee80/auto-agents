@@ -14,6 +14,7 @@ opens the help file in the editor for browsing or hand-editing.
 | `resource`  | Per-slot grants (paths, cwd, manager designation)      |
 | `term`      | Playground terminals T1..T4 (shared user/agent shells) |
 | `config`    | Inspect / save / reset the active TOML                 |
+| `panel`     | Pin / clear / inspect the panel column width           |
 | `status`    | Slot state at a glance                                 |
 | `help`, `?` | This help (or `<verb> help` for command-specific docs) |
 | `clear`     | Wipe history above the prompt                          |
@@ -39,3 +40,4 @@ real markdown files shipped with the plugin.
 - `kb help` — KB types, scopes, sync, instruction files
 - `project help` — TOML resolution, init/import/remove
 - `term help` — playground terminals, focus behavior, paste-safe send
+- `panel help` — pinning the panel column width via `panel resize` / `panel reset` / `panel show`

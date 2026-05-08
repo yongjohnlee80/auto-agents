@@ -51,13 +51,14 @@ local toml = require("auto-agents.vendor.toml")
 
 local M = {}
 
-local SECTION_ORDER = { "project", "kb", "agents" }
+local SECTION_ORDER = { "project", "kb", "panel", "agents" }
 local AGENT_KEY_ORDER = {
   "slot", "kind", "name", "title", "role", "model", "provider", "api_base", "cwd", "cmd",
   "allowed_paths", "manager", "kb_scope", "bottom_margin", "diff_review",
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }
 local KB_KEY_ORDER = { "root", "type", "seed" }
+local PANEL_KEY_ORDER = { "width_override" }
 
 ---Directory holding project + global TOML files. Dot-prefixed so it
 ---doesn't visually collide with project KB dirs that happen to live
@@ -125,6 +126,7 @@ local function normalize(content)
   return {
     project = data.project,
     kb = data.kb,
+    panel = data.panel,
     agents = data.agents or {},
   }
 end
@@ -170,6 +172,7 @@ function M.write(path, data)
   local payload = {
     project = data.project,
     kb = data.kb,
+    panel = data.panel,
     agents = data.agents or {},
   }
   local encoded = toml.encode(payload, {
@@ -177,6 +180,7 @@ function M.write(path, data)
     key_order = {
       project = PROJECT_KEY_ORDER,
       kb = KB_KEY_ORDER,
+      panel = PANEL_KEY_ORDER,
       agents = AGENT_KEY_ORDER,
     },
   })
@@ -198,6 +202,7 @@ function M.save_current()
   local payload = {
     project = existing.project,
     kb = existing.kb,
+    panel = existing.panel,
     agents = (cfg.agents and cfg.agents.bootstrap) or {},
   }
   -- Carry over the live KB settings → [kb] so wizard mutations stick.
@@ -214,6 +219,19 @@ function M.save_current()
       payload.kb = payload.kb or {}
       payload.kb.seed = cfg.kb.seed_path
     end
+  end
+  -- Carry over the live panel.width_override so `panel resize`
+  -- persists to the active TOML. nil = no override → omit the section
+  -- entirely (the toml encoder skips nil-valued sections).
+  if cfg.panel and cfg.panel.width_override ~= nil then
+    payload.panel = payload.panel or {}
+    payload.panel.width_override = cfg.panel.width_override
+  else
+    -- Explicit clear: drop any width_override row from existing[panel]
+    -- so `panel reset` actually shrinks the file rather than leaving a
+    -- stale row behind.
+    if payload.panel then payload.panel.width_override = nil end
+    if payload.panel and next(payload.panel) == nil then payload.panel = nil end
   end
 
   local ok = M.write(path, payload)

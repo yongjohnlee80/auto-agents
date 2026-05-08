@@ -123,6 +123,14 @@ local function _refresh_panel_width_cache()
   end
 end
 
+---Public wrapper around the internal panel-width refresher. Used by
+---the admin REPL (`panel resize` / `panel reset`) so a persisted
+---`panel.width_override` change takes effect live without requiring a
+---panel close/reopen.
+function M.refresh_panel_width()
+  _refresh_panel_width_cache()
+end
+
 ---Open a 1x1 invisible "ghost" float at row 0 col 0 that grabs focus
 ---and swallows keystrokes for `delay_ms` ms, then closes itself,
 ---restores the agent panel width, and refocuses the agent terminal.
@@ -246,6 +254,23 @@ function M.setup(opts)
     if loaded.kb.root then config.kb.root_override = loaded.kb.root end
     if loaded.kb.type then config.kb.type = loaded.kb.type end
     if loaded.kb.seed then config.kb.seed_path = loaded.kb.seed end
+  end
+  if loaded and loaded.panel and loaded.panel.width_override ~= nil then
+    config.panel = config.panel or {}
+    -- Re-validate via apply()'s pathway: if the persisted value is out
+    -- of bounds (file hand-edited / older schema), drop it loudly
+    -- rather than crashing the panel open.
+    local n = loaded.panel.width_override
+    local cfg_mod = require("auto-agents.config")
+    if type(n) == "number" and n == math.floor(n)
+        and n >= cfg_mod.PANEL_OVERRIDE_MIN and n <= cfg_mod.PANEL_OVERRIDE_MAX then
+      config.panel.width_override = n
+    else
+      require("auto-agents.logger").warn("init",
+        "ignoring out-of-range panel.width_override = " .. tostring(n)
+          .. " (allowed " .. cfg_mod.PANEL_OVERRIDE_MIN
+          .. ".." .. cfg_mod.PANEL_OVERRIDE_MAX .. ")")
+    end
   end
   M.state.config_source = source
 

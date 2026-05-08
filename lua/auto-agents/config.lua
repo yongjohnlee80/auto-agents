@@ -11,6 +11,12 @@ M.defaults = {
     min_width = 60,
     max_width = 130,
     percentage = 0.35,
+    -- Hard-pin the panel to a specific column count. When non-nil this
+    -- bypasses the percentage/min/max formula entirely. Set via the
+    -- admin REPL (`panel resize`) and persisted to the active TOML's
+    -- [panel] section so it sticks per-project. Allowed range:
+    -- PANEL_OVERRIDE_MIN..PANEL_OVERRIDE_MAX (see below).
+    width_override = nil,
     editor_floor = 40,
     slot_rail = "winbar",
     -- TUIs (claude/codex) draw a status line at the bottom; if the
@@ -50,6 +56,13 @@ local KINDS = { claude = true, codex = true, gemini = true, junie = true, aider 
 local SCOPES = { shared = true, private = true, isolated = true }
 local PROVIDERS = { auto = true, snacks = true, native = true, none = true }
 
+-- Bounds for `panel.width_override`. Picked to leave room for both
+-- usable narrow layouts (very wide monitors with tiny side panels) and
+-- maximal panel-takes-most-of-screen layouts. Anything outside this
+-- range is almost certainly a typo.
+M.PANEL_OVERRIDE_MIN = 25
+M.PANEL_OVERRIDE_MAX = 160
+
 ---@param cfg AutoAgentsConfig
 ---@return string|nil error_msg
 function M.validate(cfg)
@@ -68,6 +81,15 @@ function M.validate(cfg)
   end
   if type(p.percentage) ~= "number" or p.percentage <= 0 or p.percentage >= 1 then
     return "panel.percentage must be between 0 and 1 (exclusive)"
+  end
+  if p.width_override ~= nil then
+    if type(p.width_override) ~= "number" or p.width_override ~= math.floor(p.width_override) then
+      return "panel.width_override must be nil or an integer"
+    end
+    if p.width_override < M.PANEL_OVERRIDE_MIN or p.width_override > M.PANEL_OVERRIDE_MAX then
+      return string.format("panel.width_override must be in %d..%d",
+        M.PANEL_OVERRIDE_MIN, M.PANEL_OVERRIDE_MAX)
+    end
   end
   if type(p.editor_floor) ~= "number" or p.editor_floor < 0 then
     return "panel.editor_floor must be a non-negative integer"
@@ -114,6 +136,15 @@ end
 ---@return integer
 function M.resolve_panel_width(cfg, cols)
   local p = cfg.panel
+  if p.width_override ~= nil then
+    -- Defensive clamp: validation already enforces the range, but
+    -- belt-and-suspenders here matters if a future code path ever
+    -- mutates cfg in-place without re-validating.
+    local w = p.width_override
+    if w < M.PANEL_OVERRIDE_MIN then w = M.PANEL_OVERRIDE_MIN end
+    if w > M.PANEL_OVERRIDE_MAX then w = M.PANEL_OVERRIDE_MAX end
+    return w
+  end
   local raw = math.floor(p.percentage * cols + 0.5)
   if raw < p.min_width then
     return p.min_width

@@ -533,6 +533,50 @@ local function dispatch(input)
       emit({ "kb: unknown subverb '" .. tostring(sub) .. "' — try path/scope/sync/new/open/attach/tail/log" })
     end
 
+  elseif verb == "panel" then
+    local sub = toks[2]
+    local aa = require("auto-agents")
+    local cfg_mod = require("auto-agents.config")
+    if sub == "show" then
+      local cfg = aa.state.config or {}
+      local p = cfg.panel or {}
+      local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
+      local override = p.width_override
+      emit({
+        "",
+        "Panel width:",
+        "  effective       = " .. tostring(effective) .. "  (current columns = " .. tostring(vim.o.columns) .. ")",
+        "  override        = " .. (override and tostring(override) or "<none>"),
+        "  percentage      = " .. tostring(p.percentage),
+        "  min_width       = " .. tostring(p.min_width),
+        "  max_width       = " .. tostring(p.max_width),
+        "  allowed range   = " .. tostring(cfg_mod.PANEL_OVERRIDE_MIN)
+          .. ".." .. tostring(cfg_mod.PANEL_OVERRIDE_MAX) .. "  (for `panel resize`)",
+        "",
+      })
+    elseif sub == "resize" then
+      local arg = toks[3]
+      if arg then
+        -- One-shot form: `panel resize 85`. No wizard.
+        local n = tonumber(arg)
+        if not n or n ~= math.floor(n) then
+          emit({ "panel resize: '" .. tostring(arg) .. "' is not an integer" })
+        elseif n < cfg_mod.PANEL_OVERRIDE_MIN or n > cfg_mod.PANEL_OVERRIDE_MAX then
+          emit({ string.format("panel resize: %d out of range (allowed %d..%d)",
+            n, cfg_mod.PANEL_OVERRIDE_MIN, cfg_mod.PANEL_OVERRIDE_MAX) })
+        else
+          M._apply_panel_width(n, emit)
+        end
+      else
+        local specs = require("auto-agents.panel.wizard_specs")
+        require("auto-agents.panel.wizard").start(specs.panel_resize(), function(lines) emit(lines) end)
+      end
+    elseif sub == "reset" then
+      M._apply_panel_width(nil, emit)
+    else
+      emit({ "panel: unknown subverb '" .. tostring(sub) .. "' — try resize/reset/show" })
+    end
+
   elseif verb == "config" then
     local sub = toks[2]
     local store = require("auto-agents.config.store")
@@ -566,6 +610,7 @@ local function dispatch(input)
         "  panel.percentage  = " .. tostring(((cfg.panel or {}).percentage)),
         "  panel.min_width   = " .. tostring(((cfg.panel or {}).min_width)),
         "  panel.max_width   = " .. tostring(((cfg.panel or {}).max_width)),
+        "  panel.width_override = " .. tostring(((cfg.panel or {}).width_override) or "<none>"),
         "  panel.side        = " .. tostring(((cfg.panel or {}).side)),
         "  log_level         = " .. tostring(cfg.log_level),
         "",
@@ -784,7 +829,27 @@ local function complete_at(prompt, cursor_col)
 
   local candidates
   if #prev_toks == 0 then
-    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "config", "clear", "quit" }
+    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "config", "panel", "clear", "quit" }
+  elseif #prev_toks == 1 and prev_toks[1] == "panel" then
+    candidates = { "resize", "reset", "show" }
+  elseif #prev_toks == 2 and prev_toks[1] == "panel" and prev_toks[2] == "resize" then
+    -- Offer the current effective width plus a few common round-number
+    -- widths spanning the allowed range. Prefix-filter (further down)
+    -- narrows them as the user types — e.g. typing "1" surfaces 100,
+    -- 120, 140; typing "8" surfaces 80. Out-of-range typed values
+    -- still pass through; the dispatcher rejects them.
+    local cfg_mod = require("auto-agents.config")
+    local aa = require("auto-agents")
+    local cfg = aa.state.config or {}
+    local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
+    local seen = {}
+    candidates = {}
+    local function push(v)
+      local s = tostring(v)
+      if not seen[s] then seen[s] = true; table.insert(candidates, s) end
+    end
+    push(effective)
+    for _, v in ipairs({ 40, 60, 80, 100, 120, 140 }) do push(v) end
   elseif #prev_toks == 1 and prev_toks[1] == "resource" then
     candidates = { "grant", "revoke", "cwd", "list", "manager" }
   elseif #prev_toks == 2 and prev_toks[1] == "resource"
@@ -809,9 +874,9 @@ local function complete_at(prompt, cursor_col)
     and (prev_toks[2] == "focus" or prev_toks[2] == "send" or prev_toks[2] == "kill") then
     candidates = { "1", "2", "3", "4" }
   elseif #prev_toks == 1 and prev_toks[1] == "help" then
-    candidates = { "open", "agent", "kb", "project", "resource", "term", "config", "general" }
+    candidates = { "open", "agent", "kb", "project", "resource", "term", "config", "panel", "general" }
   elseif #prev_toks == 2 and prev_toks[1] == "help" and prev_toks[2] == "open" then
-    candidates = { "index", "agent", "kb", "project", "resource", "term", "config", "general" }
+    candidates = { "index", "agent", "kb", "project", "resource", "term", "config", "panel", "general" }
   elseif #prev_toks == 1 and prev_toks[1] == "kb" then
     candidates = { "init", "ingest", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "init" then
@@ -876,6 +941,45 @@ end
 
 -- Exposed for tests; not part of the public surface.
 M._complete_at = complete_at
+
+---Apply a `panel.width_override` mutation: update live cfg, persist to
+---the active TOML, and trigger a live width refresh on the open panel
+---+ a SIGWINCH on every running TUI. Pass `n = nil` to clear (the
+---`panel reset` path). Called from the dispatcher and from the
+---wizard's on_complete via `wizard_specs.panel_resize`.
+---@param n integer|nil
+---@param emit fun(lines: string[])
+function M._apply_panel_width(n, emit)
+  local aa = require("auto-agents")
+  local cfg_mod = require("auto-agents.config")
+  local cfg = aa.state.config
+  if not cfg then
+    emit({ "panel: config not initialized" })
+    return
+  end
+  if n ~= nil then
+    if type(n) ~= "number" or n ~= math.floor(n) then
+      emit({ "panel: width must be an integer" }); return
+    end
+    if n < cfg_mod.PANEL_OVERRIDE_MIN or n > cfg_mod.PANEL_OVERRIDE_MAX then
+      emit({ string.format("panel: %d out of range (allowed %d..%d)",
+        n, cfg_mod.PANEL_OVERRIDE_MIN, cfg_mod.PANEL_OVERRIDE_MAX) })
+      return
+    end
+  end
+  cfg.panel = cfg.panel or {}
+  cfg.panel.width_override = n
+  local ok, path = require("auto-agents.config.store").save_current()
+  if aa.refresh_panel_width then aa.refresh_panel_width() end
+  local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
+  if n then
+    emit({ string.format("panel width override = %d  (effective=%d%s)",
+      n, effective, ok and (", saved → " .. path) or ", save FAILED") })
+  else
+    emit({ string.format("panel width override cleared  (effective=%d%s)",
+      effective, ok and (", saved → " .. path) or ", save FAILED") })
+  end
+end
 
 -- ── public API ──────────────────────────────────────────────────────────────
 
