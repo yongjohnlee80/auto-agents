@@ -60,8 +60,16 @@ local PROVIDERS = { auto = true, snacks = true, native = true, none = true }
 -- usable narrow layouts (very wide monitors with tiny side panels) and
 -- maximal panel-takes-most-of-screen layouts. Anything outside this
 -- range is almost certainly a typo.
-M.PANEL_OVERRIDE_MIN = 25
-M.PANEL_OVERRIDE_MAX = 160
+--
+-- Defined as module-local literals AND re-exported on M. Internal
+-- validate / resolve reads use the locals so they can never go nil —
+-- external callers read M.PANEL_OVERRIDE_MIN/MAX (with their own
+-- fallback) which protects against stale module cache after a
+-- lazy.nvim hot-reload.
+local PANEL_MIN = 25
+local PANEL_MAX = 160
+M.PANEL_OVERRIDE_MIN = PANEL_MIN
+M.PANEL_OVERRIDE_MAX = PANEL_MAX
 
 ---@param cfg AutoAgentsConfig
 ---@return string|nil error_msg
@@ -86,9 +94,8 @@ function M.validate(cfg)
     if type(p.width_override) ~= "number" or p.width_override ~= math.floor(p.width_override) then
       return "panel.width_override must be nil or an integer"
     end
-    if p.width_override < M.PANEL_OVERRIDE_MIN or p.width_override > M.PANEL_OVERRIDE_MAX then
-      return string.format("panel.width_override must be in %d..%d",
-        M.PANEL_OVERRIDE_MIN, M.PANEL_OVERRIDE_MAX)
+    if p.width_override < PANEL_MIN or p.width_override > PANEL_MAX then
+      return string.format("panel.width_override must be in %d..%d", PANEL_MIN, PANEL_MAX)
     end
   end
   if type(p.editor_floor) ~= "number" or p.editor_floor < 0 then
@@ -141,8 +148,8 @@ function M.resolve_panel_width(cfg, cols)
     -- belt-and-suspenders here matters if a future code path ever
     -- mutates cfg in-place without re-validating.
     local w = p.width_override
-    if w < M.PANEL_OVERRIDE_MIN then w = M.PANEL_OVERRIDE_MIN end
-    if w > M.PANEL_OVERRIDE_MAX then w = M.PANEL_OVERRIDE_MAX end
+    if w < PANEL_MIN then w = PANEL_MIN end
+    if w > PANEL_MAX then w = PANEL_MAX end
     return w
   end
   local raw = math.floor(p.percentage * cols + 0.5)

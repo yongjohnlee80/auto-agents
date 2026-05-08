@@ -14,6 +14,23 @@ local M = {}
 
 M._bufnr = nil
 
+-- Hardcoded fallback bounds for `panel resize`. Mirrors
+-- auto-agents.config.PANEL_OVERRIDE_MIN/MAX. We resolve the live
+-- values from the config module per call (in case it's been
+-- updated), but fall back to these literals when the cached config
+-- module is stale — which happens when lazy.nvim hot-reloads
+-- admin.lua after a `:Lazy sync` but doesn't re-require config.lua,
+-- leaving cfg_mod.PANEL_OVERRIDE_MIN/MAX as nil and crashing the
+-- range comparison. Belt-and-suspenders.
+local PANEL_FALLBACK_MIN = 25
+local PANEL_FALLBACK_MAX = 160
+local function panel_min()
+  return require("auto-agents.config").PANEL_OVERRIDE_MIN or PANEL_FALLBACK_MIN
+end
+local function panel_max()
+  return require("auto-agents.config").PANEL_OVERRIDE_MAX or PANEL_FALLBACK_MAX
+end
+
 -- ── helpers ─────────────────────────────────────────────────────────────────
 
 local function buf_valid()
@@ -542,6 +559,7 @@ local function dispatch(input)
       local p = cfg.panel or {}
       local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
       local override = p.width_override
+      local lo, hi = panel_min(), panel_max()
       emit({
         "",
         "Panel width:",
@@ -550,8 +568,7 @@ local function dispatch(input)
         "  percentage      = " .. tostring(p.percentage),
         "  min_width       = " .. tostring(p.min_width),
         "  max_width       = " .. tostring(p.max_width),
-        "  allowed range   = " .. tostring(cfg_mod.PANEL_OVERRIDE_MIN)
-          .. ".." .. tostring(cfg_mod.PANEL_OVERRIDE_MAX) .. "  (for `panel resize`)",
+        "  allowed range   = " .. tostring(lo) .. ".." .. tostring(hi) .. "  (for `panel resize`)",
         "",
       })
     elseif sub == "resize" then
@@ -559,11 +576,11 @@ local function dispatch(input)
       if arg then
         -- One-shot form: `panel resize 85`. No wizard.
         local n = tonumber(arg)
+        local lo, hi = panel_min(), panel_max()
         if not n or n ~= math.floor(n) then
           emit({ "panel resize: '" .. tostring(arg) .. "' is not an integer" })
-        elseif n < cfg_mod.PANEL_OVERRIDE_MIN or n > cfg_mod.PANEL_OVERRIDE_MAX then
-          emit({ string.format("panel resize: %d out of range (allowed %d..%d)",
-            n, cfg_mod.PANEL_OVERRIDE_MIN, cfg_mod.PANEL_OVERRIDE_MAX) })
+        elseif n < lo or n > hi then
+          emit({ string.format("panel resize: %d out of range (allowed %d..%d)", n, lo, hi) })
         else
           M._apply_panel_width(n, emit)
         end
@@ -961,9 +978,9 @@ function M._apply_panel_width(n, emit)
     if type(n) ~= "number" or n ~= math.floor(n) then
       emit({ "panel: width must be an integer" }); return
     end
-    if n < cfg_mod.PANEL_OVERRIDE_MIN or n > cfg_mod.PANEL_OVERRIDE_MAX then
-      emit({ string.format("panel: %d out of range (allowed %d..%d)",
-        n, cfg_mod.PANEL_OVERRIDE_MIN, cfg_mod.PANEL_OVERRIDE_MAX) })
+    local lo, hi = panel_min(), panel_max()
+    if n < lo or n > hi then
+      emit({ string.format("panel: %d out of range (allowed %d..%d)", n, lo, hi) })
       return
     end
   end

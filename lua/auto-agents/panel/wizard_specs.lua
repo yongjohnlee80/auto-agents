@@ -519,7 +519,10 @@ function M.panel_resize()
   -- is set yet.
   local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
   local default_val = current or effective
-  local lo, hi = cfg_mod.PANEL_OVERRIDE_MIN, cfg_mod.PANEL_OVERRIDE_MAX
+  -- Hardcoded fallbacks: cfg_mod can be nil-on-these-fields if a
+  -- stale cached module survived a `:Lazy sync` reload.
+  local lo = cfg_mod.PANEL_OVERRIDE_MIN or 25
+  local hi = cfg_mod.PANEL_OVERRIDE_MAX or 160
 
   local label = string.format("panel width override (%d..%d)", lo, hi)
   local placeholder
