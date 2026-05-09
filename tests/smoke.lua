@@ -9,6 +9,10 @@
 local LAZY = vim.fn.expand("~/.local/share/nvim/lazy")
 for _, p in ipairs({
   "/home/johno/Source/Projects/nvim-plugins/auto-agents.nvim",
+  -- auto-core is now a hard dep of auto-agents (v0.2.0 migration).
+  -- The logger / state / panel surfaces it provides are required at
+  -- module load.
+  "/home/johno/Source/Projects/nvim-plugins/auto-core.nvim",
   LAZY .. "/plenary.nvim",
 }) do
   vim.opt.runtimepath:prepend(p)
@@ -301,6 +305,111 @@ ok("dock at slot_count=7 has editor + 8 slot lines (0..7)",
 -- restore
 aa.state.config.panel.slot_count = 5
 aa.sync_slot_count()
+
+-- ───────────────────────── 10. logger shim → auto-core.log ─────────────────────────
+-- v0.2.0 migration: auto-agents.logger is now a thin shim over
+-- auto-core.log. Each call routes through the canonical logger
+-- with the component prefixed by "auto-agents." so the unified
+-- log stream stays namespaced.
+print("\n[10] logger shim — delegates to auto-core.log with auto-agents prefix")
+
+local logger    = require("auto-agents.logger")
+local core_log  = require("auto-core").log
+core_log._reset_for_tests()
+
+-- Stub the user-visible side-effects so test output stays clean.
+local orig_notify = vim.notify
+local orig_echo   = vim.api.nvim_echo
+vim.notify       = function() end
+vim.api.nvim_echo = function() end
+
+-- After reset, default level is INFO. error/warn/info should record;
+-- debug/trace should drop. Other auto-agents code paths may have
+-- queued log entries during setup; we measure the delta after the
+-- reset, then drain to be sure our calls are the only contribution.
+local before = #core_log.recent()
+logger.error("spawn", "boom")
+logger.warn("init",  "wait")
+logger.info("panel", "fyi")
+logger.debug("panel", "internal")  -- dropped (below INFO)
+logger.trace("panel", "deep")      -- dropped
+
+vim.wait(20)  -- drain pending vim.schedule notify mirrors
+
+local ring = core_log.recent()
+-- Other auto-agents code paths (e.g. editor-floor scratch
+-- materialization from earlier tests) may have queued log entries
+-- that drain during vim.wait. We only care that OUR 3 calls landed
+-- AND the dropped levels (debug/trace) didn't.
+ok("logger shim recorded at least 3 entries",
+  #ring - before >= 3,
+  string.format("before=%d after=%d", before, #ring))
+local function find_by_level(name)
+  local count = 0
+  for _, e in ipairs(ring) do
+    if e.level_name == name then count = count + 1 end
+  end
+  return count
+end
+ok("no DEBUG entries from filtered calls",
+  find_by_level("DEBUG") == 0)
+ok("no TRACE entries from filtered calls",
+  find_by_level("TRACE") == 0)
+
+-- Find our entries by component. Earlier ring entries (from other
+-- code paths) may sit between resets; locate ours by name.
+local function find_by_component(name)
+  for _, e in ipairs(ring) do
+    if e.component == name then return e end
+  end
+  return nil
+end
+local e_spawn = find_by_component("auto-agents.spawn")
+local e_init  = find_by_component("auto-agents.init")
+local e_panel = find_by_component("auto-agents.panel")
+ok("entry 'auto-agents.spawn' present",
+  e_spawn ~= nil and e_spawn.level_name == "ERROR")
+ok("entry 'auto-agents.init' present",
+  e_init ~= nil and e_init.level_name == "WARN")
+ok("entry 'auto-agents.panel' present",
+  e_panel ~= nil and e_panel.level_name == "INFO")
+
+-- Already-prefixed components pass through unchanged.
+core_log._reset_for_tests()
+logger.info("auto-agents.lifecycle", "kill called")
+local r2 = core_log.recent()
+ok("already-prefixed component is NOT double-prefixed",
+  r2[1] and r2[1].component == "auto-agents.lifecycle",
+  "got '" .. tostring(r2[1] and r2[1].component) .. "'")
+
+-- No component at all (caller passes message as first arg).
+core_log._reset_for_tests()
+logger.info("no-component-message")
+local r3 = core_log.recent()
+ok("string-only first arg gets prefixed (treated as component)",
+  r3[1] and r3[1].component
+    and r3[1].component:sub(1, #"auto-agents") == "auto-agents",
+  "got '" .. tostring(r3[1] and r3[1].component) .. "'")
+
+-- Non-string first arg falls through to default namespace.
+core_log._reset_for_tests()
+logger.info({ payload = "data" }, "with table")
+local r4 = core_log.recent()
+ok("table first arg → component='auto-agents'",
+  r4[1] and r4[1].component == "auto-agents",
+  "got '" .. tostring(r4[1] and r4[1].component) .. "'")
+
+-- Setup forwards log_level.
+logger.setup({ log_level = "error" })
+ok("logger.setup({log_level='error'}) lowers level via auto-core",
+  core_log.is_level_enabled("error") == true
+    and core_log.is_level_enabled("warn") == false)
+
+-- Restore default level + stubs.
+logger.setup({ log_level = "info" })
+vim.notify       = orig_notify
+vim.api.nvim_echo = orig_echo
+core_log._reset_for_tests()
 
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
