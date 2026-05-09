@@ -170,6 +170,12 @@ local function emit_if_changed(obs)
   else
     aa.state.agent_status[obs.slot] = state
   end
+  -- v0.2.0: mirror to auto-core.tasks.status (name-keyed) so the
+  -- :AutoCoreChannel panel + other family plugins observe this
+  -- slot's transition.
+  if aa._sync_core_status then
+    pcall(aa._sync_core_status, obs.slot, state)
+  end
   if aa.refresh_winbar then pcall(aa.refresh_winbar) end
   if aa.refresh_dock then pcall(aa.refresh_dock) end
 end

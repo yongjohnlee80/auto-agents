@@ -521,6 +521,54 @@ ok("toggle(true) re-opens the panel",
 
 aa.close()
 
+-- ───────────────────────── 13. status — set_status mirrors to auto-core.tasks.status ─────────────────────────
+-- v0.2.0 migration: M.set_status (and the passive observer) now
+-- write through to auto-core.tasks.status keyed by agent name. The
+-- :AutoCoreChannel panel + other family plugins observe transitions
+-- via the canonical auto-core surface.
+print("\n[13] status — set_status mirrors slot state to auto-core.tasks.status")
+
+-- Seed a synthetic agent row so the slot→name resolver has something
+-- to map. We can't spawn real terminals headlessly; just stuff the
+-- bootstrap config so M._sync_core_status finds a name.
+aa.state.config.agents = aa.state.config.agents or {}
+aa.state.config.agents.bootstrap = {
+  { slot = 1, name = "smoke-jarvis", kind = "claude" },
+  { slot = 2, name = "smoke-vision", kind = "codex" },
+}
+local core_status = require("auto-core").tasks.status
+core_status._reset_for_tests()
+
+aa.set_status(1, "working")
+ok("set_status(1, 'working') mirrors to auto-core under agent name",
+  core_status.get("smoke-jarvis") == "working",
+  "got " .. tostring(core_status.get("smoke-jarvis")))
+
+aa.set_status(1, "waiting")
+ok("set_status(1, 'waiting') updates auto-core",
+  core_status.get("smoke-jarvis") == "waiting")
+
+aa.set_status(1, "idle")
+ok("set_status(1, 'idle') sets idle in auto-core (not nil)",
+  core_status.get("smoke-jarvis") == "idle")
+
+-- Slot 0 (admin) should NOT touch auto-core (no agent identity).
+aa._sync_core_status(0, "working")
+local snap = core_status.list()
+ok("slot 0 (admin) skipped in auto-core mirror",
+  snap.smoke == nil and snap[0] == nil and snap.admin == nil,
+  vim.inspect(snap))
+
+-- Nameless slot should also skip.
+aa.state.config.agents.bootstrap[#aa.state.config.agents.bootstrap + 1] =
+  { slot = 3, name = "", kind = "claude" }
+aa._sync_core_status(3, "working")
+ok("nameless agent skipped in auto-core mirror",
+  core_status.get("") == nil)
+
+core_status._reset_for_tests()
+aa.state.config.agents.bootstrap = {}
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

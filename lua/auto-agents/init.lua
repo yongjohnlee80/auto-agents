@@ -189,37 +189,36 @@ end
 ---Open a 1x1 invisible "ghost" float at row 0 col 0 that grabs focus
 ---and swallows keystrokes for `delay_ms` ms, then closes itself,
 ---restores the agent panel width, and refocuses the agent terminal.
+---
+---v0.2.0 migration: the float creation lifts to `auto-core.ui.float.ghost`.
+---auto-agents keeps the no-op key wiring (diff/agent-leak protection)
+---and the deferred restore-and-refocus side-effects.
 ---@param delay_ms integer
 local function _ghost_buffer_then_focus_agent(delay_ms)
   if M.state._diff_ghost_win and vim.api.nvim_win_is_valid(M.state._diff_ghost_win) then
     return  -- already in a diff cycle; don't double-trigger
   end
-  local ghost_buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[ghost_buf].bufhidden = "wipe"
-  vim.bo[ghost_buf].buftype = "nofile"
-  vim.bo[ghost_buf].swapfile = false
-  -- Map common keys to no-op so they don't escape the ghost buffer
-  -- and accidentally hit the diff or agent.
-  for _, lhs in ipairs({ "<CR>", "<Space>", "y", "n", "Y", "N", "q", ":" }) do
-    pcall(vim.keymap.set, "n", lhs, "<Nop>", { buffer = ghost_buf, silent = true, nowait = true })
-  end
-  local ok_win, ghost_win = pcall(vim.api.nvim_open_win, ghost_buf, true, {
-    relative = "editor",
-    width = 1,
-    height = 1,
+  local handle = require("auto-core").ui.float.ghost({
+    -- Top-left corner, like the prior inline open. The bottom-left
+    -- default that auto-core uses elsewhere would visually clash
+    -- with the active diff split header.
     row = 0,
     col = 0,
-    style = "minimal",
-    focusable = true,
-    zindex = 300,
-    border = "none",
   })
-  if not ok_win then return end
-  M.state._diff_ghost_win = ghost_win
+  if not handle or not handle.win
+      or not vim.api.nvim_win_is_valid(handle.win) then
+    return
+  end
+  -- Map common keys to no-op so they don't escape the ghost buffer
+  -- and accidentally hit the diff or agent. Done after the open so
+  -- the buffer is settled.
+  for _, lhs in ipairs({ "<CR>", "<Space>", "y", "n", "Y", "N", "q", ":" }) do
+    pcall(vim.keymap.set, "n", lhs, "<Nop>",
+      { buffer = handle.buf, silent = true, nowait = true })
+  end
+  M.state._diff_ghost_win = handle.win
   vim.defer_fn(function()
-    if M.state._diff_ghost_win and vim.api.nvim_win_is_valid(M.state._diff_ghost_win) then
-      pcall(vim.api.nvim_win_close, M.state._diff_ghost_win, true)
-    end
+    handle.close()
     M.state._diff_ghost_win = nil
     _restore_panel_width()
     local panel = M.state.panel_winid
@@ -807,6 +806,21 @@ local function ensure_main_slot_terminal(slot, winid)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
       pcall(function() require("auto-agents.status.observer").detach(slot) end)
       if M.state.agent_status then M.state.agent_status[slot] = nil end
+      -- v0.2.0: clear the canonical auto-core status entry too. The
+      -- name lookup uses the cfg.agents.bootstrap row; if the agent
+      -- was despawned mid-flight before its status ever transitioned,
+      -- this is a no-op (set(nil) on already-nil state).
+      pcall(function()
+        local cfg = M.state.config
+        if cfg and cfg.agents and cfg.agents.bootstrap then
+          for _, e in ipairs(cfg.agents.bootstrap) do
+            if e.slot == slot and type(e.name) == "string" and e.name ~= "" then
+              require("auto-core").tasks.status.set(e.name, nil)
+              return
+            end
+          end
+        end
+      end)
       M.refresh_winbar()
       M.refresh_dock()
     end,
@@ -1325,6 +1339,28 @@ function M.get_status(slot)
   return (M.state.agent_status or {})[slot] or "idle"
 end
 
+---v0.2.0 internal: mirror a slot's status into the canonical
+---`auto-core.tasks.status` namespace keyed by agent name. Slot 0
+---(admin) and nameless bootstrap rows are skipped — auto-core's
+---surface is name-keyed, so admin doesn't have a canonical entry.
+---Idempotent: auto-core's `set` no-ops when the new state matches
+---the previous, so no over-publish.
+---@param slot integer
+---@param state "idle"|"waiting"|"working"
+function M._sync_core_status(slot, state)
+  if slot == 0 then return end
+  local cfg = M.state.config
+  if not cfg or not cfg.agents or not cfg.agents.bootstrap then return end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == slot and type(e.name) == "string" and e.name ~= "" then
+      pcall(function()
+        require("auto-core").tasks.status.set(e.name, state)
+      end)
+      return
+    end
+  end
+end
+
 ---List every configured slot's current state. Intended for a manager
 ---agent that wants a single-call snapshot of the panel without having
 ---to read the underlying state table directly.
@@ -1395,6 +1431,11 @@ function M.set_status(slot_or_name, state)
   else
     M.state.agent_status[slot] = state
   end
+  -- v0.2.0: also publish through auto-core.tasks.status keyed by
+  -- agent name so external observers (the :AutoCoreChannel panel,
+  -- other family plugins) see this slot's state. Slot 0 (admin) +
+  -- nameless rows skip the canonical write.
+  M._sync_core_status(slot, state)
   -- Cooperate with the passive observer. Explicit `waiting` becomes a
   -- sticky pin (survives until output resumes). Explicit idle/working
   -- clears any pin so the observer can take over again.
