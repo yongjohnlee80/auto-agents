@@ -621,13 +621,19 @@ local function dispatch(input)
     end
 
     local function persist_and_sync(new_count)
-      cfg.panel.slot_count = new_count
-      aa.sync_slot_count()
-      local ok, path = store.save_current()
+      -- v0.2.0: write through auto-agents.state, which writes the
+      -- auto-core namespace + fires the watcher (cfg.panel.slot_count
+      -- update + aa.sync_slot_count() side-effect happen there). The
+      -- json-backend persist is debounced by auto-core; no longer
+      -- needs a synchronous TOML save.
+      local state_mod = require("auto-agents.state")
+      local ok, err = state_mod.set_slot_count(new_count)
       if ok then
-        emit({ ("Persisted slot_count = %d → %s"):format(new_count, path) })
+        emit({ ("Persisted slot_count = %d → auto-core (json ns 'auto-agents')")
+          :format(new_count) })
       else
-        emit({ ("slot_count = %d (in-memory only; persist failed)"):format(new_count) })
+        emit({ ("slot_count = %d rejected: %s")
+          :format(new_count, tostring(err)) })
       end
     end
 
@@ -1092,17 +1098,24 @@ function M._apply_panel_width(n, emit)
       return
     end
   end
-  cfg.panel = cfg.panel or {}
-  cfg.panel.width_override = n
-  local ok, path = require("auto-agents.config.store").save_current()
-  if aa.refresh_panel_width then aa.refresh_panel_width() end
+  -- v0.2.0: width_override goes through auto-agents.state, which
+  -- writes the auto-core namespace + fires the watcher
+  -- (cfg.panel.width_override mirror + aa.refresh_panel_width
+  -- side-effect happen there). The json-backend persist is debounced
+  -- by auto-core; no longer needs a synchronous TOML save.
+  local state_mod = require("auto-agents.state")
+  local set_ok, set_err = state_mod.set_width_override(n)
+  if not set_ok then
+    emit({ "panel: " .. tostring(set_err) })
+    return
+  end
   local effective = cfg_mod.resolve_panel_width(cfg, vim.o.columns)
   if n then
-    emit({ string.format("panel width override = %d  (effective=%d%s)",
-      n, effective, ok and (", saved → " .. path) or ", save FAILED") })
+    emit({ string.format("panel width override = %d  (effective=%d, saved → auto-core json)",
+      n, effective) })
   else
-    emit({ string.format("panel width override cleared  (effective=%d%s)",
-      effective, ok and (", saved → " .. path) or ", save FAILED") })
+    emit({ string.format("panel width override cleared  (effective=%d, saved → auto-core json)",
+      effective) })
   end
 end
 

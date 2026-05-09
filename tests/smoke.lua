@@ -411,6 +411,58 @@ vim.notify       = orig_notify
 vim.api.nvim_echo = orig_echo
 core_log._reset_for_tests()
 
+-- ───────────────────────── 11. state — auto-core namespace bridge ─────────────────────────
+-- v0.2.0 migration: panel slot_count + width_override + focused_slot
+-- live in auto-core.state.namespace("auto-agents") with json persist.
+-- setup() installs watchers that mirror namespace mutations into
+-- cfg.panel.* and aa.state.focused_slot, plus call the side-effect
+-- functions (sync_slot_count, refresh_panel_width).
+print("\n[11] state — set_* drives cfg.panel + sync side-effects")
+local state_mod = require("auto-agents.state")
+
+-- set_slot_count: namespace write → watcher updates cfg.panel.slot_count
+-- AND aa.MAX_SLOT (because the watcher calls aa.sync_slot_count()).
+local before_max = aa.MAX_SLOT
+local ok_sc = state_mod.set_slot_count(7)
+ok("state.set_slot_count(7) succeeds", ok_sc)
+ok("namespace value is 7", state_mod.get_slot_count() == 7)
+ok("cfg.panel.slot_count mirrored to 7",
+  aa.state.config.panel.slot_count == 7)
+ok("aa.MAX_SLOT updated via sync_slot_count",
+  aa.MAX_SLOT == 7,
+  string.format("before=%d after=%d", before_max, aa.MAX_SLOT))
+
+-- Out-of-range rejected.
+local ok_bad, err_bad = state_mod.set_slot_count(99)
+ok("state.set_slot_count(99) rejected with err string",
+  ok_bad == false and type(err_bad) == "string"
+    and err_bad:find("slot_count must be an integer"))
+ok("namespace value unchanged after rejection",
+  state_mod.get_slot_count() == 7)
+
+-- set_width_override: namespace write → cfg.panel.width_override mirrored.
+local ok_wo = state_mod.set_width_override(80)
+ok("state.set_width_override(80) succeeds", ok_wo)
+ok("cfg.panel.width_override mirrored to 80",
+  aa.state.config.panel.width_override == 80)
+
+-- nil clears.
+state_mod.set_width_override(nil)
+ok("state.set_width_override(nil) clears the override",
+  state_mod.get_width_override() == nil
+    and aa.state.config.panel.width_override == nil)
+
+-- set_focused_slot: namespace write → aa.state.focused_slot mirrored.
+state_mod.set_focused_slot(3)
+ok("state.set_focused_slot(3) mirrors to aa.state.focused_slot",
+  state_mod.get_focused_slot() == 3
+    and aa.state.focused_slot == 3)
+
+-- Restore (slot_count back to default 5 so subsequent tests aren't
+-- distorted; aa.sync_slot_count fires via the watcher).
+state_mod.set_slot_count(5)
+state_mod.set_focused_slot(1)
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

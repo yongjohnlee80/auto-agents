@@ -303,38 +303,74 @@ function M.setup(opts)
     if loaded.kb.type then config.kb.type = loaded.kb.type end
     if loaded.kb.seed then config.kb.seed_path = loaded.kb.seed end
   end
-  if loaded and loaded.panel and loaded.panel.width_override ~= nil then
-    config.panel = config.panel or {}
-    -- Re-validate via apply()'s pathway: if the persisted value is out
-    -- of bounds (file hand-edited / older schema), drop it loudly
-    -- rather than crashing the panel open.
-    local n = loaded.panel.width_override
-    local cfg_mod = require("auto-agents.config")
-    if type(n) == "number" and n == math.floor(n)
-        and n >= cfg_mod.PANEL_OVERRIDE_MIN and n <= cfg_mod.PANEL_OVERRIDE_MAX then
-      config.panel.width_override = n
-    else
-      require("auto-agents.logger").warn("init",
-        "ignoring out-of-range panel.width_override = " .. tostring(n)
-          .. " (allowed " .. cfg_mod.PANEL_OVERRIDE_MIN
-          .. ".." .. cfg_mod.PANEL_OVERRIDE_MAX .. ")")
-    end
-  end
-  if loaded and loaded.panel and loaded.panel.slot_count ~= nil then
-    config.panel = config.panel or {}
-    local n = loaded.panel.slot_count
-    local cfg_mod = require("auto-agents.config")
-    if type(n) == "number" and n == math.floor(n)
-        and n >= cfg_mod.SLOT_COUNT_MIN and n <= cfg_mod.SLOT_COUNT_MAX then
-      config.panel.slot_count = n
-    else
-      require("auto-agents.logger").warn("init",
-        "ignoring out-of-range panel.slot_count = " .. tostring(n)
-          .. " (allowed " .. cfg_mod.SLOT_COUNT_MIN
-          .. ".." .. cfg_mod.SLOT_COUNT_MAX .. "); using default 5")
-    end
-  end
   M.state.config_source = source
+
+  -- v0.2.0 migration: panel slot_count + width_override + focused_slot
+  -- now live in auto-core.state.namespace("auto-agents") with json
+  -- persist. The TOML store keeps the agent bootstrap rows + kb config;
+  -- this block owns ambient panel state.
+  --
+  -- Sequence:
+  --   1. Claim the namespace (idempotent).
+  --   2. **Validated** seed from the TOML loader's panel block —
+  --      `state.set_slot_count` / `state.set_width_override`
+  --      validate against cfg.SLOT_COUNT_MIN/MAX + PANEL_OVERRIDE_*
+  --      and return (false, err) for out-of-range; we warn and let
+  --      the namespace default stand. (The TOML save path strips
+  --      these keys on next save, so legacy values eventually drain.)
+  --   3. Read the namespace back into cfg.panel.* so the dozens of
+  --      reader sites that walk `cfg.panel.slot_count` /
+  --      `cfg.panel.width_override` keep working unchanged.
+  --   4. Install watchers that re-sync cfg.panel + call the side-
+  --      effect functions (sync_slot_count, refresh_panel_width)
+  --      automatically on every namespace mutation. Setters in
+  --      panel/admin.lua go through state.set_* and trigger this.
+  --   5. focused_slot likewise mirrors into M.state.focused_slot.
+  local state_mod = require("auto-agents.state")
+  state_mod.setup()
+
+  if loaded and loaded.panel then
+    if loaded.panel.slot_count ~= nil then
+      local ok_sc, err_sc = state_mod.set_slot_count(loaded.panel.slot_count)
+      if not ok_sc then
+        require("auto-agents.logger").warn("init",
+          "ignoring legacy TOML panel.slot_count: " .. tostring(err_sc)
+            .. "; using default 5")
+      end
+    end
+    if loaded.panel.width_override ~= nil then
+      local ok_wo, err_wo = state_mod.set_width_override(loaded.panel.width_override)
+      if not ok_wo then
+        require("auto-agents.logger").warn("init",
+          "ignoring legacy TOML panel.width_override: " .. tostring(err_wo))
+      end
+    end
+  end
+
+  -- Read namespace values into the live config / state mirrors.
+  config.panel = config.panel or {}
+  config.panel.slot_count     = state_mod.get_slot_count()
+  config.panel.width_override = state_mod.get_width_override()
+  M.state.focused_slot        = state_mod.get_focused_slot()
+  M.MAX_SLOT      = config.panel.slot_count
+  M.MAIN_SLOT_MAX = config.panel.slot_count
+
+  -- Watcher: slot_count change → mirror + sync_slot_count side-effect.
+  state_mod.watch_slot_count(function(payload)
+    config.panel.slot_count = payload.new
+    M.sync_slot_count()
+  end)
+
+  -- Watcher: width_override change → mirror + panel-width refresh.
+  state_mod.watch_width_override(function(payload)
+    config.panel.width_override = payload.new
+    if M.refresh_panel_width then M.refresh_panel_width() end
+  end)
+
+  -- Watcher: focused_slot change → mirror.
+  state_mod.watch_focused_slot(function(payload)
+    M.state.focused_slot = payload.new
+  end)
 
   -- M5: load resource grants for this project.
   require("auto-agents.resources.grants").load()
@@ -405,7 +441,9 @@ function M.setup(opts)
   -- admin is the right landing slot for an empty config. With agents
   -- loaded, the previous focused_slot (or 1) still applies.
   if #config.agents.bootstrap == 0 then
-    M.state.focused_slot = 0
+    -- v0.2.0: route through state.set so the namespace persists +
+    -- the watcher mirrors back into M.state.focused_slot.
+    require("auto-agents.state").set_focused_slot(0)
   end
 
   -- Panel buffer protection is handled by `winfixbuf = true` on the
@@ -1129,10 +1167,13 @@ function M.move_slot(from, to, swap)
   M.state.slot_terminals[to]   = t_from
 
   -- Refresh focused_slot if the move moved the focused terminal.
+  -- v0.2.0: route through state.set_focused_slot so the namespace
+  -- persists + the watcher mirrors into M.state.focused_slot.
+  local state_mod = require("auto-agents.state")
   if M.state.focused_slot == from then
-    M.state.focused_slot = to
+    state_mod.set_focused_slot(to)
   elseif M.state.focused_slot == to and swap then
-    M.state.focused_slot = from
+    state_mod.set_focused_slot(from)
   end
 
   -- Refresh keymap descriptions and panel winbar.
@@ -1396,7 +1437,9 @@ function M.focus_slot(slot)
     return
   end
   if not bufnr then return end
-  M.state.focused_slot = slot
+  -- v0.2.0: persist focused_slot via the state namespace; the
+  -- watcher mirrors back into M.state.focused_slot.
+  require("auto-agents.state").set_focused_slot(slot)
   vim.api.nvim_set_current_win(winid)
 
   -- D10 winbar tab-strip: all main slots, focused one bracketed, each

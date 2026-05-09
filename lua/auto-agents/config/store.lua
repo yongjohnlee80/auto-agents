@@ -220,30 +220,20 @@ function M.save_current()
       payload.kb.seed = cfg.kb.seed_path
     end
   end
-  -- Carry over the live panel.width_override so `panel resize`
-  -- persists to the active TOML. nil = no override → omit the section
-  -- entirely (the toml encoder skips nil-valued sections).
-  if cfg.panel and cfg.panel.width_override ~= nil then
-    payload.panel = payload.panel or {}
-    payload.panel.width_override = cfg.panel.width_override
-  else
-    -- Explicit clear: drop any width_override row from existing[panel]
-    -- so `panel reset` actually shrinks the file rather than leaving a
-    -- stale row behind.
-    if payload.panel then payload.panel.width_override = nil end
+  -- v0.2.0: panel.width_override and panel.slot_count migrated to
+  -- auto-core.state.namespace("auto-agents") with the json backend
+  -- (lua/auto-agents/state.lua). This save path actively STRIPS
+  -- those keys from the TOML payload so any legacy values written
+  -- by older auto-agents builds are dropped on the next save. The
+  -- one-shot bootstrap_from_toml in init.lua's setup() reads them
+  -- ONCE on startup and seeds the namespace; subsequent saves drop
+  -- them. The agent bootstrap rows + kb config still persist via
+  -- TOML (until the TOML persist backend lights up in auto-core).
+  if payload.panel then
+    payload.panel.width_override = nil
+    payload.panel.slot_count     = nil
+    if next(payload.panel) == nil then payload.panel = nil end
   end
-  -- Carry over the live panel.slot_count when it differs from the
-  -- default (5). Persisting only on non-default keeps stock TOMLs
-  -- minimal — user only sees the row if they ran `slot add` /
-  -- `slot remove`.
-  if cfg.panel and type(cfg.panel.slot_count) == "number"
-      and cfg.panel.slot_count ~= 5 then
-    payload.panel = payload.panel or {}
-    payload.panel.slot_count = cfg.panel.slot_count
-  else
-    if payload.panel then payload.panel.slot_count = nil end
-  end
-  if payload.panel and next(payload.panel) == nil then payload.panel = nil end
 
   local ok = M.write(path, payload)
   if ok then
