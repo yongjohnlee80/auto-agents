@@ -124,6 +124,30 @@ local panel2 = aa.state.panel_winid
 ok("panel reopens", panel2 ~= nil and vim.api.nvim_win_is_valid(panel2))
 ok("winfixbuf set on reopened panel", vim.wo[panel2].winfixbuf == true)
 
+-- ───────────────────── 7. panel-singleton guard ─────────────────────
+-- Simulate the orphan-duplicate scenario the user reported: state
+-- thinks it has no panel (e.g. lazy reload, session restore lost the
+-- winid) but a panel window with our marker is still alive in the
+-- current tab. A subsequent :AutoAgents call must adopt the existing
+-- window instead of creating a second vsplit.
+print("\n[7] panel-singleton guard")
+ok("panel marker stamped on open",
+  vim.w[panel2].auto_agents_panel == 1)
+local pre_count = #vim.api.nvim_tabpage_list_wins(0)
+aa.state.panel_winid = nil  -- pretend state lost track
+aa.open(true)               -- should re-discover panel2 via marker
+ok("ensure_main_window adopts the existing marked window",
+  aa.state.panel_winid == panel2)
+local post_count = #vim.api.nvim_tabpage_list_wins(0)
+ok("no duplicate window created when state lost track",
+  post_count == pre_count, "pre=" .. pre_count .. " post=" .. post_count)
+-- Toggle while state is empty but a marked panel exists should
+-- close the panel (not open a second one).
+aa.state.panel_winid = nil
+aa.toggle()
+ok("toggle with stale state but live panel closes the live one",
+  not vim.api.nvim_win_is_valid(panel2))
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

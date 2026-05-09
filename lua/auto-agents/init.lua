@@ -13,6 +13,14 @@ M.version = "0.1.23"
 M.MAIN_SLOT_MAX = 5
 M.MAX_SLOT = 9
 
+---Window-local marker stamped on the panel window. The
+---`ensure_main_window` discovery path scans for any window in the
+---current tabpage carrying this marker before creating a new vsplit
+---— guards against orphan duplicates when the cached
+---`state.panel_winid` is gone (lazy reload, manual `:close`, plugin
+---reload via Lazy, etc.) but the actual window is still alive.
+M.PANEL_WIN_VAR = "auto_agents_panel"
+
 ---@class AutoAgentsState
 ---@field config AutoAgentsConfig|nil
 ---@field initialized boolean
@@ -482,6 +490,24 @@ local function build_agent_env(spec, cwd)
   return env
 end
 
+---Find an existing panel window in the CURRENT tabpage by its
+---window-local marker. Returns nil if none. Scope is intentionally
+---per-tab: a panel in a different tab is not "the same instance"
+---from the user's vantage point, so calling :AutoAgents on tab 2
+---while tab 1 has its own panel still creates a tab-2 panel.
+---@return integer|nil
+local function find_existing_panel_in_tab()
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_is_valid(w) then
+      local ok, marker = pcall(vim.api.nvim_win_get_var, w, M.PANEL_WIN_VAR)
+      if ok and marker == 1 then
+        return w
+      end
+    end
+  end
+  return nil
+end
+
 ---Ensure the main panel window exists (open it if not) and return its winid.
 ---@param force boolean?
 ---@return integer|nil winid
@@ -492,8 +518,29 @@ local function ensure_main_window(force)
     logger.error("init", "auto-agents.setup() must be called first")
     return nil
   end
+  -- Fast-path: cached winid still points at our panel (verify the
+  -- marker too, since vim can recycle a winid for an unrelated
+  -- window if the panel was closed without going through M.close).
   if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
-    return M.state.panel_winid
+    local ok, marker = pcall(vim.api.nvim_win_get_var, M.state.panel_winid, M.PANEL_WIN_VAR)
+    if ok and marker == 1 then
+      return M.state.panel_winid
+    end
+    -- Stale cache; the winid is valid but isn't our panel. Drop it
+    -- and fall through to the discovery + create path.
+    M.state.panel_winid = nil
+  end
+  -- Discovery: a panel might already exist in the current tab even
+  -- if state lost track (lazy reload, plugin :Lazy reload, session
+  -- restore, manual layout fiddling). Adopting prevents the orphan-
+  -- duplicate the user reported — two panel vsplits side by side,
+  -- only one of which the API has a handle to.
+  local existing = find_existing_panel_in_tab()
+  if existing then
+    logger.debug("panel", "adopting existing panel window winid=" .. existing)
+    M.state.panel_winid = existing
+    M.state.panel_width = vim.api.nvim_win_get_width(existing)
+    return existing
   end
   if not force and vim.o.columns < cfg.panel.min_width + cfg.panel.editor_floor then
     logger.info(
@@ -509,6 +556,10 @@ local function ensure_main_window(force)
   vim.cmd(placement .. " " .. width .. "vsplit")
   local winid = vim.api.nvim_get_current_win()
   M.state.panel_winid = winid
+  -- Stamp the marker so future `find_existing_panel_in_tab` calls
+  -- can re-discover this window. The marker is a window-local
+  -- variable; it dies with the window (no cleanup needed on close).
+  pcall(vim.api.nvim_win_set_var, winid, M.PANEL_WIN_VAR, 1)
   -- Cache the resolved width so the diff-parity restore path uses the
   -- value the panel was opened at (not a fresh recompute) — otherwise
   -- a terminal resize between open and restore would make us snap to
@@ -630,16 +681,36 @@ end
 
 ---Close the panel window. Keeps terminal jobs alive (processes persist;
 ---window is just hidden) — matches `claudecode.nvim`'s simple_toggle.
+---Resolves the target via the marker scan when state lost track, so
+---`:AutoAgentsClose` after a session restore still hits the orphan.
 function M.close()
+  local target = nil
   if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
-    vim.api.nvim_win_close(M.state.panel_winid, true)
+    target = M.state.panel_winid
+  else
+    target = find_existing_panel_in_tab()
+  end
+  if target and vim.api.nvim_win_is_valid(target) then
+    vim.api.nvim_win_close(target, true)
   end
   M.state.panel_winid = nil
 end
 
 ---@param force boolean?
 function M.toggle(force)
+  -- Use the discovery path so a panel that exists in the current tab
+  -- (whether or not state remembered it) is treated as "already open"
+  -- and gets closed instead of duplicated. Without this, a session
+  -- where state lost the cached winid would create a second panel
+  -- on the first :AutoAgentsToggle, leaving the orphan behind.
+  local existing = nil
   if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
+    existing = M.state.panel_winid
+  else
+    existing = find_existing_panel_in_tab()
+    if existing then M.state.panel_winid = existing end
+  end
+  if existing then
     M.close()
   else
     M.open(force)
