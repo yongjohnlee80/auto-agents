@@ -66,6 +66,14 @@ function Instance:start(winid)
   -- Buffer-local terminal-mode keymaps so the user can escape the agent
   -- window without reaching for the mouse (issue #3). These exit terminal
   -- mode and switch windows in one keystroke.
+  --
+  -- KNOWN ISSUE (2026-05-09): pressing `<C-l>` from the rightmost agent
+  -- slot (no window to the right) leaves the user in terminal-normal
+  -- mode rather than staying in terminal-insert. Two attempted fixes
+  -- (intra-callback mode dance + pre-check `winnr(<dir>)` with
+  -- feedkeys) didn't work — see
+  -- ~/Source/Documents/knowledge-base/projects/auto-agents/known-issues.md
+  -- for the diagnosis backlog.
   local kopts = { buffer = buf, silent = true }
   vim.keymap.set("t", "<C-h>", [[<C-\><C-n><C-w>h]], kopts)
   vim.keymap.set("t", "<C-j>", [[<C-\><C-n><C-w>j]], kopts)

@@ -62,11 +62,11 @@ end
 ---back to a compact format where unfocused slots show only `N` (or
 ---`N<sigil>` when status is non-idle), and the focused slot keeps
 ---its label.
----@param focused_slot integer  -- 0..MAIN_SLOT_MAX
+---@param focused_slot integer  -- 0..MAX_SLOT
 ---@param available_width integer|nil  -- panel window width; nil disables the fit check
 ---@return string
 function M.render(focused_slot, available_width)
-  local main_max = require("auto-agents").MAIN_SLOT_MAX or 5
+  local main_max = require("auto-agents").MAX_SLOT or 5
 
   -- Plain-text length (excluding %<minwid>@..%X click markup and
   -- %#hl#..%* highlight markup, which contribute zero displayed width).

@@ -49,19 +49,17 @@ local function build_lines()
   local in_panel = aa.state.panel_winid and vim.api.nvim_win_is_valid(aa.state.panel_winid)
     and vim.api.nvim_get_current_win() == aa.state.panel_winid
 
+  -- Slots 0..MAX_SLOT (admin + main agents). Hardcoded 0..9 was a relic
+  -- of the old two-tier model. Now `slot_count` is configurable
+  -- (`slot add` / `slot remove`); the dock reflects what's actually
+  -- available in the current session.
+  local max_slot = aa.MAX_SLOT or 5
   local entries = {
     { key = "e", label = "editor", is_editor = true },
-    { key = "0", label = slot_label(0), slot = 0 },
-    { key = "1", label = slot_label(1), slot = 1 },
-    { key = "2", label = slot_label(2), slot = 2 },
-    { key = "3", label = slot_label(3), slot = 3 },
-    { key = "4", label = slot_label(4), slot = 4 },
-    { key = "5", label = slot_label(5), slot = 5 },
-    { key = "6", label = slot_label(6), slot = 6 },
-    { key = "7", label = slot_label(7), slot = 7 },
-    { key = "8", label = slot_label(8), slot = 8 },
-    { key = "9", label = slot_label(9), slot = 9 },
   }
+  for s = 0, max_slot do
+    table.insert(entries, { key = tostring(s), label = slot_label(s), slot = s })
+  end
 
   local lines = {}
   local focused_idx = 1

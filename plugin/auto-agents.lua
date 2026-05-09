@@ -10,18 +10,6 @@ end, {
   desc = "Toggle the auto-agents main window (! to bypass host-width guard)",
 })
 
-vim.api.nvim_create_user_command("AutoAgentsSub", function(opts)
-  local slot = tonumber(opts.fargs[1])
-  if not slot then
-    vim.notify("AutoAgentsSub: argument must be a slot number 5..9", vim.log.levels.ERROR)
-    return
-  end
-  require("auto-agents").toggle_sub(slot)
-end, {
-  nargs = 1,
-  desc = "Toggle a sub-agent float (slots 5..9)",
-})
-
 vim.api.nvim_create_user_command("AutoAgentsFocus", function(opts)
   local slot = tonumber(opts.fargs[1])
   if not slot then
@@ -31,7 +19,7 @@ vim.api.nvim_create_user_command("AutoAgentsFocus", function(opts)
   require("auto-agents").focus_slot(slot)
 end, {
   nargs = 1,
-  desc = "Focus a slot — 0..4 main window, 5..9 sub-agent floats (D17)",
+  desc = "Focus a slot — 0 admin, 1..N main agents (N = cfg.panel.slot_count)",
 })
 
 vim.api.nvim_create_user_command("AutoAgentsDock", function()

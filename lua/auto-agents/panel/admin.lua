@@ -99,6 +99,9 @@ local function help_lines()
     "  term list                      list T1..T4 state (alive/visible/focused)",
     "  term kill <N>                  stop T<N> and wipe its buffer",
     "  term hide                      hide every T1..T4 float",
+    "  slot add <N>                   grow main panel by N slots (cap 9)",
+    "  slot remove <N>                shrink main panel by N (floor 2; rejects if any to-be-removed slot has an agent)",
+    "  slot show                      show slot_count + agent assignments per slot",
     "  clear                          wipe history above the prompt",
     "  quit                           close the auto-agents panel",
     "",
@@ -121,8 +124,7 @@ local function status_lines()
   local bs = (cfg.agents and cfg.agents.bootstrap) or {}
   local by_slot = {}
   for _, e in ipairs(bs) do by_slot[e.slot] = e end
-  local main_max = aa.MAIN_SLOT_MAX or 6
-  local max_slot = aa.MAX_SLOT or 9
+  local max_slot = aa.MAX_SLOT or 5
 
   local lines = { "", "Agent slots:" }
   for slot = 0, max_slot do
@@ -137,17 +139,11 @@ local function status_lines()
       else
         label = "(empty → shell)"
       end
-      if slot > main_max then
-        local float = require("auto-agents.float")
-        local fb = float.get_bufnr(slot)
-        state = (fb and vim.api.nvim_buf_is_valid(fb)) and "running" or "-"
-      else
-        local term = aa.state.slot_terminals[slot]
-        state = (term and term:is_alive()) and "running" or "-"
-      end
+      local term = aa.state.slot_terminals[slot]
+      state = (term and term:is_alive()) and "running" or "-"
     end
     local marker = (slot == aa.state.focused_slot) and "→" or " "
-    local where = (slot == 0) and "admin" or (slot <= main_max and "main" or "float")
+    local where = (slot == 0) and "admin" or "main"
     local entry = by_slot[slot]
     local task_count = (entry and entry.tasks) and #entry.tasks or 0
     local task_suffix = task_count > 0 and string.format("  [%d task%s]", task_count, task_count == 1 and "" or "s") or ""
@@ -594,6 +590,113 @@ local function dispatch(input)
       emit({ "panel: unknown subverb '" .. tostring(sub) .. "' — try resize/reset/show" })
     end
 
+  elseif verb == "slot" then
+    -- `slot add N`     — grow slot_count by N (cap 9).
+    -- `slot remove N`  — shrink slot_count by N (floor 2). Refuses if
+    --                    any of the to-be-removed (highest-indexed)
+    --                    slots have a bootstrap entry assigned.
+    -- `slot show`      — print current slot_count + which slots have agents.
+    local sub = toks[2]
+    local aa = require("auto-agents")
+    local cfg_mod = require("auto-agents.config")
+    local store = require("auto-agents.config.store")
+    local cfg = aa.state.config or {}
+    cfg.panel = cfg.panel or {}
+    local current = cfg.panel.slot_count or 5
+
+    local function find_assignments(low, high)
+      -- Return a sorted list of slots in [low, high] that have a
+      -- bootstrap entry. cfg.agents.bootstrap is the active agent
+      -- registry; entries with `slot = N` claim slot N.
+      local hits = {}
+      local bs = (cfg.agents and cfg.agents.bootstrap) or {}
+      for _, e in ipairs(bs) do
+        local s = e and e.slot
+        if type(s) == "number" and s >= low and s <= high then
+          hits[#hits + 1] = s
+        end
+      end
+      table.sort(hits)
+      return hits
+    end
+
+    local function persist_and_sync(new_count)
+      cfg.panel.slot_count = new_count
+      aa.sync_slot_count()
+      local ok, path = store.save_current()
+      if ok then
+        emit({ ("Persisted slot_count = %d → %s"):format(new_count, path) })
+      else
+        emit({ ("slot_count = %d (in-memory only; persist failed)"):format(new_count) })
+      end
+    end
+
+    if sub == "add" then
+      local n = tonumber(toks[3])
+      if not n or n ~= math.floor(n) or n < 1 then
+        emit({ "slot add: N must be a positive integer; got '" .. tostring(toks[3]) .. "'" })
+      else
+        local target = current + n
+        if target > cfg_mod.SLOT_COUNT_MAX then
+          emit({ ("slot add %d: slot_count %d + %d = %d exceeds maximum %d")
+            :format(n, current, n, target, cfg_mod.SLOT_COUNT_MAX) })
+        else
+          persist_and_sync(target)
+        end
+      end
+    elseif sub == "remove" then
+      local n = tonumber(toks[3])
+      if not n or n ~= math.floor(n) or n < 1 then
+        emit({ "slot remove: N must be a positive integer; got '" .. tostring(toks[3]) .. "'" })
+      else
+        local target = current - n
+        if target < cfg_mod.SLOT_COUNT_MIN then
+          emit({ ("slot remove %d: slot_count %d - %d = %d below minimum %d")
+            :format(n, current, n, target, cfg_mod.SLOT_COUNT_MIN) })
+        else
+          local hits = find_assignments(target + 1, current)
+          if #hits > 0 then
+            local labels = {}
+            for _, s in ipairs(hits) do labels[#labels + 1] = tostring(s) end
+            emit({
+              ("slot remove %d: cannot shrink — slot%s %s %s assigned. Run `agent remove <N>` first.")
+                :format(n, #hits == 1 and "" or "s",
+                        table.concat(labels, ", "),
+                        #hits == 1 and "is" or "are"),
+            })
+          else
+            persist_and_sync(target)
+          end
+        end
+      end
+    elseif sub == "show" or sub == nil then
+      local lines = {
+        "",
+        ("slot_count = %d  (range %d..%d)"):format(current,
+          cfg_mod.SLOT_COUNT_MIN, cfg_mod.SLOT_COUNT_MAX),
+      }
+      local bs = (cfg.agents and cfg.agents.bootstrap) or {}
+      local by_slot = {}
+      for _, e in ipairs(bs) do
+        if e and type(e.slot) == "number" then
+          by_slot[e.slot] = e
+        end
+      end
+      for s = 1, current do
+        local e = by_slot[s]
+        if e then
+          local label = e.title or e.name or e.kind or "(unnamed)"
+          lines[#lines + 1] = ("  slot %d  %s"):format(s, label)
+        else
+          lines[#lines + 1] = ("  slot %d  -"):format(s)
+        end
+      end
+      lines[#lines + 1] = ""
+      emit(lines)
+    else
+      emit({ "slot: unknown subverb '" .. tostring(sub) .. "' — try add/remove/show" })
+    end
+
   elseif verb == "config" then
     local sub = toks[2]
     local store = require("auto-agents.config.store")
@@ -846,7 +949,7 @@ local function complete_at(prompt, cursor_col)
 
   local candidates
   if #prev_toks == 0 then
-    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "config", "panel", "clear", "quit" }
+    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "config", "panel", "slot", "clear", "quit" }
   elseif #prev_toks == 1 and prev_toks[1] == "panel" then
     candidates = { "resize", "reset", "show" }
   elseif #prev_toks == 2 and prev_toks[1] == "panel" and prev_toks[2] == "resize" then
@@ -881,6 +984,11 @@ local function complete_at(prompt, cursor_col)
   elseif #prev_toks == 4 and prev_toks[1] == "resource" and prev_toks[2] == "manager"
     and prev_toks[3] == "set" then
     candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+  elseif #prev_toks == 1 and prev_toks[1] == "slot" then
+    candidates = { "add", "remove", "show" }
+  elseif #prev_toks == 2 and prev_toks[1] == "slot"
+    and (prev_toks[2] == "add" or prev_toks[2] == "remove") then
+    candidates = { "1", "2", "3", "4" }
   elseif #prev_toks == 1 and prev_toks[1] == "config" then
     candidates = { "save", "reset", "show", "path" }
   elseif #prev_toks == 1 and prev_toks[1] == "project" then

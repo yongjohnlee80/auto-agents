@@ -11,6 +11,15 @@ M.defaults = {
     min_width = 60,
     max_width = 130,
     percentage = 0.35,
+    -- Number of agent slots in the main panel (1..N below admin's
+    -- slot 0). Default 5 — matches the previous MAIN_SLOT_MAX
+    -- constant. Range SLOT_COUNT_MIN..SLOT_COUNT_MAX (2..9). Below 2
+    -- is rejected (admin + 1 agent makes the slot model pointless);
+    -- above 9 is rejected as a typo.
+    --
+    -- Persisted to the active TOML's [panel] section by the admin
+    -- DSL (`slot add N` / `slot remove N`).
+    slot_count = 5,
     -- Hard-pin the panel to a specific column count. When non-nil this
     -- bypasses the percentage/min/max formula entirely. Set via the
     -- admin REPL (`panel resize`) and persisted to the active TOML's
@@ -47,6 +56,40 @@ M.defaults = {
     enabled = true,
     fkeys = { "<F1>", "<F2>", "<F3>", "<F4>" },
   },
+  -- Three-column AutoVim layout invariant. AutoFinder | Editor |
+  -- AutoAgents — when an editor window must always exist for diff
+  -- review and normal editing to be possible.
+  --
+  -- editor_window_strategy controls what happens when WinClosed leaves
+  -- only side panels visible:
+  --   "create_scratch" → materialize an empty scratch in a new vsplit
+  --                      between the panels (default; restores the layout
+  --                      automatically). The scratch carries no
+  --                      winfixwidth / winfixbuf so the user can edit
+  --                      / replace it freely.
+  --   "warn"           → log a warning, no recovery. User has to open a
+  --                      buffer manually before the layout is usable.
+  --   "off"            → no-op. Honor :q exactly.
+  --
+  -- See lua/auto-agents/integrations/editor_floor.lua for the autocmd
+  -- that enforces this. NOT to be confused with cfg.panel.editor_floor
+  -- (column-count threshold, separate concern).
+  layout = {
+    editor_window_strategy = "create_scratch",
+  },
+  -- Diff-route gate. When claudecode opens a diff buffer
+  -- (BufWinEnter with b:claudecode_diff_tab_name) and no editor window
+  -- existed outside the diff itself, claudecode manufactured a split
+  -- inside the panel column. We refuse:
+  --   "warn" → close the manufactured diff windows and log a warning
+  --            (default; honors the "log warning rather than opening"
+  --            request). The agent terminal still receives the diff
+  --            text in its TUI; we only suppress the editor-side
+  --            split.
+  --   "off"  → don't intervene. Claudecode does its thing.
+  diff = {
+    editor_floor_strategy = "warn",
+  },
 }
 
 local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace = true }
@@ -55,6 +98,8 @@ local RAILS = { winbar = true, vertical = true, off = true }
 local KINDS = { claude = true, codex = true, gemini = true, junie = true, aider = true, goose = true, opencode = true, copilot = true, generic = true }
 local SCOPES = { shared = true, private = true, isolated = true }
 local PROVIDERS = { auto = true, snacks = true, native = true, none = true }
+local LAYOUT_STRATEGIES = { create_scratch = true, warn = true, off = true }
+local DIFF_STRATEGIES = { warn = true, off = true }
 
 -- Bounds for `panel.width_override`. Picked to leave room for both
 -- usable narrow layouts (very wide monitors with tiny side panels) and
@@ -70,6 +115,15 @@ local PANEL_MIN = 25
 local PANEL_MAX = 160
 M.PANEL_OVERRIDE_MIN = PANEL_MIN
 M.PANEL_OVERRIDE_MAX = PANEL_MAX
+
+-- Bounds for `panel.slot_count`. Floor 2 prevents the degenerate
+-- "admin + 1 agent" layout (slot 0 is admin; below 2 means no usable
+-- slot multiplex at all). Cap 9 keeps the winbar tab strip readable
+-- and matches the keymap surface (`<leader>a0`..`<leader>a9`).
+local SLOT_COUNT_MIN = 2
+local SLOT_COUNT_MAX = 9
+M.SLOT_COUNT_MIN = SLOT_COUNT_MIN
+M.SLOT_COUNT_MAX = SLOT_COUNT_MAX
 
 ---@param cfg AutoAgentsConfig
 ---@return string|nil error_msg
@@ -89,6 +143,13 @@ function M.validate(cfg)
   end
   if type(p.percentage) ~= "number" or p.percentage <= 0 or p.percentage >= 1 then
     return "panel.percentage must be between 0 and 1 (exclusive)"
+  end
+  if type(p.slot_count) ~= "number" or p.slot_count ~= math.floor(p.slot_count) then
+    return "panel.slot_count must be an integer"
+  end
+  if p.slot_count < SLOT_COUNT_MIN or p.slot_count > SLOT_COUNT_MAX then
+    return string.format("panel.slot_count must be in %d..%d, got %d",
+      SLOT_COUNT_MIN, SLOT_COUNT_MAX, p.slot_count)
   end
   if p.width_override ~= nil then
     if type(p.width_override) ~= "number" or p.width_override ~= math.floor(p.width_override) then
@@ -122,6 +183,18 @@ function M.validate(cfg)
   end
   if not PROVIDERS[cfg.terminal.provider] then
     return "terminal.provider must be one of auto|snacks|native|none"
+  end
+  local layout = cfg.layout or {}
+  if layout.editor_window_strategy ~= nil
+      and not LAYOUT_STRATEGIES[layout.editor_window_strategy] then
+    return "layout.editor_window_strategy must be one of create_scratch|warn|off, got "
+      .. tostring(layout.editor_window_strategy)
+  end
+  local diff = cfg.diff or {}
+  if diff.editor_floor_strategy ~= nil
+      and not DIFF_STRATEGIES[diff.editor_floor_strategy] then
+    return "diff.editor_floor_strategy must be one of warn|off, got "
+      .. tostring(diff.editor_floor_strategy)
   end
   return nil
 end

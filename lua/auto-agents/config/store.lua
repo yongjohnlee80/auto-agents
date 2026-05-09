@@ -58,7 +58,7 @@ local AGENT_KEY_ORDER = {
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }
 local KB_KEY_ORDER = { "root", "type", "seed" }
-local PANEL_KEY_ORDER = { "width_override" }
+local PANEL_KEY_ORDER = { "width_override", "slot_count" }
 
 ---Directory holding project + global TOML files. Dot-prefixed so it
 ---doesn't visually collide with project KB dirs that happen to live
@@ -231,8 +231,19 @@ function M.save_current()
     -- so `panel reset` actually shrinks the file rather than leaving a
     -- stale row behind.
     if payload.panel then payload.panel.width_override = nil end
-    if payload.panel and next(payload.panel) == nil then payload.panel = nil end
   end
+  -- Carry over the live panel.slot_count when it differs from the
+  -- default (5). Persisting only on non-default keeps stock TOMLs
+  -- minimal — user only sees the row if they ran `slot add` /
+  -- `slot remove`.
+  if cfg.panel and type(cfg.panel.slot_count) == "number"
+      and cfg.panel.slot_count ~= 5 then
+    payload.panel = payload.panel or {}
+    payload.panel.slot_count = cfg.panel.slot_count
+  else
+    if payload.panel then payload.panel.slot_count = nil end
+  end
+  if payload.panel and next(payload.panel) == nil then payload.panel = nil end
 
   local ok = M.write(path, payload)
   if ok then
