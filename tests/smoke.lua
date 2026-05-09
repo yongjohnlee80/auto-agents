@@ -463,6 +463,64 @@ ok("state.set_focused_slot(3) mirrors to aa.state.focused_slot",
 state_mod.set_slot_count(5)
 state_mod.set_focused_slot(1)
 
+-- ───────────────────────── 12. panel — auto-core.ui.panel singleton bridge ─────────────────────────
+-- v0.2.0 migration: ensure_main_window delegates to the
+-- auto-core.ui.panel singleton claimed at setup() (M._panel).
+-- The marker, winfixwidth/winfixbuf, on_open/on_close hooks, and
+-- WinResized/VimResized auto-pin enforcement all live in auto-core.
+print("\n[12] panel — auto-core.ui.panel delegation")
+
+ok("M._panel singleton claimed at setup",
+  type(aa._panel) == "table" and aa._panel.opts ~= nil,
+  type(aa._panel))
+ok("M._panel.opts.name == 'auto-agents'",
+  aa._panel.opts.name == "auto-agents")
+ok("panel marker var derives to 'auto_agents_panel'",
+  aa._panel._marker_var == "auto_agents_panel",
+  tostring(aa._panel._marker_var))
+
+-- Close any existing panel from earlier tests, then reopen via the
+-- canonical M.open path.
+aa.close()
+aa.open(true)
+ok("panel opens after reopen via M.open(force)",
+  aa.state.panel_winid ~= nil
+    and vim.api.nvim_win_is_valid(aa.state.panel_winid))
+ok("panel marker stamped on the open winid",
+  vim.api.nvim_win_get_var(aa.state.panel_winid, "auto_agents_panel") == 1)
+ok("panel name marker (auto-core canonical) stamped too",
+  vim.api.nvim_win_get_var(aa.state.panel_winid, "auto_core_panel_name")
+    == "auto-agents")
+ok("winfixwidth set on panel",
+  vim.wo[aa.state.panel_winid].winfixwidth == true)
+ok("winfixbuf set on panel",
+  vim.wo[aa.state.panel_winid].winfixbuf == true)
+
+-- width_override watcher should drive panel:resize.
+state_mod.set_width_override(72)
+vim.wait(20)
+ok("width_override=72 applied as a panel pin",
+  aa._panel.user_width == 72,
+  "got " .. tostring(aa._panel.user_width))
+state_mod.set_width_override(nil)
+vim.wait(20)
+ok("width_override=nil clears the panel pin",
+  aa._panel.user_width == nil)
+
+-- Toggle: open + close routes through panel singleton.
+local pre_toggle_winid = aa.state.panel_winid
+aa.toggle()
+ok("toggle() closes the live panel",
+  aa.state.panel_winid == nil
+    or not vim.api.nvim_win_is_valid(aa.state.panel_winid),
+  "winid=" .. tostring(aa.state.panel_winid))
+aa.toggle(true)
+ok("toggle(true) re-opens the panel",
+  aa.state.panel_winid ~= nil
+    and vim.api.nvim_win_is_valid(aa.state.panel_winid))
+
+aa.close()
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

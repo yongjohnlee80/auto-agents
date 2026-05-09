@@ -128,16 +128,31 @@ end
 
 ---Refresh the cached panel width from the new terminal columns AND
 ---re-issue jobresize on every running main-slot terminal so each TUI
----gets a fresh SIGWINCH at the now-correct width. Without the
----resize_to leg, TUIs would keep drawing at the pre-resize width
----until their slot is next focused (focus_slot also calls resize_to).
+---gets a fresh SIGWINCH at the now-correct width.
+---
+---v0.2.0 migration: the actual width recompute + nvim_win_set_width
+---moves to auto-core's `panel:refresh_width()` (which honors a
+---sticky pin from `:resize`). auto-agents keeps the terminal-fanout
+---loop because that's PTY-specific to slot terminals — auto-core
+---panels don't know about agent terminals.
+---
+---Note: auto-core's Panel autoinstalls its own VimResized handler
+---that calls `:refresh_width()`, so technically the auto-agents-side
+---VimResized hook below is redundant for the WIDTH part. We keep it
+---for the FANOUT part — without it, terminals would keep drawing at
+---the pre-resize width until their slot is next focused.
 local function _refresh_panel_width_cache()
-  local panel = M.state.panel_winid
-  if not panel or not vim.api.nvim_win_is_valid(panel) then return end
   local cfg = M.state.config
   if not cfg then return end
-  M.state.panel_width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
-  pcall(vim.api.nvim_win_set_width, panel, M.state.panel_width)
+  if M._panel then
+    M._panel:refresh_width()
+    if M._panel.winid and vim.api.nvim_win_is_valid(M._panel.winid) then
+      M.state.panel_winid = M._panel.winid
+      M.state.panel_width = vim.api.nvim_win_get_width(M._panel.winid)
+    end
+  end
+  local panel = M.state.panel_winid
+  if not panel or not vim.api.nvim_win_is_valid(panel) then return end
 
   -- Forward the resize to every running main-slot TUI so its PTY width
   -- matches the panel's new dims. Sub-slot floats are skipped here —
@@ -355,15 +370,56 @@ function M.setup(opts)
   M.MAX_SLOT      = config.panel.slot_count
   M.MAIN_SLOT_MAX = config.panel.slot_count
 
+  -- v0.2.0 panel migration: claim the auto-core.ui.panel singleton.
+  -- The panel name "auto-agents" produces marker var `auto_agents_panel`
+  -- after auto-core's `[^%w_]` → `_` substitution — identical to the
+  -- prior local M.PANEL_WIN_VAR, so external readers (notably
+  -- integrations/editor_floor.lua and auto-finder's editor-floor
+  -- invariant) keep working without changes. winfixwidth + winfixbuf,
+  -- number/signcolumn/foldcolumn defaults, orphan-adoption, and the
+  -- WinResized/VimResized auto-pin enforcement all move to auto-core.
+  local panel_mod = require("auto-core").ui.panel
+  M._panel = panel_mod.new({
+    name  = "auto-agents",
+    side  = config.panel.side,
+    width = {
+      percentage = config.panel.percentage,
+      min        = config.panel.min_width,
+      max        = config.panel.max_width,
+    },
+    -- filetype intentionally nil: each slot mounts its own buffer
+    -- with its own filetype; the panel host doesn't impose one.
+    on_open = function(winid)
+      M.state.panel_winid = winid
+      M.state.panel_width = vim.api.nvim_win_get_width(winid)
+    end,
+    on_close = function()
+      M.state.panel_winid = nil
+    end,
+  })
+  -- Apply any persisted width pin so the very first open uses it.
+  local pin = state_mod.get_width_override()
+  if pin then M._panel:resize(pin) end
+
   -- Watcher: slot_count change → mirror + sync_slot_count side-effect.
   state_mod.watch_slot_count(function(payload)
     config.panel.slot_count = payload.new
     M.sync_slot_count()
   end)
 
-  -- Watcher: width_override change → mirror + panel-width refresh.
+  -- Watcher: width_override change → mirror + drive the panel's
+  -- sticky pin (auto-core's panel:resize / :reset_width handle
+  -- the actual nvim_win_set_width). The terminal SIGWINCH fanout
+  -- still goes through M.refresh_panel_width below.
   state_mod.watch_width_override(function(payload)
     config.panel.width_override = payload.new
+    if M._panel then
+      if payload.new then
+        M._panel:resize(payload.new)
+      else
+        M._panel:reset_width()
+      end
+    end
     if M.refresh_panel_width then M.refresh_panel_width() end
   end)
 
@@ -627,25 +683,25 @@ local function build_agent_env(spec, cwd)
   return env
 end
 
----Find an existing panel window in the CURRENT tabpage by its
----window-local marker. Returns nil if none. Scope is intentionally
----per-tab: a panel in a different tab is not "the same instance"
----from the user's vantage point, so calling :AutoAgents on tab 2
----while tab 1 has its own panel still creates a tab-2 panel.
----@return integer|nil
-local function find_existing_panel_in_tab()
-  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.api.nvim_win_is_valid(w) then
-      local ok, marker = pcall(vim.api.nvim_win_get_var, w, M.PANEL_WIN_VAR)
-      if ok and marker == 1 then
-        return w
-      end
-    end
-  end
-  return nil
-end
-
----Ensure the main panel window exists (open it if not) and return its winid.
+---Ensure the main panel window exists (open it if not) and return
+---its winid.
+---
+---v0.2.0 migration: delegates to the auto-core.ui.panel singleton
+---claimed in setup() (`M._panel`). auto-core handles:
+---  - per-tab marker-based singleton-guard (orphan adoption after
+---    :Lazy reload / session restore — `w:auto_agents_panel`
+---    marker name is identical to the prior auto-agents-side var,
+---    so external readers like the editor-floor invariant still
+---    work)
+---  - winfixwidth + winfixbuf application
+---  - window-local number/relativenumber/signcolumn/foldcolumn=0
+---  - `panel:opened/closed/focused` events on the auto-core bus
+---
+---auto-agents keeps:
+---  - the editor-floor preflight (cfg.panel.editor_floor) — wider
+---    than auto-core's internal min check
+---  - the panel_winid + panel_width mirrors so legacy reader sites
+---    keep working without changes
 ---@param force boolean?
 ---@return integer|nil winid
 local function ensure_main_window(force)
@@ -655,30 +711,11 @@ local function ensure_main_window(force)
     logger.error("init", "auto-agents.setup() must be called first")
     return nil
   end
-  -- Fast-path: cached winid still points at our panel (verify the
-  -- marker too, since vim can recycle a winid for an unrelated
-  -- window if the panel was closed without going through M.close).
-  if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
-    local ok, marker = pcall(vim.api.nvim_win_get_var, M.state.panel_winid, M.PANEL_WIN_VAR)
-    if ok and marker == 1 then
-      return M.state.panel_winid
-    end
-    -- Stale cache; the winid is valid but isn't our panel. Drop it
-    -- and fall through to the discovery + create path.
-    M.state.panel_winid = nil
-  end
-  -- Discovery: a panel might already exist in the current tab even
-  -- if state lost track (lazy reload, plugin :Lazy reload, session
-  -- restore, manual layout fiddling). Adopting prevents the orphan-
-  -- duplicate the user reported — two panel vsplits side by side,
-  -- only one of which the API has a handle to.
-  local existing = find_existing_panel_in_tab()
-  if existing then
-    logger.debug("panel", "adopting existing panel window winid=" .. existing)
-    M.state.panel_winid = existing
-    M.state.panel_width = vim.api.nvim_win_get_width(existing)
-    return existing
-  end
+  -- Editor-floor preflight: don't open the panel if the host window
+  -- is too narrow to leave room for an editor split. auto-core's
+  -- own minimum check is just `min + 10`; auto-agents wants the
+  -- richer `min_width + editor_floor` budget so the editor side
+  -- isn't squeezed to a useless ~10 cols.
   if not force and vim.o.columns < cfg.panel.min_width + cfg.panel.editor_floor then
     logger.info(
       "panel",
@@ -688,46 +725,16 @@ local function ensure_main_window(force)
     )
     return nil
   end
-  local width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
-  local placement = (cfg.panel.side == "left") and "topleft" or "botright"
-  vim.cmd(placement .. " " .. width .. "vsplit")
-  local winid = vim.api.nvim_get_current_win()
+  if not M._panel then
+    logger.error("init", "M._panel not initialized — setup() must run first")
+    return nil
+  end
+  local winid = M._panel:open(force)
+  if not winid then return nil end
+  -- Mirror into legacy state for reader sites that walk
+  -- M.state.panel_winid / panel_width directly.
   M.state.panel_winid = winid
-  -- Stamp the marker so future `find_existing_panel_in_tab` calls
-  -- can re-discover this window. The marker is a window-local
-  -- variable; it dies with the window (no cleanup needed on close).
-  pcall(vim.api.nvim_win_set_var, winid, M.PANEL_WIN_VAR, 1)
-  -- Cache the resolved width so the diff-parity restore path uses the
-  -- value the panel was opened at (not a fresh recompute) — otherwise
-  -- a terminal resize between open and restore would make us snap to
-  -- a different width than the user is currently looking at. The
-  -- VimResized autocmd below updates this on terminal-size change.
-  M.state.panel_width = width
-
-  -- Window-local appearance (issue #2): drop line numbers and signs on
-  -- the agent panel — terminals don't benefit from them and they collide
-  -- with claude/codex TUI rendering.
-  vim.api.nvim_set_option_value("number", false, { win = winid })
-  vim.api.nvim_set_option_value("relativenumber", false, { win = winid })
-  vim.api.nvim_set_option_value("signcolumn", "no", { win = winid })
-  vim.api.nvim_set_option_value("foldcolumn", "0", { win = winid })
-
-  -- Lock the panel width: claudecode.nvim's diff handler runs
-  -- `wincmd =` (equalize) when the diff vsplit opens, which would
-  -- otherwise stretch our panel to ~1/3 of the editor. winfixwidth
-  -- tells vim to leave THIS window's width alone during equalize and
-  -- balance ops. Direct `nvim_win_set_width` calls bypass it, but
-  -- those are caught by the AutoAgentsDiffParity autocmd hooks below.
-  vim.api.nvim_set_option_value("winfixwidth", true, { win = winid })
-
-  -- Lock the panel BUFFER too — winfixbuf makes vim refuse to
-  -- replace this window's buffer via :edit / :buffer / b# / a
-  -- bufferline tab click. Prevents arbitrary file buffers from
-  -- hijacking a slot's terminal/admin buffer. Our own slot swaps
-  -- temporarily disable winfixbuf via _with_unfixed_buf in
-  -- focus_slot.
-  vim.api.nvim_set_option_value("winfixbuf", true, { win = winid })
-
+  M.state.panel_width = vim.api.nvim_win_get_width(winid)
   return winid
 end
 
@@ -736,10 +743,20 @@ end
 ---aren't blocked by the same option that protects the panel from
 ---external hijacks. Restores the prior winfixbuf state before
 ---returning.
----@param winid integer|nil
+---
+---v0.2.0 migration: delegates to the panel singleton's
+---`with_unfixed_buf`. The `winid` arg is now informational —
+---auto-core knows the panel's own winid. Kept for signature
+---compatibility with the single in-tree caller.
+---@param winid integer|nil   -- ignored when M._panel is set
 ---@param fn fun(): any
 ---@return boolean ok, any result_or_err
 local function _with_unfixed_buf(winid, fn)
+  if M._panel then
+    return M._panel:with_unfixed_buf(fn)
+  end
+  -- Fallback (auto-core not loaded — shouldn't happen post-setup):
+  -- replicate the original semantics so call sites don't crash.
   if not winid or not vim.api.nvim_win_is_valid(winid) then
     return pcall(fn)
   end
@@ -821,11 +838,12 @@ end
 ---Resolves the target via the marker scan when state lost track, so
 ---`:AutoAgentsClose` after a session restore still hits the orphan.
 function M.close()
+  -- v0.2.0: orphan-discovery via the panel singleton's marker scan.
   local target = nil
   if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
     target = M.state.panel_winid
-  else
-    target = find_existing_panel_in_tab()
+  elseif M._panel then
+    target = M._panel:_find_existing_in_tab()
   end
   if target and vim.api.nvim_win_is_valid(target) then
     vim.api.nvim_win_close(target, true)
@@ -835,19 +853,28 @@ end
 
 ---@param force boolean?
 function M.toggle(force)
-  -- Use the discovery path so a panel that exists in the current tab
-  -- (whether or not state remembered it) is treated as "already open"
-  -- and gets closed instead of duplicated. Without this, a session
-  -- where state lost the cached winid would create a second panel
-  -- on the first :AutoAgentsToggle, leaving the orphan behind.
-  local existing = nil
-  if M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid) then
-    existing = M.state.panel_winid
-  else
-    existing = find_existing_panel_in_tab()
-    if existing then M.state.panel_winid = existing end
+  -- v0.2.0: panel singleton owns the per-tab marker discovery.
+  -- M._panel:_find_existing_in_tab handles the orphan-adoption
+  -- case (state lost track of winid but the marked panel still
+  -- exists). We probe via :open() — if a panel already exists,
+  -- it returns the existing winid; if not, it creates one. Then
+  -- we close-or-keep based on whether _is_open already returned
+  -- a live panel before our probe. Equivalent semantics to the
+  -- old find_existing_panel_in_tab path, with the bonus that
+  -- M.state.panel_winid stays in sync via the on_open callback.
+  local already_open = M._panel and M._panel:_is_open()
+  if not already_open and M._panel then
+    -- Look for an unclaimed panel window in the tab — auto-core
+    -- exposes the marker scan via _find_existing_in_tab. If found,
+    -- it's an orphan we should adopt-and-close.
+    local existing = M._panel:_find_existing_in_tab()
+    if existing then
+      M._panel.winid = existing
+      M.state.panel_winid = existing
+      already_open = true
+    end
   end
-  if existing then
+  if already_open then
     M.close()
   else
     M.open(force)
