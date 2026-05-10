@@ -106,18 +106,34 @@ function M.materialize_editor_scratch()
   local panel = aa.state and aa.state.panel_winid
   local prev_win = vim.api.nvim_get_current_win()
 
+  -- Suppress autocmds during the split. `:leftabove vnew` from inside a
+  -- panel briefly displays the panel's buffer in the new sibling before
+  -- `:enew` swaps in a fresh one. Auto-core's panel-buffer leak guard
+  -- (BufWinEnter/WinEnter) sees that transient panel buffer in a
+  -- non-panel window and bounces the new window — leaving the fresh
+  -- buffer dropped back into the panel itself. Disabling autocmds for
+  -- the split keeps the guard out of the inner stages of the command.
+  local saved_eventignore = vim.o.eventignore
+  vim.o.eventignore = "all"
+
   if panel and vim.api.nvim_win_is_valid(panel) then
     pcall(vim.api.nvim_set_current_win, panel)
     local ok = pcall(vim.cmd, "leftabove vnew")
     if not ok then
+      vim.o.eventignore = saved_eventignore
       pcall(vim.api.nvim_set_current_win, prev_win)
       return nil
     end
   else
     -- No panel anchor; just split where we are.
     local ok = pcall(vim.cmd, "vnew")
-    if not ok then return nil end
+    if not ok then
+      vim.o.eventignore = saved_eventignore
+      return nil
+    end
   end
+
+  vim.o.eventignore = saved_eventignore
 
   local winid = vim.api.nvim_get_current_win()
   pcall(vim.api.nvim_set_option_value, "winfixwidth", false, { win = winid })
