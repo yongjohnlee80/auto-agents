@@ -49,13 +49,37 @@ without losing the main view.
 -- lazy.nvim
 {
   "yongjohnlee80/auto-agents",
-  version = "^0.1.0",
-  dependencies = { "folke/snacks.nvim" },
+  version = "^0.2.0",  -- v0.2.0 is the auto-core consumer release
+  dependencies = {
+    "yongjohnlee80/auto-core.nvim",  -- foundation library; hard dep as of v0.2.0
+    "folke/snacks.nvim",              -- sub-agent floats + navigation dock
+    "coder/claudecode.nvim",          -- soft dep: diff-review bridge (per-agent `diff_review = true`)
+  },
   opts = {},  -- agents/KB live in TOML — see below
 }
 ```
 
-`snacks.nvim` is required for the sub-agent floats and the navigation dock.
+### Dependencies
+
+- **[`auto-core.nvim`](https://github.com/yongjohnlee80/auto-core.nvim)
+  ^0.1.0** — foundation library for the AutoVim plugin family. Provides the
+  shared event bus, namespaced state store, panel singleton, ghost-buffer
+  float, and canonical task-status surface that auto-agents consumes as of
+  v0.2.0. Required.
+- **[`folke/snacks.nvim`](https://github.com/folke/snacks.nvim)** — required
+  for the sub-agent floats (slots 6–9) and the `:AutoAgentsDock` navigation
+  dock.
+- **[`coder/claudecode.nvim`](https://github.com/coder/claudecode.nvim)** —
+  *soft* dep, only loaded (`pcall`) when an agent is configured with
+  `diff_review = true` in TOML. Without it, opted-in agents fall back to
+  Claude Code's TUI confirm prompt instead of the editor diff split. If you
+  don't use the diff-review feature you can drop this entry from the spec.
+
+> **Caret pin (`^0.2.0`)**: future v0.2.x releases auto-include without a
+> manual bump. The `auto-core` family follows an additive-only minor-bump
+> rule — no v0.X.Y release renames, removes, or break-shapes any existing
+> public surface. Crossing to a future v0.3.0 requires bumping the caret
+> deliberately.
 
 **Agents are not configured in your lazy spec.** They live in TOML files
 under `<stdpath('config')>/.auto-agents-config/`:
