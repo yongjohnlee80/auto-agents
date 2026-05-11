@@ -250,3 +250,14 @@ end, {
   end,
   desc = "Manage auto-agents project config (init|import|remove|list|show)",
 })
+
+vim.api.nvim_create_user_command("AutoAgentsDiffQueue", function()
+  local ok, ui = pcall(require, "auto-agents.diff.ui")
+  if ok and ui then
+    ui.toggle()
+  else
+    vim.notify("AutoAgentsDiffQueue: diff UI not available", vim.log.levels.ERROR)
+  end
+end, {
+  desc = "Toggle the unified diff queue for reviewing agent proposals",
+})
