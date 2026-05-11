@@ -432,50 +432,18 @@ function M.setup(opts)
   M.state.config = config
   M.state.initialized = true
 
-  -- M6 diff-review bridge: if any agent opted in via `diff_review =
-  -- true` in TOML, start claudecode.nvim's WebSocket MCP server and
-  -- cache its port. Opted-in agents get `CLAUDE_CODE_SSE_PORT` at
-  -- spawn so Claude Code CLI's `openDiff` tool routes to the user's
-  -- editor as a diff split. Non-opted-in agents don't get the port,
-  -- so Claude Code CLI falls back to its built-in TUI confirm prompt
-  -- (no in-editor diff for them). Manager-routed approval flow is
-  -- on the roadmap (post-v0.1.0, alongside M5.C inter-agent comms).
-  -- claudecode.nvim is a soft dep; we error gracefully if missing.
+  -- M6 diff-review bridge: agents opted in via `diff_review =
+  -- true` in TOML will route their openDiff requests to our native
+  -- unified queue. (Full MCP server reintroduction is M7+).
   M.state.diff_review_enabled = false
   M.state.diff_review_port = nil
   for _, e in ipairs(config.agents.bootstrap) do
     if e.diff_review then M.state.diff_review_enabled = true; break end
   end
   if M.state.diff_review_enabled then
-    local ok, claudecode = pcall(require, "claudecode")
-    if not ok then
-      require("auto-agents.logger").warn("init",
-        "agent has diff_review=true but claudecode.nvim is not installed — "
-          .. "diff splits will be unavailable. Add `coder/claudecode.nvim` "
-          .. "to your plugin list.")
-    else
-      -- Use claudecode's defaults (vsplit layout). We replicate the
-      -- original autovim diff-review parity in our own autocmd hooks
-      -- below: a 1x1 ghost-buffer absorbs reflexive keystrokes for
-      -- ~500ms after the diff opens, then closes and returns focus to
-      -- the agent panel. Panel width is forcibly restored on every
-      -- diff transition since claudecode's resize math disagrees with
-      -- our clamped panel.percentage on wide screens.
-      pcall(claudecode.setup, (claudecode.state and claudecode.state.config) or {})
-      if not (claudecode.state and claudecode.state.server) then
-        local ok2, _err = pcall(claudecode.start, false)
-        if not ok2 then
-          require("auto-agents.logger").warn("init",
-            "claudecode.nvim server failed to start; diff env will be skipped")
-        end
-      end
-      if claudecode.state and claudecode.state.port then
-        M.state.diff_review_port = claudecode.state.port
-        require("auto-agents.logger").info("init",
-          "diff-review bridge ready on port " .. tostring(M.state.diff_review_port))
-      end
-      install_diff_parity_hooks()
-    end
+    require("auto-agents.logger").info("init",
+      "diff-review bridge enabled (native unified queue)")
+    install_diff_parity_hooks()
   end
 
   -- Editor-window-floor invariant. AutoVim's three-column layout
