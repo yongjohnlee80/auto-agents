@@ -434,16 +434,24 @@ function M.setup(opts)
 
   -- M6 diff-review bridge: agents opted in via `diff_review =
   -- true` in TOML will route their openDiff requests to our native
-  -- unified queue. (Full MCP server reintroduction is M7+).
+  -- unified queue via a first-party MCP bridge (SSE over HTTP).
   M.state.diff_review_enabled = false
   M.state.diff_review_port = nil
   for _, e in ipairs(config.agents.bootstrap) do
     if e.diff_review then M.state.diff_review_enabled = true; break end
   end
   if M.state.diff_review_enabled then
-    require("auto-agents.logger").info("init",
-      "diff-review bridge enabled (native unified queue)")
-    install_diff_parity_hooks()
+    local mcp = require("auto-agents.mcp.server")
+    local port = mcp.start()
+    if port then
+      M.state.diff_review_port = port
+      require("auto-agents.logger").info("init",
+        "diff-review bridge ready on port " .. tostring(port))
+      install_diff_parity_hooks()
+    else
+      require("auto-agents.logger").error("init",
+        "failed to start diff-review bridge (MCP server)")
+    end
   end
 
   -- Editor-window-floor invariant. AutoVim's three-column layout

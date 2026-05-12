@@ -22,110 +22,118 @@ local function open_native_diff(req)
     _mfloat = nil
   end
 
-  -- Load the original file
-  local old_path = req.file_path
-  local old_exists = vim.fn.filereadable(old_path) == 1
-  
-  -- Create a new tab or split based on configuration.
-  -- For now, let's open it in the current window and split.
-  vim.cmd("edit " .. vim.fn.fnameescape(old_path))
-  
-  if not old_exists then
-    -- It's a new file, make sure the buffer is empty
-    vim.api.nvim_buf_set_lines(0, 0, -1, false, {})
-  end
-  
-  local old_win = vim.api.nvim_get_current_win()
-  local old_buf = vim.api.nvim_get_current_buf()
-  
-  vim.cmd("diffthis")
-  
-  -- Create the proposed buffer
-  vim.cmd("vnew")
-  local new_win = vim.api.nvim_get_current_win()
-  local new_buf = vim.api.nvim_create_buf(false, true)
-  
-  -- Name the proposed buffer so it's clear
-  local new_name = req.agent_name .. " proposed: " .. vim.fn.fnamemodify(old_path, ":t")
-  vim.api.nvim_buf_set_name(new_buf, new_name)
-  
-  -- Set contents
-  local lines = vim.split(req.new_contents, "\n", { plain = true })
-  vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, lines)
-  
-  -- Configure the new buffer for saving
-  vim.bo[new_buf].buftype = "acwrite"
-  vim.bo[new_buf].bufhidden = "wipe"
-  vim.bo[new_buf].swapfile = false
-  
-  -- Copy filetype if possible
-  vim.bo[new_buf].filetype = vim.bo[old_buf].filetype
-  
-  vim.api.nvim_win_set_buf(new_win, new_buf)
-  vim.cmd("diffthis")
-  
-  -- Handle Save (:w)
-  vim.api.nvim_create_autocmd("BufWriteCmd", {
-    buffer = new_buf,
-    callback = function()
-      -- Save accepted changes
-      local final_lines = vim.api.nvim_buf_get_lines(new_buf, 0, -1, false)
-      local final_content = table.concat(final_lines, "\n")
-      
-      -- Also actually write the file to disk
-      local ok, err = pcall(function()
-        local f = io.open(old_path, "w")
-        if f then
-          f:write(final_content)
+  -- Finding 2: Resolve a safe editor window instead of using the current window
+  -- (which might be the auto-agents panel).
+  local floor = require("auto-agents.integrations.editor_floor")
+  local target_win = floor.find_editor_window() or floor.materialize_editor_scratch()
+
+  vim.api.nvim_win_call(target_win, function()
+    -- Load the original file
+    local old_path = req.file_path
+    local old_exists = vim.fn.filereadable(old_path) == 1
+    
+    vim.cmd("edit " .. vim.fn.fnameescape(old_path))
+    
+    if not old_exists then
+      -- It's a new file, make sure the buffer is empty
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, {})
+    end
+    
+    local old_win = vim.api.nvim_get_current_win()
+    local old_buf = vim.api.nvim_get_current_buf()
+    
+    vim.cmd("diffthis")
+    
+    -- Create the proposed buffer
+    vim.cmd("vnew")
+    local new_win = vim.api.nvim_get_current_win()
+    local new_buf = vim.api.nvim_create_buf(false, true)
+    
+    -- Name the proposed buffer so it's clear
+    local new_name = req.agent_name .. " proposed: " .. vim.fn.fnamemodify(old_path, ":t")
+    vim.api.nvim_buf_set_name(new_buf, new_name)
+    
+    -- Set contents
+    local lines = vim.split(req.new_contents, "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, lines)
+    
+    -- Configure the new buffer for saving
+    vim.bo[new_buf].buftype = "acwrite"
+    vim.bo[new_buf].bufhidden = "wipe"
+    vim.bo[new_buf].swapfile = false
+    
+    -- Copy filetype if possible
+    vim.bo[new_buf].filetype = vim.bo[old_buf].filetype
+    
+    vim.api.nvim_win_set_buf(new_win, new_buf)
+    vim.cmd("diffthis")
+    
+    -- Handle Save (:w)
+    vim.api.nvim_create_autocmd("BufWriteCmd", {
+      buffer = new_buf,
+      callback = function()
+        -- Save accepted changes
+        local final_lines = vim.api.nvim_buf_get_lines(new_buf, 0, -1, false)
+        local final_content = table.concat(final_lines, "\n")
+        
+        -- Finding 3: Also actually write the file to disk, with durable success check.
+        local write_ok, write_err = pcall(function()
+          local f, err = io.open(old_path, "w")
+          if not f then error(err) end
+          local _, werr = f:write(final_content)
+          if werr then 
+            f:close()
+            error(werr) 
+          end
           f:close()
+        end)
+        
+        if not write_ok then
+          vim.notify("Error saving file: " .. tostring(write_err), vim.log.levels.ERROR)
+          return false
         end
-      end)
-      
-      if not ok then
-        vim.notify("Error saving file: " .. tostring(err), vim.log.levels.ERROR)
-        return false
-      end
-      
-      -- Reload the old buffer
-      vim.api.nvim_buf_call(old_buf, function() vim.cmd("edit!") end)
-      
-      -- Notify the queue
-      queue.resolve(req.id, final_content)
-      
-      -- Clean up the split
-      pcall(vim.api.nvim_win_close, new_win, true)
-      
-      -- Remove diff mode from old window
-      if vim.api.nvim_win_is_valid(old_win) then
-        vim.api.nvim_win_call(old_win, function() vim.cmd("diffoff") end)
-      end
-      
-      -- Re-open float if there are more pending
-      if #queue.get_pending() > 0 then
-        vim.schedule(M.open)
-      end
-      
-      return true
-    end,
-    desc = "Save accepted agent diff",
-  })
-  
-  -- Handle Close (:q without save)
-  vim.api.nvim_create_autocmd({"BufDelete", "BufWipeout"}, {
-    buffer = new_buf,
-    callback = function()
-      -- If it's still pending, it means it wasn't resolved by BufWriteCmd
-      if queue.get(req.id) and queue.get(req.id).status == "pending" then
-        queue.reject(req.id)
-      end
-      
-      -- Clean up the old window's diff mode
-      if vim.api.nvim_win_is_valid(old_win) then
-        vim.api.nvim_win_call(old_win, function() vim.cmd("diffoff") end)
-      end
-    end,
-    desc = "Reject agent diff on close",
-  })
+        
+        -- Reload the old buffer
+        vim.api.nvim_buf_call(old_buf, function() vim.cmd("edit!") end)
+        
+        -- Notify the queue
+        queue.resolve(req.id, final_content)
+        
+        -- Clean up the split
+        pcall(vim.api.nvim_win_close, new_win, true)
+        
+        -- Remove diff mode from old window
+        if vim.api.nvim_win_is_valid(old_win) then
+          vim.api.nvim_win_call(old_win, function() vim.cmd("diffoff") end)
+        end
+        
+        -- Re-open float if there are more pending
+        if #queue.get_pending() > 0 then
+          vim.schedule(M.open)
+        end
+        
+        return true
+      end,
+      desc = "Save accepted agent diff",
+    })
+    
+    -- Handle Close (:q without save)
+    vim.api.nvim_create_autocmd({"BufDelete", "BufWipeout"}, {
+      buffer = new_buf,
+      callback = function()
+        -- If it's still pending, it means it wasn't resolved by BufWriteCmd
+        if queue.get(req.id) and queue.get(req.id).status == "pending" then
+          queue.reject(req.id)
+        end
+        
+        -- Clean up the old window's diff mode
+        if vim.api.nvim_win_is_valid(old_win) then
+          vim.api.nvim_win_call(old_win, function() vim.cmd("diffoff") end)
+        end
+      end,
+      desc = "Reject agent diff on close",
+    })
+  end)
 end
 
 local function set_buf_lines(buf, lines)
@@ -231,6 +239,11 @@ function M.open()
     initial_focus = "left",
     on_close = function()
       _mfloat = nil
+      -- Finding 5: unsubscribe from events on close
+      local ok_ev, events = pcall(require, "auto-core.events")
+      if ok_ev and events.unsubscribe then
+        events.unsubscribe("auto-agents:diff_queued", "auto_agents_diff_ui_refresh")
+      end
     end,
   })
   
@@ -267,12 +280,17 @@ function M.open()
     end)
   end
   
-  -- Setup autocmd to auto-refresh when events arrive
+  -- Finding 5: subscribe to events while open to auto-refresh
   local ok_ev, events = pcall(require, "auto-core.events")
   if ok_ev and events.subscribe then
-    -- Depending on how events.subscribe works in auto-core, we might need to handle cleanup.
-    -- For now, relying on render_left on demand if we subscribe.
-    -- To keep it simple, we just re-render when toggled or navigated.
+    events.subscribe("auto-agents:diff_queued", function()
+      vim.schedule(function()
+        if _mfloat and _mfloat:is_open() then
+          render_left()
+          update_preview()
+        end
+      end)
+    end, { id = "auto_agents_diff_ui_refresh" })
   end
 end
 
