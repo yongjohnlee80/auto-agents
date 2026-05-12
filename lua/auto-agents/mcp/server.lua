@@ -139,36 +139,130 @@ function M._process_buffer(client)
 
   local method, path = headers:match("^(%w+)%s+([^%s]+)%s+HTTP")
   
-  if method == "GET" and path == "/sse" then
+  if method == "GET" and (path == "/sse" or path == "/mcp") then
     -- Start SSE stream
     M.state.clients[client.id] = client
     client.response_started = true
     local response = "HTTP/1.1 200 OK\r\n" ..
                      "Content-Type: text/event-stream\r\n" ..
                      "Cache-Control: no-cache\r\n" ..
-                     "Connection: keep-alive\r\n\r\n"
+                     "Connection: keep-alive\r\n" ..
+                     "Mcp-Session-Id: " .. client.id .. "\r\n\r\n"
     client.tcp:write(response)
     -- Send initial connection event
     M._send_sse(client, { jsonrpc = "2.0", method = "notifications/initialized" })
     client.buffer = "" -- Clear buffer
-  elseif method == "POST" and path == "/message" then
+  elseif method == "POST" and (path == "/message" or path == "/mcp") then
     -- Handle JSON-RPC message from client
     local content_length = tonumber(headers:match("Content%-Length:%s+(%d+)"))
     if content_length and #body >= content_length then
       local json_payload = body:sub(1, content_length)
       local ok, msg = pcall(vim.json.decode, json_payload)
       if ok then
-        M._handle_jsonrpc(client, msg)
+        if path == "/mcp" then
+          -- Streamable HTTP: Handle and respond in-band if it's a request
+          M._handle_streamable_post(client, msg)
+        else
+          -- Legacy /message: Respond via SSE
+          M._handle_jsonrpc(client, msg)
+          -- Send 202 Accepted
+          client.tcp:write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
+          client.tcp:close() -- Client closes after POST
+        end
+      else
+        client.tcp:write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+        client.tcp:close()
       end
-      -- Send 202 Accepted
-      client.tcp:write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
-      client.tcp:close() -- Client closes after POST
     end
   else
     -- Unsupported
     client.tcp:write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
     client.tcp:close()
   end
+end
+
+--- Handle a POST to the Streamable HTTP endpoint
+--- @param client MCPSSEClient
+--- @param msg table
+function M._handle_streamable_post(client, msg)
+  if not msg.id then
+    -- It's a notification, return 202
+    M._handle_jsonrpc(client, msg)
+    client.tcp:write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
+    client.tcp:close()
+    return
+  end
+
+  -- It's a request, we need to handle it and return the result in the body.
+  -- We'll reuse _handle_jsonrpc but we need a way to capture the response.
+  -- For now, we'll implement a simplified version.
+  if msg.method == "initialize" then
+    local response = {
+      jsonrpc = "2.0",
+      id = msg.id,
+      result = {
+        protocolVersion = "2024-11-05",
+        capabilities = { tools = {} },
+        serverInfo = { name = "auto-agents-mcp", version = "0.1.0" }
+      }
+    }
+    M._send_http_json(client, 200, response)
+  elseif msg.method == "tools/list" then
+    local tool_list = {}
+    for name, t in pairs(M.state.tools) do
+      table.insert(tool_list, {
+        name = name,
+        description = t.schema.description,
+        inputSchema = t.schema.inputSchema,
+      })
+    end
+    M._send_http_json(client, 200, { jsonrpc = "2.0", id = msg.id, result = { tools = tool_list } })
+  elseif msg.method == "tools/call" then
+    local tool_name = msg.params and msg.params.name
+    local t = M.state.tools[tool_name]
+    if t then
+      coroutine.wrap(function()
+        local args = msg.params.arguments or {}
+        local ok, result = pcall(t.handler, args)
+        if ok then
+          M._send_http_json(client, 200, { jsonrpc = "2.0", id = msg.id, result = result })
+        else
+          M._send_http_json(client, 200, {
+            jsonrpc = "2.0",
+            id = msg.id,
+            error = { code = -32603, message = "Internal error", data = tostring(result) }
+          })
+        end
+      end)()
+    else
+      M._send_http_json(client, 200, {
+        jsonrpc = "2.0",
+        id = msg.id,
+        error = { code = -32601, message = "Tool not found: " .. tostring(tool_name) }
+      })
+    end
+  else
+    M._send_http_json(client, 200, {
+      jsonrpc = "2.0",
+      id = msg.id,
+      error = { code = -32601, message = "Method not found: " .. tostring(msg.method) }
+    })
+  end
+end
+
+--- Send a JSON response over HTTP and close the connection
+--- @param client MCPSSEClient
+--- @param status number
+--- @param msg table
+function M._send_http_json(client, status, msg)
+  local json = vim.json.encode(msg)
+  local status_text = status == 200 and "200 OK" or (status == 202 and "202 Accepted" or "500 Internal Server Error")
+  local response = string.format(
+    "HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+    status_text, #json, json
+  )
+  client.tcp:write(response)
+  client.tcp:close()
 end
 
 --- Send a JSON-RPC message over SSE

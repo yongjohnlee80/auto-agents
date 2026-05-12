@@ -233,8 +233,8 @@ function M.agent(mode, slot)
         if existing and existing.diff_review ~= nil then
           return existing.diff_review and "y" or "N"
         end
-        -- Default y for most coding agents
-        local coding_kinds = { claude = true, codex = true, gemini = true, junie = true }
+        -- Default y for agents with a working MCP consumption path
+        local coding_kinds = { claude = true, codex = true }
         return coding_kinds[values.kind] and "y" or "N"
       end,
       parse = function(v)
