@@ -344,10 +344,11 @@ N for the rest).
   editor (left current, right proposed). You can edit the proposed
   side manually before accepting; `:w` on the proposed buffer
   accepts and writes the file, closing the diff rejects.
-  Implemented by injecting `ENABLE_IDE_INTEGRATION=true`,
-  `FORCE_CODE_TERMINAL=true`, and `CLAUDE_CODE_SSE_PORT=<port>` at
-  spawn so the agent's `openDiff` tool routes to our internal MCP
-  bridge (SSE over HTTP).
+  Implemented by injecting `AUTO_AGENTS_IDE_INTEGRATION=true`,
+  `AUTO_AGENTS_MCP_PORT=<port>`, and `AUTO_AGENTS_MCP_URL=<url>`
+  at spawn so the agent's `openDiff` tool routes to our internal MCP
+  bridge (SSE over HTTP). Claude Code agents also receive legacy
+  `CLAUDE_CODE_SSE_PORT` for compatibility.
 
 - **`diff_review = false`** — no MCP env injection. Claude Code CLI
   falls back to its built-in TUI confirm prompt **inside that agent's

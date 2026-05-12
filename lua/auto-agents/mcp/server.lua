@@ -1,5 +1,5 @@
 --- Minimal first-party MCP server for auto-agents (SSE over HTTP)
---- Designed for compatibility with Claude Code and other MCP-aware agents.
+--- Designed for compatibility with standard MCP clients (Claude Code, etc.).
 ---
 --- @module 'auto-agents.mcp.server'
 
@@ -11,12 +11,12 @@ local logger = require("auto-agents.logger")
 --- @field server any|nil The TCP server handle (libuv)
 --- @field port number|nil The port the server is listening on
 --- @field clients table<any, MCPSSEClient> Connected SSE clients
---- @field handlers table<string, function> Registered tool/method handlers
+--- @field tools table<string, table> Registered tools { schema, handler }
 M.state = {
   server = nil,
   port = nil,
   clients = {},
-  handlers = {},
+  tools = {},
 }
 
 --- @class MCPSSEClient
@@ -87,19 +87,10 @@ end
 --- Register a tool handler
 --- @param tool table { name, schema, handler, requires_coroutine? }
 function M.register_tool(tool)
-  M.state.handlers["tools/call/" .. tool.name] = tool.handler
-  -- Also register the tool discovery handler
-  M.state.handlers["tools/list"] = function()
-    return {
-      tools = {
-        {
-          name = tool.name,
-          description = tool.schema.description,
-          inputSchema = tool.schema.inputSchema,
-        }
-      }
-    }
-  end
+  M.state.tools[tool.name] = {
+    schema = tool.schema,
+    handler = tool.handler,
+  }
 end
 
 --- Handle a new TCP connection
@@ -193,12 +184,35 @@ end
 --- @param client any (Not used for response since it's via SSE to all or specific)
 --- @param msg table
 function M._handle_jsonrpc(_, msg)
-  if msg.method then
-    local handler = M.state.handlers[msg.method]
-    if handler then
+  if msg.method == "initialize" then
+    M._broadcast_response(msg.id, {
+      protocolVersion = "2024-11-05",
+      capabilities = {
+        tools = {},
+      },
+      serverInfo = {
+        name = "auto-agents-mcp",
+        version = "0.1.0",
+      }
+    })
+  elseif msg.method == "tools/list" then
+    local tool_list = {}
+    for name, t in pairs(M.state.tools) do
+      table.insert(tool_list, {
+        name = name,
+        description = t.schema.description,
+        inputSchema = t.schema.inputSchema,
+      })
+    end
+    M._broadcast_response(msg.id, { tools = tool_list })
+  elseif msg.method == "tools/call" then
+    local tool_name = msg.params and msg.params.name
+    local t = M.state.tools[tool_name]
+    if t then
       -- Run handler in a coroutine
       coroutine.wrap(function()
-        local ok, result = pcall(handler, msg.params or {})
+        local args = msg.params.arguments or {}
+        local ok, result = pcall(t.handler, args)
         if ok then
           M._broadcast_response(msg.id, result)
         else
@@ -211,8 +225,11 @@ function M._handle_jsonrpc(_, msg)
         end
       end)()
     else
-      M._broadcast_error(msg.id, -32601, "Method not found: " .. msg.method)
+      M._broadcast_error(msg.id, -32601, "Tool not found: " .. tostring(tool_name))
     end
+  elseif msg.method then
+    -- Generic handler fallback (Finding 2)
+    M._broadcast_error(msg.id, -32601, "Method not found: " .. msg.method)
   end
 end
 

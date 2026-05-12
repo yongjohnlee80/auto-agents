@@ -42,7 +42,44 @@ ok("server started on port", type(port) == "number" and port > 0)
 mcp.stop()
 ok("server stopped", mcp.state.server == nil)
 
-print("\n[2] SSE Connection & openDiff Tool")
+print("\n[2] Standard MCP Handshake (initialize)")
+port = mcp.start()
+local client_init = vim.loop.new_tcp()
+local init_received = false
+client_init:connect("127.0.0.1", port, function(err)
+  if err then return end
+  client_init:write("GET /sse HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+  client_init:read_start(function(_, data)
+    if not data then return end
+    if data:find("notifications/initialized") then
+      local payload = vim.json.encode({
+        jsonrpc = "2.0",
+        id = "init-test",
+        method = "initialize",
+        params = { protocolVersion = "2024-11-05" }
+      })
+      local post = vim.loop.new_tcp()
+      post:connect("127.0.0.1", port, function()
+        post:write("POST /message HTTP/1.1\r\nContent-Length: " .. #payload .. "\r\n\r\n" .. payload, function() post:close() end)
+      end)
+    end
+    if data:find("auto%-agents%-mcp") then
+      init_received = true
+    end
+  end)
+end)
+
+-- Wait for async operations
+local start_init = vim.loop.now()
+while not init_received and (vim.loop.now() - start_init < 2000) do
+  vim.wait(100)
+end
+
+ok("MCP initialize handshake successful", init_received)
+client_init:close()
+mcp.stop()
+
+print("\n[3] Standard MCP tools/call (openDiff)")
 port = mcp.start()
 queue.clear()
 
@@ -51,10 +88,7 @@ local sse_connected = false
 local tool_call_received = false
 
 client:connect("127.0.0.1", port, function(err)
-  if err then
-    print("  FAIL  connect error: " .. err)
-    return
-  end
+  if err then return end
 
   -- Perform GET /sse
   client:write("GET /sse HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
@@ -67,19 +101,21 @@ client:connect("127.0.0.1", port, function(err)
     end
 
     if data:find("notifications/initialized") then
-      -- Now perform POST /message to call openDiff
-      local params = {
-        old_file_path = "/tmp/old.txt",
-        new_file_path = "/tmp/new.txt",
-        new_file_contents = "new content",
-        tab_name = "test-tab",
-        _auto_agents_name = "tester"
-      }
+      -- Finding 2: Standard MCP tools/call shape
       local payload = vim.json.encode({
         jsonrpc = "2.0",
         id = 1,
-        method = "tools/call/openDiff",
-        params = params
+        method = "tools/call",
+        params = {
+          name = "openDiff",
+          arguments = {
+            old_file_path = "/tmp/old.txt",
+            new_file_path = "/tmp/new.txt",
+            new_file_contents = "new standard content",
+            tab_name = "test-tab",
+            _auto_agents_name = "tester-standard"
+          }
+        }
       })
       
       local post_client = vim.loop.new_tcp()
@@ -109,8 +145,8 @@ while (not sse_connected or #queue.get_pending() == 0) and (vim.loop.now() - sta
 end
 
 ok("SSE connected", sse_connected)
-ok("diff enqueued via tool call", #queue.get_pending() == 1)
-ok("queued item has correct agent", queue.get_pending()[1].agent_name == "tester")
+ok("diff enqueued via standard tools/call", #queue.get_pending() == 1)
+ok("queued item has correct content", queue.get_pending()[1].new_contents == "new standard content")
 
 -- Cleanup
 client:close()

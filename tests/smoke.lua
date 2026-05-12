@@ -6,16 +6,30 @@
 -- terminals aren't actually spawned (no real CLI to drive); we
 -- exercise admin-slot mounting plus the winfixbuf contract.
 
+-- Find our own path to derive project roots (Finding 5)
+local script_path = debug.getinfo(1).source:sub(2)
+local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
+local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
+
+-- Standard worktree layout: sibling auto-core.nvim/main
+local core_root = plugins_root .. "/auto-core.nvim/main"
+if vim.fn.isdirectory(core_root) == 0 then
+  -- Fallback to plain repo if no worktree
+  core_root = plugins_root .. "/auto-core.nvim"
+end
+
 local LAZY = vim.fn.expand("~/.local/share/nvim/lazy")
 for _, p in ipairs({
-  "/home/johno/Source/Projects/nvim-plugins/auto-agents.nvim/main",
+  project_root,
   -- auto-core is now a hard dep of auto-agents (v0.2.0 migration).
   -- The logger / state / panel surfaces it provides are required at
   -- module load.
-  "/home/johno/Source/Projects/nvim-plugins/auto-core.nvim/main",
+  core_root,
   LAZY .. "/plenary.nvim",
 }) do
-  vim.opt.runtimepath:prepend(p)
+  if vim.fn.isdirectory(p) == 1 then
+    vim.opt.runtimepath:prepend(p)
+  end
 end
 
 vim.o.columns = 200
