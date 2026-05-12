@@ -53,7 +53,6 @@ without losing the main view.
   dependencies = {
     "yongjohnlee80/auto-core.nvim",  -- foundation library; hard dep as of v0.2.0
     "folke/snacks.nvim",              -- sub-agent floats + navigation dock
-    "coder/claudecode.nvim",          -- soft dep: diff-review bridge (per-agent `diff_review = true`)
   },
   opts = {},  -- agents/KB live in TOML — see below
 }
@@ -69,11 +68,6 @@ without losing the main view.
 - **[`folke/snacks.nvim`](https://github.com/folke/snacks.nvim)** — required
   for the sub-agent floats (slots 6–9) and the `:AutoAgentsDock` navigation
   dock.
-- **[`coder/claudecode.nvim`](https://github.com/coder/claudecode.nvim)** —
-  *soft* dep, only loaded (`pcall`) when an agent is configured with
-  `diff_review = true` in TOML. Without it, opted-in agents fall back to
-  Claude Code's TUI confirm prompt instead of the editor diff split. If you
-  don't use the diff-review feature you can drop this entry from the spec.
 
 > **Caret pin (`^0.2.0`)**: future v0.2.x releases auto-include without a
 > manual bump. The `auto-core` family follows an additive-only minor-bump

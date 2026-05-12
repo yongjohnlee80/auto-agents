@@ -233,9 +233,10 @@ function M.agent(mode, slot)
         if existing and existing.diff_review ~= nil then
           return existing.diff_review and "y" or "N"
         end
-        return values.kind == "claude" and "y" or "N"
+        -- Default y for most coding agents
+        local coding_kinds = { claude = true, codex = true, gemini = true, junie = true }
+        return coding_kinds[values.kind] and "y" or "N"
       end,
-      skip = function(values) return values.kind ~= "claude" end,
       parse = function(v)
         if type(v) == "boolean" then return v end
         v = (v or ""):lower()

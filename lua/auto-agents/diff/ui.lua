@@ -9,6 +9,9 @@ local queue = require("auto-agents.diff.queue")
 --- @type AutoCoreMultiFloat?
 local _mfloat = nil
 
+--- @type integer|string|nil
+local _event_handle = nil
+
 --- @type AutoAgentsDiffRequest[]
 local _render_list = {}
 local _selected_idx = 1
@@ -241,8 +244,9 @@ function M.open()
       _mfloat = nil
       -- Finding 5: unsubscribe from events on close
       local ok_ev, events = pcall(require, "auto-core.events")
-      if ok_ev and events.unsubscribe then
-        events.unsubscribe("auto-agents:diff_queued", "auto_agents_diff_ui_refresh")
+      if ok_ev and events.unsubscribe and _event_handle then
+        events.unsubscribe(_event_handle)
+        _event_handle = nil
       end
     end,
   })
@@ -283,7 +287,7 @@ function M.open()
   -- Finding 5: subscribe to events while open to auto-refresh
   local ok_ev, events = pcall(require, "auto-core.events")
   if ok_ev and events.subscribe then
-    events.subscribe("auto-agents:diff_queued", function()
+    _event_handle = events.subscribe("auto-agents:diff_queued", function()
       vim.schedule(function()
         if _mfloat and _mfloat:is_open() then
           render_left()

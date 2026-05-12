@@ -626,15 +626,22 @@ local function build_agent_env(spec, cwd)
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
   for k, v in pairs(resources_env) do env[k] = v end
 
-  -- M6 diff-review bridge: opted-in agents get the env vars Claude
-  -- Code CLI uses to find + authenticate to claudecode.nvim's MCP
-  -- server. The headline tool is `openDiff` — proposed edits open
-  -- as a reviewable diff split in the user's editor. Without the
-  -- port, Claude Code CLI falls back to its TUI confirm prompt.
+  -- M6 diff-review bridge: opted-in agents get the env vars needed
+  -- to find + authenticate to our internal MCP bridge.
+  -- Finding 1: use agent-generic env vars + Claude compatibility.
   if spec.diff_review and M.state.diff_review_port then
+    local port_str = tostring(M.state.diff_review_port)
+    local url = "http://127.0.0.1:" .. port_str .. "/sse"
+    
+    -- Generic contract
+    env.AUTO_AGENTS_IDE_INTEGRATION = "true"
+    env.AUTO_AGENTS_MCP_PORT         = port_str
+    env.AUTO_AGENTS_MCP_URL          = url
+    
+    -- Claude compatibility layer
     env.ENABLE_IDE_INTEGRATION  = "true"
     env.FORCE_CODE_TERMINAL     = "true"
-    env.CLAUDE_CODE_SSE_PORT    = tostring(M.state.diff_review_port)
+    env.CLAUDE_CODE_SSE_PORT    = port_str
   end
 
   -- M6 KB-aware launch: write the per-kind instruction file (idempotent)

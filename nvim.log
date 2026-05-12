@@ -1,0 +1,8 @@
+WRN 2026-05-12T21:32:50.526 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/BbuoLE/nvim.19563.0
+WRN 2026-05-12T21:32:50.631 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/k9bwFf/nvim.19567.0
+WRN 2026-05-12T21:32:57.659 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/Bn3mou/nvim.19577.0
+WRN 2026-05-12T21:32:57.799 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/1S4gO7/nvim.19582.0
+WRN 2026-05-12T22:04:16.145 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/aWPsuq/nvim.24938.0
+WRN 2026-05-12T22:04:16.213 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/a1tbtY/nvim.24940.0
+WRN 2026-05-12T22:04:16.213 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/gGXfcv/nvim.24941.0
+WRN 2026-05-12T22:04:23.820 c/nvim.1280.0 server_start:197: Failed to start server: operation not permitted: /var/folders/04/pll8hs8j4pz_jthxg443nlvc0000gn/T/nvim.yongsunglee/CTtzj4/nvim.24957.0
