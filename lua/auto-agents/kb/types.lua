@@ -20,7 +20,10 @@ local M = {}
 ---@class AutoAgentsKbLayout
 ---@field dirs string[]                 -- subdirs to mkdir under kb_root
 ---@field raw_subdirs string[]          -- subdirs under raw/ (also mkdir'd)
----@field shared_subdirs string[]       -- subdirs under shared/
+---@field shared_subdirs string[]|nil   -- subdirs under shared/ (legacy; non-coding types only)
+---@field wiki_subdirs string[]|nil     -- subdirs under wiki/ (coding type)
+---@field project_subdirs string[]|nil  -- subdirs under projects/ (coding type)
+---@field extra_dirs string[]|nil       -- additional top-level dirs (e.g. adr, _templates)
 ---@field description string            -- one-line type purpose
 
 ---Built-in types. Order matters — used as the default presentation
@@ -54,14 +57,26 @@ end
 ---in the per-type subdirectories.
 local LAYOUTS = {
   coding = {
-    description = "Coding project — conventions, ADRs, review playbooks (default for nvim users)",
+    description = "Coding project — wiki/ + projects/ + ADRs + code-reviews (default for nvim users)",
     raw_subdirs = { "specs", "issues", "transcripts" },
-    shared_subdirs = {
-      "conventions",
-      "adrs",
-      "playbooks",
-      "glossary",
+    -- No shared/. Durable knowledge lives in wiki/; operational state in projects/.
+    wiki_subdirs = {
+      "sources",
+      "entities",
+      "concepts",
+      "topics",
+      "operations",
       "synthesis",
+      "code-review",
+    },
+    project_subdirs = {
+      "coding-rules",
+    },
+    extra_dirs = {
+      "adr",
+      "_templates",
+      "archive",
+      "docs/agent-schema",
     },
   },
   wiki = {
@@ -107,20 +122,49 @@ local LAYOUTS = {
 }
 
 ---Layout for a given type. Falls back to "general" if unknown.
+---
+---Coding type uses the new wiki/ + projects/ layout. Other types
+---retain the legacy shared/ tree for backward compat.
 ---@param type string|nil
 ---@return AutoAgentsKbLayout
 function M.layout(type)
   local key = type or "general"
   local layout = LAYOUTS[key] or LAYOUTS.general
+
+  local dirs = { "raw", "agents" }
+  for _, d in ipairs(layout.raw_subdirs or {}) do
+    table.insert(dirs, "raw/" .. d)
+  end
+  if layout.shared_subdirs then
+    table.insert(dirs, "shared")
+    for _, d in ipairs(layout.shared_subdirs) do
+      table.insert(dirs, "shared/" .. d)
+    end
+  end
+  if layout.wiki_subdirs then
+    table.insert(dirs, "wiki")
+    for _, d in ipairs(layout.wiki_subdirs) do
+      table.insert(dirs, "wiki/" .. d)
+    end
+  end
+  if layout.project_subdirs then
+    table.insert(dirs, "projects")
+    for _, d in ipairs(layout.project_subdirs) do
+      table.insert(dirs, "projects/" .. d)
+    end
+  end
+  for _, d in ipairs(layout.extra_dirs or {}) do
+    table.insert(dirs, d)
+  end
+
   return {
     description = layout.description,
     raw_subdirs = layout.raw_subdirs,
     shared_subdirs = layout.shared_subdirs,
-    dirs = vim.list_extend(
-      vim.list_extend({ "raw", "shared", "agents" },
-        vim.tbl_map(function(d) return "raw/" .. d end, layout.raw_subdirs)),
-      vim.tbl_map(function(d) return "shared/" .. d end, layout.shared_subdirs)
-    ),
+    wiki_subdirs = layout.wiki_subdirs,
+    project_subdirs = layout.project_subdirs,
+    extra_dirs = layout.extra_dirs,
+    dirs = dirs,
   }
 end
 

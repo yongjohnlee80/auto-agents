@@ -1,13 +1,15 @@
 ---Knowledge-base path resolution + scaffolding (D4/D16, M4 chunk A).
 ---
----Default layout (D16):
+---Layout is type-specific (see `auto-agents.kb.types`). The coding
+---type uses wiki/ + projects/ + adr/ + _templates/ + docs/agent-schema/;
+---other types still use the legacy shared/ tree.
+---
+---Common to every type:
 ---  <kb_root>/
----  ├── shared/
----  │   ├── notes/
----  │   └── synthesis/
----  ├── agents/
----  │   └── <agent-name>/
----  └── log.md
+---  ├── AGENTS.md / CLAUDE.md / GEMINI.md
+---  ├── index.md, log.md
+---  ├── raw/
+---  └── agents/<agent-name>/
 ---
 ---kb_root resolution.
 ---
@@ -100,7 +102,7 @@ function M.ensure_layout(root, opts)
         "deletion is reserved for accidentally-clipped, wrong, or sensitive",
         "material — and citing pages must be scrubbed at the same time.",
         "",
-        "Synthesis goes in `shared/`, not here.",
+        "Synthesis goes in `wiki/` (coding type) or `shared/` (other types), not here.",
         "",
       }, "\n"))
       f:close()
