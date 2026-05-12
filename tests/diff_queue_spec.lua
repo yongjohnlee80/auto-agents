@@ -1,13 +1,27 @@
 -- Headless tests for auto-agents.diff.queue. Run with:
 --   nvim --headless -u NONE -l tests/diff_queue_spec.lua
 
+-- Find our own path to derive project roots (Finding 4)
+local script_path = debug.getinfo(1).source:sub(2)
+local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
+local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
+
+-- Standard worktree layout: sibling auto-core.nvim/main
+local core_root = plugins_root .. "/auto-core.nvim/main"
+if vim.fn.isdirectory(core_root) == 0 then
+  -- Fallback to plain repo if no worktree
+  core_root = plugins_root .. "/auto-core.nvim"
+end
+
 local LAZY = vim.fn.expand("~/.local/share/nvim/lazy")
 for _, p in ipairs({
-  "/home/johno/Source/Projects/nvim-plugins/auto-agents.nvim/unified-diff-queue",
-  "/home/johno/Source/Projects/nvim-plugins/auto-core.nvim",
+  project_root,
+  core_root,
   LAZY .. "/plenary.nvim",
 }) do
-  vim.opt.runtimepath:prepend(p)
+  if vim.fn.isdirectory(p) == 1 then
+    vim.opt.runtimepath:prepend(p)
+  end
 end
 
 local fail_count = 0

@@ -38,7 +38,7 @@ function M.enqueue(req)
     new_contents = req.new_contents,
     callback = req.callback,
     status = "pending",
-    created_at = vim.fn.localtime(),
+    created_at = os.time(),
   }
 
   table.insert(_queue, request)

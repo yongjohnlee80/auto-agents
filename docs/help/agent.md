@@ -339,13 +339,15 @@ in your editor?"** on add/edit (default y for `kind = "claude"`,
 N for the rest).
 
 - **`diff_review = true`** — when this agent proposes a file edit,
-  a diff split opens in your editor (left current, right proposed).
-  You can edit the proposed side manually before accepting; `:w` on
-  the proposed buffer accepts, closing the diff rejects. Implemented
-  by injecting `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`,
-  and `CLAUDE_CODE_SSE_PORT=<port>` at spawn so Claude Code CLI's
-  `openDiff` tool routes to claudecode.nvim's MCP server (which we
-  start on demand and treat as a soft dependency).
+  it lands in the **Unified Diff Queue** (`:AutoAgentsDiffQueue`).
+  Opening an item from the queue opens a native diff split in your
+  editor (left current, right proposed). You can edit the proposed
+  side manually before accepting; `:w` on the proposed buffer
+  accepts and writes the file, closing the diff rejects.
+  Implemented by injecting `ENABLE_IDE_INTEGRATION=true`,
+  `FORCE_CODE_TERMINAL=true`, and `CLAUDE_CODE_SSE_PORT=<port>` at
+  spawn so the agent's `openDiff` tool routes to our internal MCP
+  bridge (SSE over HTTP).
 
 - **`diff_review = false`** — no MCP env injection. Claude Code CLI
   falls back to its built-in TUI confirm prompt **inside that agent's
@@ -356,9 +358,6 @@ Typical setup: one main coding agent (jarvis in slot 1) has
 `diff_review = true`; workers in other slots have it `false` so their
 edits stay scoped to their own terminals. To watch a sub-agent's
 proposed edits, focus its slot.
-
-Requires `coder/claudecode.nvim` installed. Without it, the plugin
-logs a warning and skips env injection — the agent still runs.
 
 ### Roadmap: manager-routed approval
 

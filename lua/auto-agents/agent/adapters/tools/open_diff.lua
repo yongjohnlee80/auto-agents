@@ -60,12 +60,10 @@ local function handler(params)
 
   -- Get old file contents
   local old_contents = ""
-  if vim.fn.filereadable(params.old_file_path) == 1 then
-    local f = io.open(params.old_file_path, "r")
-    if f then
-      old_contents = f:read("*a")
-      f:close()
-    end
+  local f_read = io.open(params.old_file_path, "r")
+  if f_read then
+    old_contents = f_read:read("*a")
+    f_read:close()
   end
 
   -- Determine agent name (can be enhanced to pass context if needed)

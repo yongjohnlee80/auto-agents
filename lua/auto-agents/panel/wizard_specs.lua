@@ -220,10 +220,10 @@ function M.agent(mode, slot)
       end,
     },
     {
-      -- diff_review (claudecode.nvim bridge). When y, the agent gets
-      -- CLAUDE_CODE_SSE_PORT at spawn so Claude Code CLI's openDiff
+      -- diff_review (internal MCP bridge). When y, the agent gets
+      -- CLAUDE_CODE_SSE_PORT at spawn so the agent's openDiff
       -- tool routes to a diff split in your editor for review/edit/
-      -- accept. When N, Claude Code falls back to its TUI confirm
+      -- accept. When N, the agent falls back to its TUI confirm
       -- prompt — useful for sub-agents whose diffs you don't want
       -- popping at you alongside your main coding agent's.
       field = "diff_review",
