@@ -2,6 +2,47 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.2] — 2026-05-11 — coding KB seed: revert to shared/ + code-review convention
+
+Course-correction for v0.2.1's `wiki/` + `projects/` coding-KB layout.
+After live use the new schema's higher overhead (more bins to
+disambiguate, three frontmatter shapes, four-file schema contract,
+self-inconsistency around `projects/` being "mutable state" while
+hosting binding code rules) outweighed the structural payoff. New
+coding KBs now scaffold the original `shared/`-based layout, with one
+addition codified from production use.
+
+### Changed
+
+- **`kb-seeds/coding.md`** — canonical schema reverted to
+  `shared/{conventions,adrs,playbooks,glossary,sources,synthesis}` +
+  `raw/{specs,issues,transcripts}` + `agents/<name>/{tasks,reviews,scratch}`.
+- **`lua/auto-agents/kb/types.lua`** — `coding` LAYOUT now uses
+  `shared_subdirs` + `extra_dirs = { "_templates", "archive" }`.
+  Dropped `wiki_subdirs` / `project_subdirs` (no other type used
+  them); `layout()` simplified accordingly.
+- **`lua/auto-agents/kb/init.lua`** — header comment + `raw/README.md`
+  scaffold text updated to reflect the unified shared/ skeleton across
+  all types.
+
+### Added (new convention)
+
+- **Hard Rule #4 / "Review a PR" workflow** in the coding seed now
+  designates `agents/<reviewer-name>/reviews/` as the **canonical**
+  home for code reviews (drafts AND finals), attributed to the
+  reviewing agent. Filename pattern:
+  `YYYY-MM-DD-<repo>-<branch>-pr<N>-review.md`. Reviews stay reviewer
+  perspective; generalizable findings get promoted into
+  `shared/conventions/` or new `shared/adrs/` as separate changes.
+  `log.md` line format: `review | <reviewer> | <repo>#<pr>`.
+
+### Fixed
+
+- **`tests/smoke.lua`** — rtp prepends updated to the bare-clone
+  worktree paths (`<plugin>/main/`) so smoke runs cleanly after the
+  per-feature-worktree migration. 84/85 pass (1 pre-existing
+  unrelated slot-DSL assertion failure).
+
 ## [v0.2.0] — 2026-05-10 — auto-core consumer
 
 First release on top of [`auto-core.nvim`](https://github.com/yongjohnlee80/auto-core.nvim)

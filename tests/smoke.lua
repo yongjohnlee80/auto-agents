@@ -8,11 +8,11 @@
 
 local LAZY = vim.fn.expand("~/.local/share/nvim/lazy")
 for _, p in ipairs({
-  "/home/johno/Source/Projects/nvim-plugins/auto-agents.nvim",
+  "/home/johno/Source/Projects/nvim-plugins/auto-agents.nvim/main",
   -- auto-core is now a hard dep of auto-agents (v0.2.0 migration).
   -- The logger / state / panel surfaces it provides are required at
   -- module load.
-  "/home/johno/Source/Projects/nvim-plugins/auto-core.nvim",
+  "/home/johno/Source/Projects/nvim-plugins/auto-core.nvim/main",
   LAZY .. "/plenary.nvim",
 }) do
   vim.opt.runtimepath:prepend(p)

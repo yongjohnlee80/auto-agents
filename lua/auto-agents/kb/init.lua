@@ -1,14 +1,16 @@
 ---Knowledge-base path resolution + scaffolding (D4/D16, M4 chunk A).
 ---
----Layout is type-specific (see `auto-agents.kb.types`). The coding
----type uses wiki/ + projects/ + adr/ + _templates/ + docs/agent-schema/;
----other types still use the legacy shared/ tree.
+---Layout is type-specific (see `auto-agents.kb.types`). Every type
+---uses the same skeleton — `raw/`, `shared/<subdirs>/`, `agents/` —
+---and may declare additional top-level `extra_dirs` (e.g. coding's
+---`_templates/`, `archive/`).
 ---
 ---Common to every type:
 ---  <kb_root>/
 ---  ├── AGENTS.md / CLAUDE.md / GEMINI.md
 ---  ├── index.md, log.md
 ---  ├── raw/
+---  ├── shared/<type-specific subdirs>/
 ---  └── agents/<agent-name>/
 ---
 ---kb_root resolution.
@@ -102,7 +104,7 @@ function M.ensure_layout(root, opts)
         "deletion is reserved for accidentally-clipped, wrong, or sensitive",
         "material — and citing pages must be scrubbed at the same time.",
         "",
-        "Synthesis goes in `wiki/` (coding type) or `shared/` (other types), not here.",
+        "Synthesis goes in `shared/`, not here.",
         "",
       }, "\n"))
       f:close()
