@@ -631,14 +631,14 @@ local function build_agent_env(spec, cwd)
   -- Finding 1: use agent-generic env vars + Claude compatibility.
   if spec.diff_review and M.state.diff_review_port then
     local port_str = tostring(M.state.diff_review_port)
-    local url = "http://127.0.0.1:" .. port_str .. "/sse"
+    local url = "http://127.0.0.1:" .. port_str .. "/mcp"
     
     -- Generic contract
     env.AUTO_AGENTS_IDE_INTEGRATION = "true"
     env.AUTO_AGENTS_MCP_PORT         = port_str
     env.AUTO_AGENTS_MCP_URL          = url
     
-    -- Claude compatibility layer
+    -- Claude compatibility layer (Legacy SSE)
     env.ENABLE_IDE_INTEGRATION  = "true"
     env.FORCE_CODE_TERMINAL     = "true"
     env.CLAUDE_CODE_SSE_PORT    = port_str

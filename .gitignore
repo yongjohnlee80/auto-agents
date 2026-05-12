@@ -8,11 +8,16 @@
 # Auto-created by the plugin if smoke-tested in this repo's own cwd.
 .auto-agents/
 .auto-agents-config/
-# Per-project CLAUDE.md is auto-injected by auto-agents into the agent's
-# cwd. When the plugin is developed in-place inside this repo, that
-# CLAUDE.md lands here — it's environment-specific and not part of the
-# release artifact.
+# Per-project CLAUDE.md/AGENTS.md/GEMINI.md is auto-injected by auto-agents
+# into the agent's cwd. When the plugin is developed in-place inside
+# this repo, these land here — they are environment-specific and not
+# part of the release artifact.
 CLAUDE.md
+AGENTS.md
+GEMINI.md
+
+# Logs
+nvim.log
 
 # Design notes — kept locally for reference, not part of the release artifact.
 PLAN.md

@@ -152,6 +152,48 @@ ok("queued item has correct content", queue.get_pending()[1].new_contents == "ne
 client:close()
 mcp.stop()
 
+print("\n[4] Streamable HTTP /mcp (Unified Endpoint)")
+port = mcp.start()
+local mcp_received = false
+local mcp_post_res = nil
+
+local client_mcp = vim.loop.new_tcp()
+client_mcp:connect("127.0.0.1", port, function(err)
+  if err then return end
+  -- Test GET /mcp (SSE)
+  client_mcp:write("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+  client_mcp:read_start(function(_, data)
+    if data and data:find("notifications/initialized") then
+      mcp_received = true
+      -- Test POST /mcp (Request-Response)
+      local payload = vim.json.encode({
+        jsonrpc = "2.0",
+        id = "mcp-post-test",
+        method = "tools/list"
+      })
+      local post = vim.loop.new_tcp()
+      post:connect("127.0.0.1", port, function()
+        post:write("POST /mcp HTTP/1.1\r\nContent-Length: " .. #payload .. "\r\n\r\n" .. payload)
+        post:read_start(function(_, post_data)
+          if post_data and post_data:find("tools") then
+            mcp_post_res = post_data
+          end
+        end)
+      end)
+    end
+  end)
+end)
+
+local start_mcp = vim.loop.now()
+while (not mcp_received or not mcp_post_res) and (vim.loop.now() - start_mcp < 2000) do
+  vim.wait(100)
+end
+
+ok("Streamable HTTP GET /mcp (SSE) successful", mcp_received)
+ok("Streamable HTTP POST /mcp (Request-Response) successful", mcp_post_res ~= nil)
+client_mcp:close()
+mcp.stop()
+
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
   os.exit(1)
