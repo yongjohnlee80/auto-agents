@@ -1,364 +1,99 @@
---- Minimal first-party MCP server for auto-agents (SSE over HTTP)
---- Designed for compatibility with standard MCP clients (Claude Code, etc.).
+--- Facade for the diff-review MCP bridge.
+---
+--- Boots the vendored claudecode.nvim WebSocket server
+--- (`auto-agents.mcp.ws-server`) and writes the IDE-discovery lockfile
+--- so Claude Code's `--ide` flow can attach. The vendored server
+--- registers exactly one tool — `openDiff` — and its handler enqueues
+--- into `auto-agents.diff.queue`, which the unified diff queue UI
+--- (`auto-agents.diff.ui`) renders.
+---
+--- Public API kept compatible with the prior hand-rolled server so
+--- `auto-agents/init.lua` doesn't have to change:
+--- - `M.start()` returns the bound port, or nil on failure
+--- - `M.stop()` shuts down + cleans up the lockfile
+--- - `M.state.port` / `M.state.lock_path` / `M.state.auth_token`
 ---
 --- @module 'auto-agents.mcp.server'
 
 local M = {}
 
 local logger = require("auto-agents.logger")
+local ws = require("auto-agents.mcp.ws-server")
+local lockfile = require("auto-agents.mcp.lockfile")
 
 --- @class MCPServerState
---- @field server any|nil The TCP server handle (libuv)
---- @field port number|nil The port the server is listening on
---- @field clients table<any, MCPSSEClient> Connected SSE clients
---- @field tools table<string, table> Registered tools { schema, handler }
+--- @field server any|nil Truthy while the WS server is running
+--- @field port number|nil Bound port
+--- @field lock_path string|nil Path of the IDE-discovery lockfile
+--- @field auth_token string|nil Auth token recorded in the lockfile
 M.state = {
   server = nil,
   port = nil,
-  clients = {},
-  tools = {},
+  lock_path = nil,
+  auth_token = nil,
 }
 
---- @class MCPSSEClient
---- @field tcp any The TCP connection handle
---- @field id string Unique ID for this client
---- @field response_started boolean Whether HTTP headers have been sent
+-- Default config the vendored server expects. `port_range` is required
+-- (tcp.find_available_port reads it); other fields are referenced by
+-- the wider claudecode codebase but the slimmed-down vendored subset
+-- only really needs port_range + log_level.
+local DEFAULT_CONFIG = {
+  port_range = { min = 10000, max = 65535 },
+  log_level = "info",
+}
 
---- Start the MCP server
---- @param port? number Port to listen on (0 for random)
---- @return number|nil port The actual port bound
-function M.start(port)
-  if M.state.server then
-    return M.state.port
-  end
+--- Start the bridge. Idempotent if already running.
+--- @return number|nil port
+function M.start()
+  if M.state.server then return M.state.port end
 
-  local server = vim.loop.new_tcp()
-  local address = "127.0.0.1"
-  port = port or 0
-
-  local ok, err = server:bind(address, port)
-  if not ok then
-    logger.error("mcp-server", "Failed to bind to " .. address .. ":" .. port .. ": " .. err)
+  local auth_ok, auth_token = pcall(lockfile.generate_auth_token)
+  if not auth_ok or type(auth_token) ~= "string" or #auth_token < 10 then
+    logger.error("mcp-server", "failed to generate auth token: " .. tostring(auth_token))
     return nil
   end
 
-  local actual_port = server:getsockname().port
+  local ok, port_or_err = ws.start(DEFAULT_CONFIG, auth_token)
+  if not ok then
+    logger.error("mcp-server",
+      "ws-server failed to start: " .. tostring(port_or_err))
+    return nil
+  end
+  local port = tonumber(port_or_err)
+  if not port then
+    logger.error("mcp-server", "ws-server returned non-numeric port")
+    ws.stop()
+    return nil
+  end
 
-  server:listen(128, function(listen_err)
-    if listen_err then
-      logger.error("mcp-server", "Listen error: " .. listen_err)
-      return
-    end
+  local lock_ok, lock_path = lockfile.create(port, auth_token)
+  if not lock_ok then
+    logger.error("mcp-server", "lockfile.create failed: " .. tostring(lock_path))
+    ws.stop()
+    return nil
+  end
 
-    local client_tcp = vim.loop.new_tcp()
-    server:accept(client_tcp)
-    M._handle_connection(client_tcp)
-  end)
+  M.state.server = ws
+  M.state.port = port
+  M.state.lock_path = lock_path
+  M.state.auth_token = auth_token
 
-  M.state.server = server
-  M.state.port = actual_port
-  M.state.clients = {}
-
-  logger.info("mcp-server", "MCP bridge started on http://127.0.0.1:" .. actual_port)
-  
-  -- Register default tools
-  M.register_tool(require("auto-agents.agent.adapters.tools.open_diff"))
-
-  return actual_port
+  logger.info("mcp-server",
+    "diff-review bridge ready on ws://127.0.0.1:" .. port ..
+    " (lockfile " .. lock_path .. ")")
+  return port
 end
 
---- Stop the MCP server
+--- Stop the bridge. Idempotent.
 function M.stop()
   if not M.state.server then return end
-
-  for _, client in pairs(M.state.clients) do
-    if client.tcp then
-      client.tcp:close()
-    end
-  end
-  M.state.clients = {}
-
-  M.state.server:close()
+  if M.state.port then pcall(lockfile.remove, M.state.port) end
+  pcall(ws.stop)
   M.state.server = nil
   M.state.port = nil
-  logger.info("mcp-server", "MCP bridge stopped")
-end
-
---- Register a tool handler
---- @param tool table { name, schema, handler, requires_coroutine? }
-function M.register_tool(tool)
-  M.state.tools[tool.name] = {
-    schema = tool.schema,
-    handler = tool.handler,
-  }
-end
-
---- Handle a new TCP connection
---- @param tcp any
-function M._handle_connection(tcp)
-  local client_id = tostring(tcp)
-  local client = {
-    tcp = tcp,
-    id = client_id,
-    response_started = false,
-    buffer = "",
-  }
-
-  tcp:read_start(function(err, data)
-    if err or not data then
-      M._remove_client(client_id)
-      return
-    end
-
-    client.buffer = client.buffer .. data
-    M._process_buffer(client)
-  end)
-end
-
---- Remove a client and close its connection
---- @param client_id string
-function M._remove_client(client_id)
-  local client = M.state.clients[client_id]
-  if client then
-    if client.tcp and not client.tcp:is_closing() then
-      client.tcp:close()
-    end
-    M.state.clients[client_id] = nil
-  end
-end
-
---- Process the received data buffer for a client
---- @param client MCPSSEClient
-function M._process_buffer(client)
-  -- Simple HTTP request parsing
-  local header_end = client.buffer:find("\r\n\r\n")
-  if not header_end then return end
-
-  local headers = client.buffer:sub(1, header_end)
-  local body = client.buffer:sub(header_end + 4)
-
-  local method, path = headers:match("^(%w+)%s+([^%s]+)%s+HTTP")
-  
-  if method == "GET" and (path == "/sse" or path == "/mcp") then
-    -- Start SSE stream
-    M.state.clients[client.id] = client
-    client.response_started = true
-    local response = "HTTP/1.1 200 OK\r\n" ..
-                     "Content-Type: text/event-stream\r\n" ..
-                     "Cache-Control: no-cache\r\n" ..
-                     "Connection: keep-alive\r\n" ..
-                     "Mcp-Session-Id: " .. client.id .. "\r\n\r\n"
-    client.tcp:write(response)
-    -- Send initial connection event
-    M._send_sse(client, { jsonrpc = "2.0", method = "notifications/initialized" })
-    client.buffer = "" -- Clear buffer
-  elseif method == "POST" and (path == "/message" or path == "/mcp") then
-    -- Handle JSON-RPC message from client
-    local content_length = tonumber(headers:match("Content%-Length:%s+(%d+)"))
-    if content_length and #body >= content_length then
-      local json_payload = body:sub(1, content_length)
-      local ok, msg = pcall(vim.json.decode, json_payload)
-      if ok then
-        if path == "/mcp" then
-          -- Streamable HTTP: Handle and respond in-band if it's a request
-          M._handle_streamable_post(client, msg)
-        else
-          -- Legacy /message: Respond via SSE
-          M._handle_jsonrpc(client, msg)
-          -- Send 202 Accepted
-          client.tcp:write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
-          client.tcp:close() -- Client closes after POST
-        end
-      else
-        client.tcp:write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-        client.tcp:close()
-      end
-    end
-  else
-    -- Unsupported
-    client.tcp:write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
-    client.tcp:close()
-  end
-end
-
---- Handle a POST to the Streamable HTTP endpoint
---- @param client MCPSSEClient
---- @param msg table
-function M._handle_streamable_post(client, msg)
-  if not msg.id then
-    -- It's a notification, return 202
-    M._handle_jsonrpc(client, msg)
-    client.tcp:write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
-    client.tcp:close()
-    return
-  end
-
-  -- It's a request, we need to handle it and return the result in the body.
-  -- We'll reuse _handle_jsonrpc but we need a way to capture the response.
-  -- For now, we'll implement a simplified version.
-  if msg.method == "initialize" then
-    local response = {
-      jsonrpc = "2.0",
-      id = msg.id,
-      result = {
-        protocolVersion = "2024-11-05",
-        capabilities = { tools = {} },
-        serverInfo = { name = "auto-agents-mcp", version = "0.1.0" }
-      }
-    }
-    M._send_http_json(client, 200, response)
-  elseif msg.method == "tools/list" then
-    local tool_list = {}
-    for name, t in pairs(M.state.tools) do
-      table.insert(tool_list, {
-        name = name,
-        description = t.schema.description,
-        inputSchema = t.schema.inputSchema,
-      })
-    end
-    M._send_http_json(client, 200, { jsonrpc = "2.0", id = msg.id, result = { tools = tool_list } })
-  elseif msg.method == "tools/call" then
-    local tool_name = msg.params and msg.params.name
-    local t = M.state.tools[tool_name]
-    if t then
-      coroutine.wrap(function()
-        local args = msg.params.arguments or {}
-        local ok, result = pcall(t.handler, args)
-        if ok then
-          M._send_http_json(client, 200, { jsonrpc = "2.0", id = msg.id, result = result })
-        else
-          M._send_http_json(client, 200, {
-            jsonrpc = "2.0",
-            id = msg.id,
-            error = { code = -32603, message = "Internal error", data = tostring(result) }
-          })
-        end
-      end)()
-    else
-      M._send_http_json(client, 200, {
-        jsonrpc = "2.0",
-        id = msg.id,
-        error = { code = -32601, message = "Tool not found: " .. tostring(tool_name) }
-      })
-    end
-  else
-    M._send_http_json(client, 200, {
-      jsonrpc = "2.0",
-      id = msg.id,
-      error = { code = -32601, message = "Method not found: " .. tostring(msg.method) }
-    })
-  end
-end
-
---- Send a JSON response over HTTP and close the connection
---- @param client MCPSSEClient
---- @param status number
---- @param msg table
-function M._send_http_json(client, status, msg)
-  local json = vim.json.encode(msg)
-  local status_text = status == 200 and "200 OK" or (status == 202 and "202 Accepted" or "500 Internal Server Error")
-  local response = string.format(
-    "HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-    status_text, #json, json
-  )
-  client.tcp:write(response)
-  client.tcp:close()
-end
-
---- Send a JSON-RPC message over SSE
---- @param client MCPSSEClient
---- @param msg table
-function M._send_sse(client, msg)
-  if not client.response_started then return end
-  local json = vim.json.encode(msg)
-  client.tcp:write("data: " .. json .. "\n\n")
-end
-
---- Handle an incoming JSON-RPC message
---- @param client any (Not used for response since it's via SSE to all or specific)
---- @param msg table
-function M._handle_jsonrpc(_, msg)
-  if msg.method == "initialize" then
-    M._broadcast_response(msg.id, {
-      protocolVersion = "2024-11-05",
-      capabilities = {
-        tools = {},
-      },
-      serverInfo = {
-        name = "auto-agents-mcp",
-        version = "0.1.0",
-      }
-    })
-  elseif msg.method == "tools/list" then
-    local tool_list = {}
-    for name, t in pairs(M.state.tools) do
-      table.insert(tool_list, {
-        name = name,
-        description = t.schema.description,
-        inputSchema = t.schema.inputSchema,
-      })
-    end
-    M._broadcast_response(msg.id, { tools = tool_list })
-  elseif msg.method == "tools/call" then
-    local tool_name = msg.params and msg.params.name
-    local t = M.state.tools[tool_name]
-    if t then
-      -- Run handler in a coroutine
-      coroutine.wrap(function()
-        local args = msg.params.arguments or {}
-        local ok, result = pcall(t.handler, args)
-        if ok then
-          M._broadcast_response(msg.id, result)
-        else
-          local err_msg = tostring(result)
-          if type(result) == "table" then
-            err_msg = vim.json.encode(result)
-          end
-          logger.error("mcp-server", "Handler error: " .. err_msg)
-          M._broadcast_error(msg.id, -32603, "Internal error", result)
-        end
-      end)()
-    else
-      M._broadcast_error(msg.id, -32601, "Tool not found: " .. tostring(tool_name))
-    end
-  elseif msg.method then
-    -- Generic handler fallback (Finding 2)
-    M._broadcast_error(msg.id, -32601, "Method not found: " .. msg.method)
-  end
-end
-
---- Broadcast a JSON-RPC response to all SSE clients
---- @param id any
---- @param result any
-function M._broadcast_response(id, result)
-  local msg = {
-    jsonrpc = "2.0",
-    id = id,
-    result = result,
-  }
-  for _, client in pairs(M.state.clients) do
-    M._send_sse(client, msg)
-  end
-end
-
---- Broadcast a JSON-RPC error to all SSE clients
---- @param id any
---- @param code number
---- @param message string
---- @param data? any
-function M._broadcast_error(id, code, message, data)
-  local msg = {
-    jsonrpc = "2.0",
-    id = id,
-    error = {
-      code = code,
-      message = message,
-      data = data,
-    },
-  }
-  for _, client in pairs(M.state.clients) do
-    M._send_sse(client, msg)
-  end
+  M.state.lock_path = nil
+  M.state.auth_token = nil
+  logger.info("mcp-server", "diff-review bridge stopped")
 end
 
 return M
