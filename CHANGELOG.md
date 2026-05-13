@@ -2,6 +2,44 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## Unreleased
+
+### Added
+
+- **Codex diff-review via the native WebSocket IDE bridge.** Agents
+  with `kind = "codex"` and `diff_review = true` now use the same
+  queued `openDiff` bridge as Claude Code, but with Codex-specific
+  discovery: auto-agents writes a `~/.codex/ide/<port>.lock` file,
+  accepts `x-codex-code-ide-authorization` during the WebSocket
+  handshake, and launches Codex with `CODEX_CODE_SSE_PORT`,
+  `CODEX_CONFIG_DIR`, and Codex auth env vars. The older
+  `mcp_servers.auto-agents.url = "http://127.0.0.1:<port>/mcp"`
+  adapter injection was removed because Neovim Codex IDE integrations
+  use the lockfile/WebSocket path.
+
+- **External diff-submit pipeline for Codex-side tooling.**
+  `auto-agents.diff.submit` can enqueue a proposed file image without
+  requiring an IDE `openDiff` call, then write the accepted content only
+  after the user accepts it in the diff queue. `submit_file_and_wait()`
+  keeps Neovim's event loop alive while blocking the caller, so remote
+  pipelines receive `accepted`, `rejected`, `timeout`, or `error`
+  results. The matching `:AutoAgentsDiffSubmit[!] <agent> <target-file>
+  <proposal-file> [tab-name]` command exposes the same path from
+  Neovim; bang mode waits and prints a JSON result.
+
+- **Spawn-time diff-review instructions and helper script.** Agents with
+  `diff_review = true` now receive `AUTO_AGENTS_DIFF_REVIEW=true`,
+  `AUTO_AGENTS_MCP_AUTH_TOKEN`, `AUTO_AGENTS_AGENT_NAME`, and
+  `AUTO_AGENTS_OPEN_DIFF_SCRIPT` in their environment. Their generated
+  instruction block includes a Diff review protocol that tells non-native
+  edit tools to call `scripts/auto-agents-open-diff.py`, wait for the
+  user's queue decision, and avoid direct writes unless explicitly told
+  to bypass review. Rejections with review comments are returned as
+  `status="rejected", action="revise"` with both `reason` and `comment`
+  fields so agents can revise and resubmit. The helper also sends a
+  best-effort `close_tab` cleanup for its tab name on exit so hidden or
+  timed-out queue entries do not linger.
+
 ## [v0.2.3] — 2026-05-13 — diff queue editorial workflow
 
 A focused iteration on the unified diff queue panel (ADR 0010): bug fix

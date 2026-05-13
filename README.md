@@ -141,6 +141,7 @@ User commands (always available):
 | `:AutoAgentsSub <N>`      | Toggle a sub-agent float (slots 6–9).                     |
 | `:AutoAgentsDock`         | Toggle the rightmost-centered navigation dock.            |
 | `:AutoAgentsDiffQueue`    | Toggle the unified diff queue review panel. See below.    |
+| `:AutoAgentsDiffSubmit[!] <agent> <target-file> <proposal-file> [tab-name]` | Submit a proposed file image to the diff queue. Bang mode waits and prints a JSON result. |
 
 For an example wiring (with dynamic `which-key` descriptions per slot), see
 [`examples/lazy-spec.lua`](./examples/lazy-spec.lua) — or the maintainer's live
@@ -153,6 +154,55 @@ request is queued into the **unified diff queue** instead of immediately
 hijacking your editor with a split. Open the review panel with
 `:AutoAgentsDiffQueue` (default `<F11>` / `<leader>ad`) — a three-pane
 float lets you review each queued change on your own terms.
+
+The bridge is a **multi-agent API**, not a Claude-only feature. Native
+clients share the same WebSocket JSON-RPC contract: call `openDiff` with a
+complete proposed file image, then call `close_tab` with the matching
+`tab_name` if the diff is resolved or abandoned outside the visible queue.
+Adding another agent CLI should mean adding discovery/auth or helper wiring,
+not building a second review UI.
+
+Claude Code and Codex both use the native WebSocket IDE bridge for this
+queue. Claude discovers it through `~/.claude/ide/<port>.lock`; Codex
+discovers the same bridge through `~/.codex/ide/<port>.lock` plus
+`CODEX_CODE_SSE_PORT` and Codex auth env vars injected at spawn.
+
+For runtimes that prepare edits outside the IDE `openDiff` path,
+`auto-agents.diff.submit` provides the same review gate explicitly.
+Call `submit_file_and_wait({ agent_name = "lector", file_path = "...",
+proposal_path = "..." })` from a remote expression to enqueue the
+proposal, keep Neovim interactive while the caller waits, and receive
+the user's `accepted` / `rejected` decision before continuing. The
+`:AutoAgentsDiffSubmit!` command exposes that same blocking pipeline
+and prints a JSON result.
+
+Agents with `diff_review = true` also receive `AUTO_AGENTS_DIFF_REVIEW=true`,
+`AUTO_AGENTS_MCP_URL`, `AUTO_AGENTS_MCP_AUTH_TOKEN`, and
+`AUTO_AGENTS_OPEN_DIFF_SCRIPT` at spawn. The per-agent instruction file
+(`AGENTS.md`, `CLAUDE.md`, etc.) gets a **Diff review protocol** section
+telling non-native editing tools to write a complete proposed file image to a
+temporary file, run `"$AUTO_AGENTS_OPEN_DIFF_SCRIPT" --file <target>
+--new-file <proposal>`, wait for the JSON result, and continue only after the
+user accepts or rejects the queue entry. The helper lives at
+`scripts/auto-agents-open-diff.py` and writes the accepted content to disk by
+default. If the user rejects with review comments or a request for changes,
+the helper returns `{"status":"rejected","action":"revise","reason":"..."}`
+so the agent can revise and submit a new diff instead of writing directly.
+The helper also sends a best-effort `close_tab` cleanup for its tab name on
+exit, matching the native bridge behavior that clears queue entries when a
+hidden diff is resolved elsewhere.
+
+If a native `openDiff` or helper connection looks stale but the Neovim socket
+or local bridge is actually alive, the agent may be running inside a sandbox
+that cannot reach the socket or loopback bridge. In that case the injected
+diff-review instructions tell the agent to retry the same diff submission
+outside the sandbox and request a session-level or persisted approval for the
+openDiff helper/remote-submit command when the runtime supports it. That keeps
+the normal edit loop to one human decision in the diff queue instead of a
+command approval plus a separate accept/reject decision for every file.
+
+`python3` is only required for that fallback helper path. Agents that
+natively speak the WebSocket `openDiff` bridge do not need it.
 
 ### Layout
 
@@ -585,7 +635,7 @@ spawn-time render race remains undiagnosed.
 - [x] **M4** knowledge base (shared/private/isolated, manifest, Obsidian compat)
 - [x] **M5** resource grants, manager designation
 - [ ] **M6** README polish, ARCHITECTURE.md, test suite, `v0.1.0` tag
-- [x] **M7** per-Claude MCP / WebSocket bridge — vendored claudecode.nvim's WS stack as of v0.2.x; `openDiff` + `close_tab` registered, `auto-agents:diff_queued`/`diff_removed` topics drive the unified queue
+- [x] **M7** MCP / WebSocket bridge — vendored claudecode.nvim's WS stack as of v0.2.x; Claude Code and Codex attach through per-client lockfiles, `openDiff` + `close_tab` are registered, and `auto-agents:diff_queued`/`diff_removed` topics drive the unified queue
 - [x] **M8** diff queue editorial workflow (v0.2.3) — multi-pane review float, `A`/`D`/`M`/`E`/`<CR>` actions, native motions + treesitter in the diff panes, REQUEST CHANGE two-channel feedback, auto-close on drain
 
 ## Attribution

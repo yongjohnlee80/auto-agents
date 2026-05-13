@@ -630,6 +630,52 @@ ok("slot_for_name returns nil for nil input", aa.slot_for_name(nil) == nil)
 
 aa.state.config.agents.bootstrap = {}
 
+-- ──────── 16. Codex diff-review spawn env ────────
+-- Codex consumes the native IDE bridge through ~/.codex/ide lockfiles
+-- plus CODEX_CODE_* env vars. Use the no-op terminal provider so the
+-- smoke suite can assert the spawn contract without launching Codex.
+print("\n[16] Codex diff-review spawn env")
+local saved_provider = aa.state.config.terminal.provider
+local saved_port = aa.state.diff_review_port
+local saved_ws_port = aa.state.diff_review_port_ws
+local saved_bootstrap_env = aa.state.config.agents.bootstrap
+local saved_slot2 = aa.state.slot_terminals[2]
+local mcp = require("auto-agents.mcp.server")
+local saved_auth = mcp.state.auth_token
+
+aa.state.config.terminal.provider = "none"
+aa.state.diff_review_port = 45678
+aa.state.diff_review_port_ws = 45678
+mcp.state.auth_token = "codex-test-auth-token"
+aa.state.config.agents.bootstrap = {
+  { slot = 2, name = "codex-env", kind = "codex", diff_review = true },
+}
+aa.state.slot_terminals[2] = nil
+
+aa.focus_slot(2)
+local codex_term = aa.state.slot_terminals[2]
+local codex_env = codex_term and codex_term.spec and codex_term.spec.env or {}
+ok("codex diff_review sets CODEX_CODE_SSE_PORT",
+  codex_env.CODEX_CODE_SSE_PORT == "45678")
+ok("codex diff_review sets CODEX_CODE_IDE_AUTHORIZATION",
+  codex_env.CODEX_CODE_IDE_AUTHORIZATION == "codex-test-auth-token")
+ok("codex diff_review sets CODEX_CODE_IDE_AUTH_TOKEN",
+  codex_env.CODEX_CODE_IDE_AUTH_TOKEN == "codex-test-auth-token")
+ok("codex diff_review sets CODEX_CODE_AUTH_TOKEN",
+  codex_env.CODEX_CODE_AUTH_TOKEN == "codex-test-auth-token")
+ok("codex diff_review sets CODEX_CONFIG_DIR",
+  type(codex_env.CODEX_CONFIG_DIR) == "string" and codex_env.CODEX_CONFIG_DIR:find(".codex", 1, true) ~= nil)
+ok("codex diff_review keeps generic IDE env",
+  codex_env.AUTO_AGENTS_MCP_URL == "ws://127.0.0.1:45678")
+
+if codex_term and codex_term.kill then codex_term:kill() end
+aa.state.slot_terminals[2] = saved_slot2
+aa.state.config.agents.bootstrap = saved_bootstrap_env
+aa.state.config.terminal.provider = saved_provider
+aa.state.diff_review_port = saved_port
+aa.state.diff_review_port_ws = saved_ws_port
+mcp.state.auth_token = saved_auth
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

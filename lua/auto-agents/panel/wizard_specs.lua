@@ -221,11 +221,11 @@ function M.agent(mode, slot)
     },
     {
       -- diff_review (internal MCP bridge). When y, the agent gets
-      -- CLAUDE_CODE_SSE_PORT at spawn so the agent's openDiff
-      -- tool routes to a diff split in your editor for review/edit/
-      -- accept. When N, the agent falls back to its TUI confirm
-      -- prompt — useful for sub-agents whose diffs you don't want
-      -- popping at you alongside your main coding agent's.
+      -- the per-kind IDE bridge env at spawn so openDiff routes to
+      -- the native diff queue for review/edit/accept. When N, the
+      -- agent falls back to its TUI confirm prompt — useful for
+      -- sub-agents whose diffs you don't want popping at you
+      -- alongside your main coding agent's.
       field = "diff_review",
       prompt = "Show diff views from this agent in your editor?",
       choices = { "y", "N" },

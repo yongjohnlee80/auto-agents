@@ -262,6 +262,52 @@ end, {
   desc = "Toggle the unified diff queue for reviewing agent proposals",
 })
 
+vim.api.nvim_create_user_command("AutoAgentsDiffSubmit", function(opts)
+  local agent_name = opts.fargs[1]
+  local file_path = opts.fargs[2]
+  local proposal_path = opts.fargs[3]
+  local tab_name = opts.fargs[4]
+
+  if not agent_name or not file_path or not proposal_path then
+    vim.notify(
+      "AutoAgentsDiffSubmit: usage: :AutoAgentsDiffSubmit[!] <agent> <target-file> <proposal-file> [tab-name]",
+      vim.log.levels.ERROR
+    )
+    return
+  end
+
+  if opts.bang then
+    local result = require("auto-agents.diff.submit").submit_file_and_wait({
+      agent_name = agent_name,
+      file_path = file_path,
+      proposal_path = proposal_path,
+      tab_name = tab_name,
+    })
+    local encode = (vim.json and vim.json.encode) or vim.fn.json_encode
+    print(encode(result))
+    return
+  end
+
+  local id, err = require("auto-agents.diff.submit").enqueue_file({
+    agent_name = agent_name,
+    file_path = file_path,
+    proposal_path = proposal_path,
+    tab_name = tab_name,
+  })
+
+  if not id then
+    vim.notify("AutoAgentsDiffSubmit: " .. tostring(err), vim.log.levels.ERROR)
+    return
+  end
+
+  vim.notify("Queued diff " .. id .. " from " .. agent_name, vim.log.levels.INFO)
+end, {
+  nargs = "+",
+  bang = true,
+  complete = "file",
+  desc = "Submit a proposed file image into the unified diff queue",
+})
+
 vim.keymap.set("n", "<F11>", function()
   local ok, ui = pcall(require, "auto-agents.diff.ui")
   if ok and ui then

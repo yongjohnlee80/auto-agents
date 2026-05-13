@@ -42,8 +42,9 @@ function M.validate_upgrade_request(request, expected_auth_token)
     end
 
     local auth_header = headers["x-claude-code-ide-authorization"]
+      or headers["x-codex-code-ide-authorization"]
     if not auth_header then
-      return false, "Missing authentication header: x-claude-code-ide-authorization"
+      return false, "Missing authentication header: x-claude-code-ide-authorization or x-codex-code-ide-authorization"
     end
 
     -- Check for empty auth header

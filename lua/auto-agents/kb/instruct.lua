@@ -129,6 +129,58 @@ local function render_block(spec, kb_root)
       "",
     })
 
+    if spec.diff_review then
+      vim.list_extend(lines, {
+        "### Diff review protocol",
+        "",
+        "This agent is configured with `diff_review = true` (diff view is on).",
+        "All code updates must go through the auto-agents diff queue.",
+        "",
+        "Use this order:",
+        "",
+        "1. If you have native IDE `openDiff` support, use native `openDiff`",
+        "   for every code update.",
+        "2. Only if you do not have native `openDiff`, use the Python helper",
+        "   at `$AUTO_AGENTS_OPEN_DIFF_SCRIPT`.",
+        "3. If the native `openDiff` call or Python helper cannot connect",
+        "   because of sandbox or stale local-bridge access, request permission",
+        "   and retry the same diff submission outside the sandbox.",
+        "4. If the user denies that permission, or the retry still cannot",
+        "   connect, stop and report the blocker. Do not write the file",
+        "   directly.",
+        "",
+        "Python helper workflow, used only when native `openDiff` is not",
+        "available:",
+        "",
+        "1. Read the current target file.",
+        "2. Write the complete proposed new file contents to a temporary file.",
+        "3. Run:",
+        "",
+        "       \"$AUTO_AGENTS_OPEN_DIFF_SCRIPT\" --agent \"" .. agent_name
+          .. "\" --file /absolute/target --new-file /absolute/proposal",
+        "",
+        "4. Wait for the command to finish. It blocks until the user accepts,",
+        "   denies, requests changes, or the optional timeout expires.",
+        "   The helper sends a best-effort `close_tab` cleanup for the",
+        "   queue entry's tab name when it exits, so hidden/stale entries",
+        "   do not linger if the review is resolved elsewhere.",
+        "5. Continue only after reading the JSON result:",
+        "   - `{\"status\":\"accepted\",\"action\":\"written\"}` means the",
+        "     accepted content was written.",
+        "   - `{\"status\":\"rejected\",\"action\":\"revise\",\"reason\":\"...\"}`",
+        "     means do not write. Treat `reason` / `comment` as the user's",
+        "     requested changes, revise the proposal, and submit a new diff",
+        "     through the same helper.",
+        "   - `{\"status\":\"timeout\"}` or `{\"status\":\"error\"}` means stop",
+        "     and report the blocker.",
+        "",
+        "Do not attempt to use tools that bypass user approval for file",
+        "edits, such as `apply_patch`, unless the user explicitly asks to",
+        "bypass the diff queue.",
+        "",
+      })
+    end
+
     -- No status-reporting block: status is observed passively by
     -- auto-agents.status.observer at the spawn path, no agent
     -- cooperation needed. The cooperative `:AutoAgentsStatus` ex-

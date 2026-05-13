@@ -434,9 +434,10 @@ function M.setup(opts)
 
   -- M6 diff-review bridge: agents opted in via `diff_review =
   -- true` in TOML will route their openDiff requests to our native
-  -- unified queue via a first-party MCP bridge (SSE over HTTP).
+  -- unified queue via first-party MCP transports.
   M.state.diff_review_enabled = false
   M.state.diff_review_port = nil
+  M.state.diff_review_port_ws = nil
   for _, e in ipairs(config.agents.bootstrap) do
     if e.diff_review then M.state.diff_review_enabled = true; break end
   end
@@ -445,8 +446,9 @@ function M.setup(opts)
     local port = mcp.start()
     if port then
       M.state.diff_review_port = port
+      M.state.diff_review_port_ws = mcp.state.port
       require("auto-agents.logger").info("init",
-        "diff-review bridge ready on port " .. tostring(port))
+        "diff-review bridge ready on ws port " .. tostring(M.state.diff_review_port_ws))
       install_diff_parity_hooks()
     else
       require("auto-agents.logger").error("init",
@@ -631,17 +633,33 @@ local function build_agent_env(spec, cwd)
   -- Finding 1: use agent-generic env vars + Claude compatibility.
   if spec.diff_review and M.state.diff_review_port then
     local port_str = tostring(M.state.diff_review_port)
-    local url = "http://127.0.0.1:" .. port_str .. "/mcp"
+    local ws_url = "ws://127.0.0.1:" .. port_str
     
     -- Generic contract
     env.AUTO_AGENTS_IDE_INTEGRATION = "true"
     env.AUTO_AGENTS_MCP_PORT         = port_str
-    env.AUTO_AGENTS_MCP_URL          = url
+    env.AUTO_AGENTS_MCP_URL          = ws_url
     
-    -- Claude compatibility layer (Legacy SSE)
+    -- Claude compatibility layer. Claude Code uses the lockfile-backed
+    -- WebSocket bridge; these legacy env vars remain for consumers that
+    -- still look for them.
     env.ENABLE_IDE_INTEGRATION  = "true"
     env.FORCE_CODE_TERMINAL     = "true"
     env.CLAUDE_CODE_SSE_PORT    = port_str
+
+    if spec.kind == "codex" then
+      env.CODEX_CODE_SSE_PORT = port_str
+      local mcp = require("auto-agents.mcp.server")
+      if mcp.state and mcp.state.auth_token then
+        env.CODEX_CODE_IDE_AUTHORIZATION = mcp.state.auth_token
+        env.CODEX_CODE_IDE_AUTH_TOKEN = mcp.state.auth_token
+        env.CODEX_CODE_AUTH_TOKEN = mcp.state.auth_token
+      end
+      local ok, codex_lockfile = pcall(require, "auto-agents.mcp.codex_lockfile")
+      if ok and codex_lockfile.config_dir then
+        env.CODEX_CONFIG_DIR = codex_lockfile.config_dir()
+      end
+    end
   end
 
   -- M6 KB-aware launch: write the per-kind instruction file (idempotent)
