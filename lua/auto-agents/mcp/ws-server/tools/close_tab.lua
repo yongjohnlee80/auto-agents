@@ -52,7 +52,29 @@ local function handler(params)
   if tab_name:match("✻") and tab_name:match("⧉") then
     log.debug("Detected diff tab - closing diff view")
 
-    -- Try to close the diff
+    -- Unified diff-queue path: when the agent dismisses a diff out-of-band
+    -- (e.g. the user pressed `q` to hide the panel and then answered yes/no
+    -- in the CLI terminal), Claude Code sends close_tab with the same
+    -- tab_name it used for openDiff. Reject the matching pending entry so
+    -- the yielded coroutine resumes with DIFF_REJECTED and the panel
+    -- (subscribed to auto-agents:diff_removed) refreshes.
+    local queue_ok, queue = pcall(require, "auto-agents.diff.queue")
+    if queue_ok and queue.find_by_tab_name then
+      local req = queue.find_by_tab_name(tab_name)
+      if req then
+        log.debug("close_tab matched pending queue entry: " .. req.id)
+        queue.reject(req.id)
+        return {
+          content = {
+            { type = "text", text = "TAB_CLOSED" },
+          },
+        }
+      end
+    end
+
+    -- Legacy in-tab diff path: native split UI registered in
+    -- auto-agents.mcp.ws-server.diff (kept for callers that opened
+    -- diffs through the old non-queued surface).
     local diff_module_ok, diff = pcall(require, "auto-agents.mcp.ws-server.diff")
     if diff_module_ok and diff.close_diff_by_tab_name then
       local closed = diff.close_diff_by_tab_name(tab_name)

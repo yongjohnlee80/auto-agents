@@ -40,12 +40,16 @@ end
 
 ---Register all tools.
 ---
----auto-agents-flavored: we only need openDiff for the unified diff queue
----bridge. The other claudecode tools (open_file, selection tracking, doc
----dirty checks, etc.) are out of scope for this iteration — we keep this
----list minimal to surface only the surface we actually integrate.
+---auto-agents-flavored: we register openDiff plus close_tab. close_tab is
+---an internal tool (no schema, so it stays out of tools/list) that Claude
+---Code calls to dismiss a diff when the user resolved it via the CLI
+---terminal instead of the editor — without it registered, those calls
+---return method-not-found and the queue entry's coroutine stays yielded
+---forever. Other claudecode tools (open_file, selection tracking, doc
+---dirty checks, etc.) are out of scope for this iteration.
 function M.register_all()
   M.register(require("auto-agents.mcp.ws-server.tools.open_diff"))
+  M.register(require("auto-agents.mcp.ws-server.tools.close_tab"))
 end
 
 ---Register a tool

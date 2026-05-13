@@ -10,6 +10,10 @@ local M = {}
 --- @field file_path string Target file path
 --- @field old_contents string Current contents of the file
 --- @field new_contents string Proposed new contents
+--- @field tab_name string? MCP tab name from the originating openDiff call — used to
+---                         match a later close_tab call against this entry when the
+---                         agent dismisses the diff by other means (e.g. user
+---                         answered yes/no in the CLI terminal).
 --- @field callback fun(result: table) Coroutine resume callback
 --- @field status "pending"|"resolved"|"rejected" State of the request
 --- @field created_at integer Timestamp of creation
@@ -36,6 +40,7 @@ function M.enqueue(req)
     file_path = req.file_path,
     old_contents = req.old_contents or "",
     new_contents = req.new_contents,
+    tab_name = req.tab_name,
     callback = req.callback,
     status = "pending",
     created_at = os.time(),
@@ -70,6 +75,24 @@ end
 function M.get(id)
   for _, req in ipairs(_queue) do
     if req.id == id then
+      return req
+    end
+  end
+  return nil
+end
+
+--- Find the first pending request matching the given MCP `tab_name`.
+--- Used by the `close_tab` MCP tool: when the agent dismisses a diff
+--- by other means (e.g. the user answered yes/no in the CLI terminal
+--- while the panel was hidden), Claude Code sends `close_tab` with the
+--- same `tab_name` it passed to `openDiff`. We look up the pending
+--- entry here so we can reject it and unblock the coroutine.
+--- @param tab_name string?
+--- @return AutoAgentsDiffRequest?
+function M.find_by_tab_name(tab_name)
+  if not tab_name then return nil end
+  for _, req in ipairs(_queue) do
+    if req.status == "pending" and req.tab_name == tab_name then
       return req
     end
   end

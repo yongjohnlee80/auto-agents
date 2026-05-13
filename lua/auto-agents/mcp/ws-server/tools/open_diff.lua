@@ -77,6 +77,7 @@ local function handler(params)
       file_path = params.old_file_path,
       old_contents = old_contents,
       new_contents = params.new_file_contents,
+      tab_name = params.tab_name,
       callback = function(result)
         local resume_success, resume_err = coroutine.resume(co, result)
         if resume_success then
