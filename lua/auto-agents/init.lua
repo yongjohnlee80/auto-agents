@@ -1062,19 +1062,50 @@ end
 
 ---Send `text` to the agent's stdin via `nvim_chan_send`. Works for both
 ---main slots (native terminal) and sub-float slots (snacks terminal).
+---
+---Optional `opts.submit = true` follows the body with a deferred CR
+---(`"\r"`) after `opts.submit_delay_ms` (default 60ms). The split is
+---deliberate: most TUI agents (Claude Code included) treat a single
+---chan_send containing body+CR as a paste and DON'T submit, while a
+---separate CR keypress after a short delay is interpreted as the user
+---hitting Enter. Without the delay the second chan_send races the
+---first and the agent often eats the CR. Mirrors the same recipe
+---`auto-agents.term.send` uses for the playground T1..T4 terminals.
 ---@param slot integer
 ---@param text string
+---@param opts table?  -- { submit = boolean, submit_delay_ms = integer }
 ---@return boolean ok
-function M.send_slot(slot, text)
+function M.send_slot(slot, text, opts)
   if not text or text == "" then return false end
-  if slot >= 1 and slot <= M.MAX_SLOT then
-    local term = M.state.slot_terminals[slot]
-    if term and term:is_alive() and term.send then
-      return term:send(text)
-    end
-    return false
+  if slot < 1 or slot > M.MAX_SLOT then return false end
+  local term = M.state.slot_terminals[slot]
+  if not term or not term:is_alive() or not term.send then return false end
+  if not term:send(text) then return false end
+  if opts and opts.submit then
+    local delay = opts.submit_delay_ms or 60
+    vim.defer_fn(function()
+      if term and term.is_alive and term:is_alive() and term.send then
+        term:send("\r")
+      end
+    end, delay)
   end
-  return false
+  return true
+end
+
+---Resolve an agent slot from its name. Returns nil if no bootstrap
+---entry matches. Public-facing wrapper around the same lookup used by
+---resolve_status_slot — handy for consumers that have an agent_name
+---string (e.g. the diff queue) and need to talk to that slot.
+---@param name string
+---@return integer? slot
+function M.slot_for_name(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.name == name then return e.slot end
+  end
+  return nil
 end
 
 ---Read RSS for a pid in kB. Tries Linux `/proc/<pid>/status` first (cheap,

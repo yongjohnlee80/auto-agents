@@ -241,7 +241,7 @@ function M.open()
       left = { width = 0.2, cursorline = true },
       middle = { title = " Current ", cursorline = true },
       preview = { width = 0.4, title = " Proposed ", cursorline = true },
-      footer = { height = 1, content = " A/D Accept/Deny • [1-9] Select • Tab Cycle • hjkl/w/b/$/gg in diff • q Close " }
+      footer = { height = 1, content = " A/D/M Accept/Deny/Modify • [1-9] Select • Tab Cycle • hjkl in diff • q Close " }
     },
     initial_focus = "left",
     on_open = function(self)
@@ -264,13 +264,14 @@ function M.open()
         bind_cycle(self:bufnr(pane))
       end
 
-      -- Accept / Deny stay on every focusable pane: it's natural to
-      -- review the diff in the preview pane and then hit A/D without
-      -- having to Tab back to the list first. The middle/preview
-      -- buffers are non-modifiable, so A (append) / D (delete-to-EOL)
-      -- don't have meaningful native semantics to clash with — same
-      -- precedent as worktree.graph mapping D on every pane.
-      local function bind_accept_deny(buf)
+      -- Accept / Deny / Modify stay on every focusable pane: it's
+      -- natural to review the diff in the preview pane and then hit
+      -- A/D/M without having to Tab back to the list first. The
+      -- middle/preview buffers are non-modifiable, so A (append),
+      -- D (delete-to-EOL), M (move-to-middle) don't have meaningful
+      -- native semantics to clash with — same precedent as
+      -- worktree.graph mapping D on every pane.
+      local function bind_actions(buf)
         if not buf then return end
         local function map(lhs, fn)
           vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, nowait = true })
@@ -291,10 +292,51 @@ function M.open()
             update_preview()
           end
         end)
+        -- M (Modify): prompt for a user message, reject the diff with
+        -- that text as the reason, AND inject the same reason as a
+        -- follow-up prompt into the agent's terminal so the agent
+        -- actually iterates on the feedback. Two channels:
+        --   1. queue.reject(id, reason) → openDiff returns
+        --      DIFF_REJECTED + reason. (Claude Code's CLI currently
+        --      drops content[2] from this reply and surfaces only a
+        --      generic "user rejected" message to the agent, so on
+        --      its own this channel doesn't get the reason through.)
+        --   2. send_slot(slot, "REQUEST CHANGE: <reason>", { submit
+        --      = true }) → types the reason into the agent's TUI as
+        --      a normal user prompt, then a deferred CR submits it.
+        --      This is the channel that actually conveys the reason
+        --      today; channel 1 will start working when Claude Code
+        --      forwards content[2].
+        -- Slot resolution prefers the queue entry's agent_name (when
+        -- the MCP bridge injects _auto_agents_name) and falls back to
+        -- the focused slot otherwise — single-agent setups always
+        -- have one focused slot and the user is reviewing its diff.
+        map("M", function()
+          local req = _render_list[_selected_idx]
+          if not req then return end
+          vim.ui.input({ prompt = "REQUEST CHANGE: " }, function(input)
+            if not input or input == "" then return end
+            queue.reject(req.id, input)
+            render_left()
+            update_preview()
+            -- Schedule the terminal injection so the openDiff
+            -- response has time to land + Claude's TUI returns to the
+            -- input prompt before we type into it. 150ms is plenty
+            -- for a local MCP round-trip + Claude's TUI redraw.
+            vim.defer_fn(function()
+              local ok_aa, aa = pcall(require, "auto-agents")
+              if not ok_aa then return end
+              local slot = aa.slot_for_name and aa.slot_for_name(req.agent_name)
+              if not slot and aa.state then slot = aa.state.focused_slot end
+              if not slot or slot < 1 then return end
+              aa.send_slot(slot, "REQUEST CHANGE: " .. input, { submit = true })
+            end, 150)
+          end)
+        end)
       end
 
       for _, pane in ipairs({ "left", "middle", "preview" }) do
-        bind_accept_deny(self:bufnr(pane))
+        bind_actions(self:bufnr(pane))
       end
 
       -- Selection keymaps (j/k row movement, 1-9 jump, <CR> open) are

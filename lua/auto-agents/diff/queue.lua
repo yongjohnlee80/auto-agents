@@ -137,22 +137,32 @@ function M.resolve(id, final_contents)
   M.remove(id)
 end
 
---- Reject a diff request (called when user quits the split without saving).
+--- Reject a diff request (called when the user quits the split, presses
+--- D in the panel, or sends a "request change" message via M).
+--- The optional `reason` string is sent back to the agent as the
+--- second text content of the DIFF_REJECTED response — Claude reads
+--- it as part of the tool result and can act on the feedback.
 --- @param id string
-function M.reject(id)
+--- @param reason string? Optional user-supplied rejection message
+function M.reject(id, reason)
   local req = M.get(id)
   if not req or req.status ~= "pending" then return end
-  
+
   req.status = "rejected"
-  
+
+  local message = reason
+  if not message or message == "" then
+    message = "User rejected the diff."
+  end
+
   -- Create MCP-compliant result format
   local result = {
     content = {
       { type = "text", text = "DIFF_REJECTED" },
-      { type = "text", text = "User rejected the diff." },
+      { type = "text", text = message },
     }
   }
-  
+
   -- Resume the blocked coroutine
   req.callback(result)
   M.remove(id)

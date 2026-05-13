@@ -583,6 +583,53 @@ ok("nameless agent skipped in auto-core mirror",
 core_status._reset_for_tests()
 aa.state.config.agents.bootstrap = {}
 
+-- ──────── 14. send_slot — paste-safe submit (body + deferred CR) ────────
+print("\n[14] send_slot — opts.submit follows body with deferred CR")
+-- Stash whatever the real slot terminal might be; install a fake that
+-- captures every send() call so we can verify the body-then-\r split.
+local saved_term = aa.state.slot_terminals[1]
+local sends = {}
+aa.state.slot_terminals[1] = {
+  is_alive = function() return true end,
+  send = function(self, text)
+    table.insert(sends, text)
+    return true
+  end,
+}
+
+local ok_body = aa.send_slot(1, "please revise foo()", { submit = true, submit_delay_ms = 30 })
+ok("send_slot returns true with submit=true", ok_body == true)
+ok("body is sent immediately (1 send so far)", #sends == 1 and sends[1] == "please revise foo()")
+
+vim.wait(80)  -- exceed submit_delay_ms so the deferred CR fires
+
+ok("CR is sent after the deferred delay (2 sends total)", #sends == 2)
+ok("second send is exactly \\r", sends[2] == "\r")
+
+-- Without submit=true, no CR follows.
+sends = {}
+aa.send_slot(1, "no-submit prompt")
+vim.wait(80)
+ok("send_slot without submit fires exactly one chan_send",
+   #sends == 1 and sends[1] == "no-submit prompt")
+
+aa.state.slot_terminals[1] = saved_term
+
+-- ──────── 15. slot_for_name — resolves bootstrap name to slot ────────
+print("\n[15] slot_for_name — bootstrap name lookup")
+aa.state.config.agents.bootstrap = {
+  { slot = 1, name = "jarvis", kind = "claude" },
+  { slot = 2, name = "rosie",  kind = "codex"  },
+}
+
+ok("slot_for_name resolves a known name", aa.slot_for_name("jarvis") == 1)
+ok("slot_for_name resolves a second name", aa.slot_for_name("rosie") == 2)
+ok("slot_for_name returns nil for unknown name", aa.slot_for_name("ghost") == nil)
+ok("slot_for_name returns nil for empty input", aa.slot_for_name("") == nil)
+ok("slot_for_name returns nil for nil input", aa.slot_for_name(nil) == nil)
+
+aa.state.config.agents.bootstrap = {}
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

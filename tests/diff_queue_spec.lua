@@ -76,9 +76,42 @@ result_captured = nil
 queue.reject(id2)
 ok("callback was invoked with result on reject", result_captured ~= nil)
 ok("result has DIFF_REJECTED", result_captured and result_captured.content[1].text == "DIFF_REJECTED")
+ok("default rejection reason is included",
+   result_captured and result_captured.content[2].text == "User rejected the diff.")
 
 local pending3 = queue.get_pending()
 ok("queue is empty after reject", #pending3 == 0)
+
+print("\n[3b] Queue Reject with custom reason (M / Request Change)")
+local id_reason = queue.enqueue({
+  agent_name = "test-agent",
+  file_path = "/tmp/reason.txt",
+  old_contents = "old",
+  new_contents = "new",
+  callback = function(res) result_captured = res end,
+})
+
+result_captured = nil
+queue.reject(id_reason, "please add error handling around the io.open call")
+ok("reject(id, reason) still fires DIFF_REJECTED",
+   result_captured and result_captured.content[1].text == "DIFF_REJECTED")
+ok("custom reason replaces the default message",
+   result_captured
+   and result_captured.content[2].text == "please add error handling around the io.open call")
+
+-- Empty / nil reason falls back to the default so the agent still gets
+-- a coherent message.
+local id_empty = queue.enqueue({
+  agent_name = "test-agent",
+  file_path = "/tmp/empty.txt",
+  old_contents = "x",
+  new_contents = "y",
+  callback = function(res) result_captured = res end,
+})
+result_captured = nil
+queue.reject(id_empty, "")
+ok("empty reason falls back to default message",
+   result_captured and result_captured.content[2].text == "User rejected the diff.")
 
 print("\n[4] Queue lookup + reject by tab_name (close_tab MCP hook)")
 queue.clear()

@@ -144,6 +144,159 @@ end
 ok("middle has q (auto-core stamp)",     has_keymap(middle_buf, "q"))
 ok("preview has <Esc> (auto-core stamp)", has_keymap(preview_buf, "<Esc>"))
 
+print("\n[4b] M keymap requests change and rejects with reason")
+-- Verify the M binding is present on every focusable pane.
+for _, item in ipairs({
+  { name = "left",    buf = left_buf },
+  { name = "middle",  buf = middle_buf },
+  { name = "preview", buf = preview_buf },
+}) do
+  ok(item.name .. " has M keymap (Request Change)", has_keymap(item.buf, "M"))
+end
+
+-- Mock vim.ui.input so the keymap can run headlessly. The keymap
+-- handler calls vim.ui.input(opts, cb); we capture the prompt to
+-- assert wording, then invoke cb with a canned reason.
+local captured_prompt = nil
+local saved_input = vim.ui.input
+local injected_reason = "wrap the io.open in pcall"
+vim.ui.input = function(opts, cb)
+  captured_prompt = opts and opts.prompt
+  cb(injected_reason)
+end
+
+-- Capture the rejection result on the pending entry's callback.
+queue.clear()
+local m_result = nil
+queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/m.lua",
+  old_contents = "old",
+  new_contents = "new",
+  tab_name = "tab-m",
+  callback = function(res) m_result = res end,
+})
+
+-- Re-open the float so _render_list refreshes for the new entry.
+ui.open()
+vim.wait(50)
+mf = ui._test_get_mfloat()
+
+-- Drive the M handler directly. Looking up the keymap rhs and calling
+-- it bypasses needing to feed keys through nvim_input — clearer and
+-- doesn't depend on which window currently has focus.
+local m_lbuf = mf:bufnr("left")
+local m_handler
+for _, km in ipairs(vim.api.nvim_buf_get_keymap(m_lbuf, "n")) do
+  if km.lhs == "M" then m_handler = km.callback end
+end
+ok("M keymap on left is a callable", type(m_handler) == "function")
+m_handler()
+vim.wait(50)
+
+ok("vim.ui.input was invoked with the REQUEST CHANGE prompt",
+   captured_prompt == "REQUEST CHANGE: ")
+ok("entry was rejected via M",
+   m_result and m_result.content and m_result.content[1].text == "DIFF_REJECTED")
+ok("agent receives the user's request-change reason verbatim",
+   m_result and m_result.content[2].text == injected_reason)
+ok("M empties the queue when it was the only entry",
+   #queue.get_pending() == 0)
+
+-- Drain the previous M handler's 150ms-deferred send_slot call
+-- against the still-real send_slot before installing the mock — the
+-- previous test's defer is harmless (real send_slot fails silently
+-- since slot_terminals[1] isn't a live agent), but if we don't wait
+-- it out it'll fire AFTER we install the mock and pollute the second
+-- test's captures.
+vim.wait(220)
+
+-- Second channel: M should also inject "REQUEST CHANGE: <reason>" into
+-- the agent's terminal via auto-agents.send_slot with submit=true. We
+-- mock send_slot to capture the call without needing a live terminal.
+-- The M handler defers the send by 150ms (so Claude's TUI has time to
+-- finish processing DIFF_REJECTED before we type), hence the wait.
+local aa = require("auto-agents")
+local saved_send_slot = aa.send_slot
+local send_captures = {}
+aa.send_slot = function(slot, text, opts)
+  table.insert(send_captures, { slot = slot, text = text, opts = opts })
+  return true
+end
+-- Make sure the focused-slot fallback resolves to something concrete.
+-- The queue entry's agent_name "jarvis" doesn't map to any bootstrap
+-- here (we didn't call aa.setup), so M's resolver falls back to
+-- aa.state.focused_slot.
+if not aa.state then aa.state = {} end
+aa.state.focused_slot = 1
+
+queue.clear()
+local m2_result = nil
+queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/m2.lua",
+  old_contents = "x",
+  new_contents = "y",
+  tab_name = "tab-m2",
+  callback = function(res) m2_result = res end,
+})
+
+local injected_reason2 = "use io.open instead of vim.fn.readfile"
+vim.ui.input = function(_, cb) cb(injected_reason2) end
+
+ui.open()
+vim.wait(50)
+mf = ui._test_get_mfloat()
+for _, km in ipairs(vim.api.nvim_buf_get_keymap(mf:bufnr("left"), "n")) do
+  if km.lhs == "M" then m_handler = km.callback end
+end
+m_handler()
+vim.wait(250)  -- exceeds the 150ms M-handler defer
+
+ok("send_slot was invoked exactly once after M", #send_captures == 1)
+ok("send_slot routed to a real slot (focused fallback)",
+   send_captures[1] and send_captures[1].slot == 1)
+ok("send_slot payload is prefixed with REQUEST CHANGE:",
+   send_captures[1] and send_captures[1].text == "REQUEST CHANGE: " .. injected_reason2)
+ok("send_slot was called with submit=true",
+   send_captures[1] and send_captures[1].opts and send_captures[1].opts.submit == true)
+ok("M still rejected the diff (DIFF_REJECTED + reason)",
+   m2_result and m2_result.content[1].text == "DIFF_REJECTED"
+   and m2_result.content[2].text == injected_reason2)
+
+aa.send_slot = saved_send_slot
+
+-- Empty input from the prompt cancels — verify no rejection fires.
+queue.clear()
+local cancel_result = nil
+local id_cancel = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/cancel.lua",
+  old_contents = "x",
+  new_contents = "y",
+  tab_name = "tab-cancel",
+  callback = function(res) cancel_result = res end,
+})
+
+vim.ui.input = function(_, cb) cb("") end
+ui.open()
+vim.wait(50)
+mf = ui._test_get_mfloat()
+for _, km in ipairs(vim.api.nvim_buf_get_keymap(mf:bufnr("left"), "n")) do
+  if km.lhs == "M" then m_handler = km.callback end
+end
+m_handler()
+vim.wait(50)
+
+ok("empty REQUEST CHANGE input is a no-op (no callback fired)",
+   cancel_result == nil)
+ok("queue entry remains pending after cancel",
+   queue.get(id_cancel) ~= nil and queue.get(id_cancel).status == "pending")
+
+-- Restore vim.ui.input and drain the queue for the next section.
+vim.ui.input = saved_input
+queue.clear()
+
 print("\n[5] Auto-close when queue drains")
 -- Clear residue from earlier sections, then re-open with two entries
 -- so we can verify the float stays open after the first removal and
