@@ -239,78 +239,117 @@ function M.open()
     },
     panes = {
       left = { width = 0.2, cursorline = true },
-      middle = { title = " Current " },
-      preview = { width = 0.4, title = " Proposed " },
-      footer = { height = 1, content = " A Accept • D Deny • [1-9] Select • Tab Navigate • q Close " }
+      middle = { title = " Current ", cursorline = true },
+      preview = { width = 0.4, title = " Proposed ", cursorline = true },
+      footer = { height = 1, content = " A/D Accept/Deny • [1-9] Select • Tab Cycle • hjkl/w/b/$/gg in diff • q Close " }
     },
     initial_focus = "left",
     on_open = function(self)
-      -- Keymaps common across all focusable panes (Left, Middle, Preview)
+      -- Pane cycling: bound on every pane so the user can Tab/Shift-Tab
+      -- (or <C-h>/<C-l>) between the list and the diff panes. q/<Esc>
+      -- to close is auto-stamped by auto-core.ui.float.multi on every
+      -- pane bufnr — we don't need to re-bind that here.
+      local function bind_cycle(buf)
+        if not buf then return end
+        local function map(lhs, fn)
+          vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, nowait = true })
+        end
+        map("<Tab>",   function() self:cycle("forward")  end)
+        map("<S-Tab>", function() self:cycle("backward") end)
+        map("<C-l>",   function() self:cycle("forward")  end)
+        map("<C-h>",   function() self:cycle("backward") end)
+      end
+
       for _, pane in ipairs({ "left", "middle", "preview" }) do
-        local buf = self:bufnr(pane)
-        if buf then
-          local function map(lhs, fn)
-            vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, nowait = true })
+        bind_cycle(self:bufnr(pane))
+      end
+
+      -- Accept / Deny stay on every focusable pane: it's natural to
+      -- review the diff in the preview pane and then hit A/D without
+      -- having to Tab back to the list first. The middle/preview
+      -- buffers are non-modifiable, so A (append) / D (delete-to-EOL)
+      -- don't have meaningful native semantics to clash with — same
+      -- precedent as worktree.graph mapping D on every pane.
+      local function bind_accept_deny(buf)
+        if not buf then return end
+        local function map(lhs, fn)
+          vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, nowait = true })
+        end
+        map("A", function()
+          local req = _render_list[_selected_idx]
+          if req then
+            queue.resolve(req.id, req.new_contents)
+            render_left()
+            update_preview()
           end
-          
-          -- Navigations (Tab, S-Tab, C-h, C-l)
-          map("<Tab>", function() self:cycle("forward") end)
-          map("<S-Tab>", function() self:cycle("backward") end)
-          map("<C-l>", function() self:cycle("forward") end)
-          map("<C-h>", function() self:cycle("backward") end)
-
-          -- Global actions: A (Accept) and D (Deny)
-          map("A", function()
-            local req = _render_list[_selected_idx]
-            if req then
-              queue.resolve(req.id, req.new_contents)
-              render_left()
-              update_preview()
-            end
-          end)
-          map("D", function()
-            local req = _render_list[_selected_idx]
-            if req then
-              queue.reject(req.id)
-              render_left()
-              update_preview()
-            end
-          end)
-
-          -- Numeric selection (1-9)
-          for i = 1, 9 do
-            map(tostring(i), function()
-              if i <= #_render_list then
-                _selected_idx = i
-                render_left()
-                update_preview()
-              end
-            end)
+        end)
+        map("D", function()
+          local req = _render_list[_selected_idx]
+          if req then
+            queue.reject(req.id)
+            render_left()
+            update_preview()
           end
+        end)
+      end
 
-          -- Enter behavior
-          map("<CR>", function()
-            local req = _render_list[_selected_idx]
-            if req then
-              open_native_diff(req)
-            end
-          end)
+      for _, pane in ipairs({ "left", "middle", "preview" }) do
+        bind_accept_deny(self:bufnr(pane))
+      end
 
-          -- Shared j/k navigation (selection sync)
-          map("j", function()
-            if _selected_idx < #_render_list then
-              _selected_idx = _selected_idx + 1
+      -- Selection keymaps (j/k row movement, 1-9 jump, <CR> open) are
+      -- scoped to the LEFT pane only. The middle and preview panes
+      -- hold the diff content; shadowing j/k/digits there would break
+      -- Vim's native motions (hjkl scrolling, 5j / 10G counts,
+      -- w/b/e/f/F/t/T/$/^/0/gg/G/% — everything the user asked for).
+      local left_buf = self:bufnr("left")
+      if left_buf then
+        local function map(lhs, fn)
+          vim.keymap.set("n", lhs, fn, { buffer = left_buf, silent = true, nowait = true })
+        end
+
+        for i = 1, 9 do
+          map(tostring(i), function()
+            if i <= #_render_list then
+              _selected_idx = i
               render_left()
               update_preview()
             end
           end)
-          map("k", function()
-            if _selected_idx > 1 then
-              _selected_idx = _selected_idx - 1
-              render_left()
-              update_preview()
-            end
-          end)
+        end
+
+        map("<CR>", function()
+          local req = _render_list[_selected_idx]
+          if req then
+            open_native_diff(req)
+          end
+        end)
+
+        map("j", function()
+          if _selected_idx < #_render_list then
+            _selected_idx = _selected_idx + 1
+            render_left()
+            update_preview()
+          end
+        end)
+        map("k", function()
+          if _selected_idx > 1 then
+            _selected_idx = _selected_idx - 1
+            render_left()
+            update_preview()
+          end
+        end)
+      end
+
+      -- Line numbers on the diff panes so the user can correlate
+      -- positions with the on-disk file. cursorline is already set
+      -- via the pane config; number is set here because auto-core's
+      -- multi-float doesn't expose it as a first-class pane option
+      -- yet (the option set is cursorline / wrap / winhighlight).
+      for _, pane in ipairs({ "middle", "preview" }) do
+        local win = self:winid(pane)
+        if win and vim.api.nvim_win_is_valid(win) then
+          vim.wo[win].number = true
         end
       end
     end,
@@ -331,7 +370,15 @@ function M.open()
   update_preview()
 end
 
---- Subscribe to diff events (auto-refresh)
+--- Test helper: expose the live multi-float instance so headless specs
+--- can introspect pane winid/bufnr and assert window options + keymaps.
+--- Not part of the public contract.
+--- @return AutoCoreMultiFloat?
+function M._test_get_mfloat()
+  return _mfloat
+end
+
+--- Subscribe to diff events (auto-refresh + auto-close)
 local ok_ev, events = pcall(require, "auto-core.events")
 if ok_ev and events.subscribe then
   events.subscribe("auto-agents:diff_queued", function()
@@ -342,6 +389,20 @@ if ok_ev and events.subscribe then
       end
     end)
   end, { id = "auto_agents_diff_ui_refresh" })
+
+  -- Auto-close the panel when the queue drains. Listening on diff_removed
+  -- (rather than wiring this into the A/D handlers) means every removal
+  -- path triggers it: panel A/D, the native split's save/close
+  -- autocmds, and the close_tab MCP call from the agent side. If a new
+  -- diff arrives moments later the openDiff handler's vim.schedule
+  -- M.open() reopens us, so there's no race.
+  events.subscribe("auto-agents:diff_removed", function()
+    vim.schedule(function()
+      if _mfloat and _mfloat:is_open() and #queue.get_pending() == 0 then
+        _mfloat:close()
+      end
+    end)
+  end, { id = "auto_agents_diff_ui_autoclose" })
 end
 
 return M
