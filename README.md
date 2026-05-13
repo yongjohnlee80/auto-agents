@@ -119,10 +119,12 @@ maintainer uses):
 
 | Lhs              | Action                                   |
 |------------------|------------------------------------------|
-| `<F5>`           | `:AutoAgents`           — toggle panel   |
-| `<F6>` / `<F12>` | `:AutoAgentsDock`       — open nav dock  |
-| `<leader>ac`     | `:AutoAgents`           — toggle panel   |
-| `<leader>a0`..`9`| `:AutoAgentsFocus N`    — jump to slot N |
+| `<F5>`           | `:AutoAgents`           — toggle panel       |
+| `<F6>` / `<F12>` | `:AutoAgentsDock`       — open nav dock      |
+| `<F11>`          | `:AutoAgentsDiffQueue`  — toggle diff queue  |
+| `<leader>ac`     | `:AutoAgents`           — toggle panel       |
+| `<leader>ad`     | `:AutoAgentsDiffQueue`  — toggle diff queue  |
+| `<leader>a0`..`9`| `:AutoAgentsFocus N`    — jump to slot N     |
 
 Inside the **navigation dock** (an attached float):
 
@@ -138,10 +140,82 @@ User commands (always available):
 | `:AutoAgentsFocus <N>`    | Focus slot N. Routes 0–5 to the main panel, 6–9 to floats.|
 | `:AutoAgentsSub <N>`      | Toggle a sub-agent float (slots 6–9).                     |
 | `:AutoAgentsDock`         | Toggle the rightmost-centered navigation dock.            |
+| `:AutoAgentsDiffQueue`    | Toggle the unified diff queue review panel. See below.    |
 
 For an example wiring (with dynamic `which-key` descriptions per slot), see
 [`examples/lazy-spec.lua`](./examples/lazy-spec.lua) — or the maintainer's live
 config at [`autovim`](https://github.com/yongjohnlee80/autovim/blob/main/lua/plugins/auto-agents.lua).
+
+## Diff queue
+
+When an agent proposes a file edit through its MCP `openDiff` tool, the
+request is queued into the **unified diff queue** instead of immediately
+hijacking your editor with a split. Open the review panel with
+`:AutoAgentsDiffQueue` (default `<F11>` / `<leader>ad`) — a three-pane
+float lets you review each queued change on your own terms.
+
+### Layout
+
+```
+┌─ Agent Diff Queue ────────────────────────────────────────────────┐
+│ Pending Diffs (3) │ Current               │ Proposed              │
+│                   │                       │                       │
+│ ▶ [1] foo.go      │ <old content from     │ <new content the      │
+│   [2] bar.lua     │  the file on disk>    │  agent wants to write>│
+│   [3] readme.md   │                       │                       │
+│                   │                       │                       │
+│                   │ — diff-highlighted —  │ — diff-highlighted —  │
+└───────────────────┴───────────────────────┴───────────────────────┘
+ A/D/M Accept/Deny/Modify • E Edit (preview) • [1-9] Select • Tab Cycle • hjkl in diff • q Close
+```
+
+The left pane is the queue. The middle pane shows the current
+on-disk content. The right ("preview") pane shows the agent's
+proposed content. Both diff panes get **line numbers** and
+**treesitter syntax highlighting** based on the file's extension —
+the diff isn't just colored by `:diffthis` add/remove cues, it's
+also grammar-aware for the underlying language.
+
+### Resolution actions
+
+All actions operate on the currently-selected entry (the row marked
+`▶` in the left pane):
+
+| Key   | Where bound    | Effect |
+|-------|----------------|--------|
+| `A`   | every pane     | **Accept**. Resolves the diff with the proposed content. The agent receives `FILE_SAVED` and the file is written. |
+| `D`   | every pane     | **Deny**. Resolves with `DIFF_REJECTED`. The agent reads it as a flat refusal. |
+| `M`   | every pane     | **Modify** — REQUEST CHANGE with a reason. Prompts for free-form text via `vim.ui.input`; the reason reaches the agent through two channels (see below). |
+| `E`   | preview only   | **Edit in place**. Flips the preview pane to modifiable + enters insert mode. Tweak the proposed content directly; `A` then resolves with your edited version. Toggle `E` again to leave edit mode. Edits survive selection switches (`j`/`k`/digit). |
+| `<CR>`| left only      | Open the **native split** diff (full editor width, real LSP attachment) for substantial edits. Saving (`:w`) accepts, `:q` denies. |
+| `1`–`9` | left only    | Jump to entry N. |
+| `j`/`k` | left only    | Move selection up/down. |
+| `<Tab>` / `<S-Tab>` / `<C-h>` / `<C-l>` | every pane | Cycle between panes. |
+| `q` / `<Esc>` | every pane | Close the panel. |
+
+`h`/`j`/`k`/`l` and the rest of Vim's normal-mode motions (`gg`, `G`,
+`$`, `^`, `w`, `b`, `e`, `f`, `t`, `%`, counts like `5j`/`10G`, etc.)
+work natively inside the middle and preview panes — they're not
+shadowed by the selection keys. The panel auto-closes when the queue
+drains.
+
+### Two channels for REQUEST CHANGE (`M`)
+
+`openDiff`'s response protocol returns a free-form text in
+`content[2]` of `DIFF_REJECTED`, which we populate with your reason.
+That's the "right" channel, but **Claude Code's CLI currently drops
+`content[2]` and surfaces only a generic "user rejected" message to
+the agent**, so the reason wouldn't get through on its own.
+
+To deliver the feedback today, `M` also injects `"REQUEST CHANGE:
+<reason>"` into the owning agent's terminal as a follow-up user
+prompt via `auto-agents.send_slot(slot, body, { submit = true })`.
+The agent reads it on its main input loop and iterates. When upstream
+Claude Code eventually forwards `content[2]`, both channels carrying
+the same text becomes a benign duplicate — no editor-side changes
+needed.
+
+See [ADR 0012](kb-seeds/coding.md) in the KB for the full rationale.
 
 ## First run
 
@@ -511,7 +585,8 @@ spawn-time render race remains undiagnosed.
 - [x] **M4** knowledge base (shared/private/isolated, manifest, Obsidian compat)
 - [x] **M5** resource grants, manager designation
 - [ ] **M6** README polish, ARCHITECTURE.md, test suite, `v0.1.0` tag
-- [ ] **M7** per-Claude MCP / WebSocket bridge (deferred; out of scope for v0.1)
+- [x] **M7** per-Claude MCP / WebSocket bridge — vendored claudecode.nvim's WS stack as of v0.2.x; `openDiff` + `close_tab` registered, `auto-agents:diff_queued`/`diff_removed` topics drive the unified queue
+- [x] **M8** diff queue editorial workflow (v0.2.3) — multi-pane review float, `A`/`D`/`M`/`E`/`<CR>` actions, native motions + treesitter in the diff panes, REQUEST CHANGE two-channel feedback, auto-close on drain
 
 ## Attribution
 
