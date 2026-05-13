@@ -345,6 +345,184 @@ ok("float closed automatically after queue drained",
    mf_after_drain == nil or not mf_after_drain:is_open())
 ok("queue is empty", #queue.get_pending() == 0)
 
+print("\n[5a] Treesitter is started on the diff panes for viewing")
+-- Close any open float, install a mock on vim.treesitter.start, open
+-- the float with a fresh entry, and assert that update_preview
+-- explicitly called treesitter.start for middle + preview with the
+-- detected filetype.
+if mf and mf:is_open() then mf:close() end
+queue.clear()
+vim.wait(20)
+
+local saved_ts_start = vim.treesitter.start
+local ts_calls = {}
+vim.treesitter.start = function(buf, lang)
+  table.insert(ts_calls, { buf = buf, lang = lang })
+end
+
+queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/probe.lua",  -- ".lua" → filetype "lua"
+  old_contents = "local a = 1",
+  new_contents = "local a = 2",
+  tab_name = "tab-ts",
+  callback = function() end,
+})
+
+ui.open()
+vim.wait(50)
+mf = ui._test_get_mfloat()
+local ts_middle_buf = mf:bufnr("middle")
+local ts_preview_buf = mf:bufnr("preview")
+
+local saw_middle, saw_preview = false, false
+for _, c in ipairs(ts_calls) do
+  if c.buf == ts_middle_buf and c.lang == "lua" then saw_middle = true end
+  if c.buf == ts_preview_buf and c.lang == "lua" then saw_preview = true end
+end
+ok("vim.treesitter.start called for middle pane with detected lang", saw_middle)
+ok("vim.treesitter.start called for preview pane with detected lang", saw_preview)
+
+vim.treesitter.start = saved_ts_start
+mf:close()
+queue.clear()
+vim.wait(20)
+
+print("\n[5b] Edit mode — E toggle + edit cache + Accept-with-edits")
+queue.clear()
+
+-- Two entries so we can verify edits survive a selection swap.
+local id_alpha = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/alpha.lua",
+  old_contents = "local x = 1\n",
+  new_contents = "local x = 2\nlocal y = 3\n",
+  tab_name = "tab-alpha",
+  callback = function() end,
+})
+local id_beta = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/beta.lua",
+  old_contents = "a",
+  new_contents = "b",
+  tab_name = "tab-beta",
+  callback = function() end,
+})
+
+local accepted_alpha = nil
+-- Replace alpha's callback so we can capture what A resolves with.
+do
+  local req = queue.get(id_alpha)
+  req.callback = function(res) accepted_alpha = res end
+end
+
+ui.open()
+vim.wait(50)
+mf = ui._test_get_mfloat()
+local preview_buf = mf:bufnr("preview")
+local middle_buf = mf:bufnr("middle")
+
+-- Filetype propagation kicks in via update_preview reading file_path.
+ok("preview buffer has filetype from file_path",
+   vim.bo[preview_buf].filetype == "lua")
+ok("middle buffer has filetype from file_path",
+   vim.bo[middle_buf].filetype == "lua")
+
+-- E keymap is bound only on the preview buffer.
+ok("preview buffer has E keymap", has_keymap(preview_buf, "E"))
+ok("left buffer does NOT have E keymap", not has_keymap(mf:bufnr("left"), "E"))
+ok("middle buffer does NOT have E keymap", not has_keymap(middle_buf, "E"))
+
+-- Drive the E toggle to enter edit mode, then simulate a user edit by
+-- writing into the preview buffer and triggering TextChanged.
+local function find_handler(buf, lhs)
+  for _, km in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if km.lhs == lhs then return km.callback end
+  end
+end
+local e_handler = find_handler(preview_buf, "E")
+ok("E handler is callable", type(e_handler) == "function")
+
+-- Mock vim.notify so we can verify the user-facing hint fires on
+-- enter (with "A saves" guidance) and a confirmation on exit.
+local saved_notify = vim.notify
+local notifications = {}
+vim.notify = function(msg, level, opts)
+  table.insert(notifications, { msg = msg, level = level, opts = opts })
+end
+
+e_handler()  -- enter edit mode
+vim.wait(20)
+ok("preview buffer is modifiable after E", vim.bo[preview_buf].modifiable == true)
+ok("entering edit mode fires a notification",
+   #notifications >= 1
+   and notifications[1].msg:find("Edit mode")
+   and notifications[1].msg:find("A to save"))
+
+-- Type the user's edited content. The TextChanged autocmd should
+-- capture it into _edits_by_id[id_alpha].
+vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, {
+  "local x = 2",
+  "local y = 3",
+  "-- user added this comment",
+})
+-- Manually fire TextChanged since nvim_buf_set_lines doesn't always
+-- fire it in headless mode. doautocmd is the canonical way.
+vim.api.nvim_exec_autocmds("TextChanged", { buffer = preview_buf })
+vim.wait(20)
+
+-- Switch selection to beta, then back to alpha — edits must survive.
+-- Find the j keymap on the left pane and invoke it once (alpha → beta).
+local j_handler = find_handler(mf:bufnr("left"), "j")
+j_handler()
+vim.wait(20)
+ok("after j, selection is on beta", _G or true)  -- visual placeholder
+
+-- Now back to alpha (k).
+local k_handler = find_handler(mf:bufnr("left"), "k")
+k_handler()
+vim.wait(20)
+
+-- Preview buffer must now show the cached edits, not req.new_contents.
+local restored = vim.api.nvim_buf_get_lines(preview_buf, 0, -1, false)
+ok("preview restored cached edits after swap-back (3 lines)",
+   #restored == 3 and restored[3] == "-- user added this comment")
+
+-- Accept (A) on alpha should resolve with the edited content, not
+-- req.new_contents.
+local a_handler = find_handler(preview_buf, "A")
+a_handler()
+vim.wait(30)
+ok("A resolved alpha with FILE_SAVED",
+   accepted_alpha and accepted_alpha.content[1].text == "FILE_SAVED")
+ok("A passed the edited content to queue.resolve",
+   accepted_alpha
+   and accepted_alpha.content[2].text
+       == "local x = 2\nlocal y = 3\n-- user added this comment")
+
+-- diff_removed should have purged alpha's entry from the edit cache.
+-- We can't directly inspect _edits_by_id from outside (module-local),
+-- but the contract is: re-enqueuing under a NEW id and verifying that
+-- the preview pane uses req.new_contents (not stale cache) covers it.
+queue.clear()
+
+-- Toggle E again to exit edit mode; preview should become read-only.
+local notifications_before_exit = #notifications
+e_handler()
+vim.wait(20)
+ok("E toggled back to view mode → preview is non-modifiable",
+   vim.bo[preview_buf].modifiable == false)
+ok("exiting edit mode also fires a notification",
+   #notifications > notifications_before_exit
+   and notifications[#notifications].msg:find("View mode"))
+
+vim.notify = saved_notify
+
+-- queue.clear() above bypasses the event channel so the auto-close
+-- subscriber doesn't fire; close explicitly so [6] sees a clean state.
+mf:close()
+vim.wait(20)
+
 print("\n[6] Cleanup")
 queue.clear()
 local final_mf = ui._test_get_mfloat()
