@@ -147,7 +147,10 @@ local function set_buf_lines(buf, lines)
   end
 end
 
-local function update_preview()
+-- Declaration for mutually recursive calls
+local render_left, update_preview
+
+update_preview = function()
   if not _mfloat or not _mfloat:is_open() then return end
   
   local req = _render_list[_selected_idx]
@@ -175,7 +178,7 @@ local function update_preview()
   end
 end
 
-local function render_left()
+render_left = function()
   if not _mfloat or not _mfloat:is_open() then return end
   
   local buf = _mfloat:bufnr("left")
@@ -191,7 +194,8 @@ local function render_left()
   for i, req in ipairs(_render_list) do
     local marker = (i == _selected_idx) and "▶" or " "
     local filename = vim.fn.fnamemodify(req.file_path, ":t")
-    lines[#lines + 1] = string.format("%s %s [%s]", marker, filename, req.agent_name)
+    -- Requirement: [N] {title} selection format
+    lines[#lines + 1] = string.format("%s [%d] %s [%s]", marker, i, filename, req.agent_name)
   end
   
   set_buf_lines(buf, lines)
@@ -237,9 +241,79 @@ function M.open()
       left = { width = 0.2, cursorline = true },
       middle = { title = " Current " },
       preview = { width = 0.4, title = " Proposed " },
-      footer = { height = 1, content = " <CR> Edit Diff • j/k Navigate • q Close " }
+      footer = { height = 1, content = " A Accept • D Deny • [1-9] Select • Tab Navigate • q Close " }
     },
     initial_focus = "left",
+    on_open = function(self)
+      -- Keymaps common across all focusable panes (Left, Middle, Preview)
+      for _, pane in ipairs({ "left", "middle", "preview" }) do
+        local buf = self:bufnr(pane)
+        if buf then
+          local function map(lhs, fn)
+            vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, nowait = true })
+          end
+          
+          -- Navigations (Tab, S-Tab, C-h, C-l)
+          map("<Tab>", function() self:cycle("forward") end)
+          map("<S-Tab>", function() self:cycle("backward") end)
+          map("<C-l>", function() self:cycle("forward") end)
+          map("<C-h>", function() self:cycle("backward") end)
+
+          -- Global actions: A (Accept) and D (Deny)
+          map("A", function()
+            local req = _render_list[_selected_idx]
+            if req then
+              queue.resolve(req.id, req.new_contents)
+              render_left()
+              update_preview()
+            end
+          end)
+          map("D", function()
+            local req = _render_list[_selected_idx]
+            if req then
+              queue.reject(req.id)
+              render_left()
+              update_preview()
+            end
+          end)
+
+          -- Numeric selection (1-9)
+          for i = 1, 9 do
+            map(tostring(i), function()
+              if i <= #_render_list then
+                _selected_idx = i
+                render_left()
+                update_preview()
+              end
+            end)
+          end
+
+          -- Enter behavior
+          map("<CR>", function()
+            local req = _render_list[_selected_idx]
+            if req then
+              open_native_diff(req)
+            end
+          end)
+
+          -- Shared j/k navigation (selection sync)
+          map("j", function()
+            if _selected_idx < #_render_list then
+              _selected_idx = _selected_idx + 1
+              render_left()
+              update_preview()
+            end
+          end)
+          map("k", function()
+            if _selected_idx > 1 then
+              _selected_idx = _selected_idx - 1
+              render_left()
+              update_preview()
+            end
+          end)
+        end
+      end
+    end,
     on_close = function()
       _mfloat = nil
       -- Finding 5: unsubscribe from events on close
@@ -255,47 +329,19 @@ function M.open()
   
   render_left()
   update_preview()
-  
-  local left_buf = _mfloat:bufnr("left")
-  if left_buf then
-    local function map(lhs, fn)
-      vim.keymap.set("n", lhs, fn, { buffer = left_buf, silent = true, nowait = true })
-    end
-    
-    map("j", function()
-      if _selected_idx < #_render_list then
-        _selected_idx = _selected_idx + 1
+end
+
+--- Subscribe to diff events (auto-refresh)
+local ok_ev, events = pcall(require, "auto-core.events")
+if ok_ev and events.subscribe then
+  events.subscribe("auto-agents:diff_queued", function()
+    vim.schedule(function()
+      if _mfloat and _mfloat:is_open() then
         render_left()
         update_preview()
       end
     end)
-    map("k", function()
-      if _selected_idx > 1 then
-        _selected_idx = _selected_idx - 1
-        render_left()
-        update_preview()
-      end
-    end)
-    map("<CR>", function()
-      local req = _render_list[_selected_idx]
-      if req then
-        open_native_diff(req)
-      end
-    end)
-  end
-  
-  -- Finding 5: subscribe to events while open to auto-refresh
-  local ok_ev, events = pcall(require, "auto-core.events")
-  if ok_ev and events.subscribe then
-    _event_handle = events.subscribe("auto-agents:diff_queued", function()
-      vim.schedule(function()
-        if _mfloat and _mfloat:is_open() then
-          render_left()
-          update_preview()
-        end
-      end)
-    end, { id = "auto_agents_diff_ui_refresh" })
-  end
+  end, { id = "auto_agents_diff_ui_refresh" })
 end
 
 return M
