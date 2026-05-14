@@ -345,6 +345,130 @@ ok("float closed automatically after queue drained",
    mf_after_drain == nil or not mf_after_drain:is_open())
 ok("queue is empty", #queue.get_pending() == 0)
 
+print("\n[5b] Auto-close also fires when the user empties the queue via the panel keymaps (A / D)")
+-- IMPORTANT regression contract: pressing A or D in the diff panel
+-- when the queue has exactly one entry MUST drain the queue AND
+-- close the float. This exercises the keymap path (not the
+-- queue.resolve/queue.reject direct calls covered by [5]) because
+-- the bug was that the keymap handler's render_left() + update_preview()
+-- ran AFTER queue.resolve and the auto-close subscriber's
+-- vim.schedule path raced against them. If this section ever regresses,
+-- the diff workflow becomes unusable — users would be left staring at
+-- an empty panel after every accept/reject.
+queue.clear()
+vim.wait(20)
+
+local function fire_buffer_keymap(buf, lhs)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    error("fire_buffer_keymap: invalid buffer " .. tostring(buf))
+  end
+  for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if m.lhs == lhs and type(m.callback) == "function" then
+      m.callback()
+      return true
+    end
+  end
+  error("fire_buffer_keymap: no n-mode mapping for '" .. lhs .. "'")
+end
+
+-- Sub-case 1: press A on the single pending entry. Queue drains;
+-- float must auto-close.
+local id_press_a = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/press_a.lua",
+  old_contents = "before",
+  new_contents = "AFTER",
+  tab_name = "tab-press-a",
+  callback = function() end,
+})
+ui.open()
+vim.wait(50)
+local mf_a = ui._test_get_mfloat()
+ok("[A path] float open with one pending entry",
+   mf_a ~= nil and mf_a:is_open() and #queue.get_pending() == 1)
+
+local left_buf_a = mf_a:bufnr("left")
+fire_buffer_keymap(left_buf_a, "A")
+-- vim.schedule path in the auto-close subscriber needs at least one
+-- main-loop tick. Wait longer than that to be deterministic.
+vim.wait(100, function()
+  local m = ui._test_get_mfloat()
+  return m == nil or not m:is_open()
+end)
+local mf_after_a = ui._test_get_mfloat()
+ok("[A path] queue empty after A keymap",
+   #queue.get_pending() == 0)
+ok("[A path] float auto-closed after A drained the queue (regression: pressing A must close the empty panel)",
+   mf_after_a == nil or not mf_after_a:is_open(),
+   string.format("queue_pending=%d, float_open=%s",
+     #queue.get_pending(),
+     tostring(mf_after_a and mf_after_a:is_open() or false)))
+
+-- Sub-case 2: press D on the single pending entry. Same contract.
+vim.wait(20)
+local id_press_d = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/press_d.lua",
+  old_contents = "before",
+  new_contents = "AFTER",
+  tab_name = "tab-press-d",
+  callback = function() end,
+})
+ui.open()
+vim.wait(50)
+local mf_d = ui._test_get_mfloat()
+ok("[D path] float open with one pending entry",
+   mf_d ~= nil and mf_d:is_open() and #queue.get_pending() == 1)
+
+local left_buf_d = mf_d:bufnr("left")
+fire_buffer_keymap(left_buf_d, "D")
+vim.wait(100, function()
+  local m = ui._test_get_mfloat()
+  return m == nil or not m:is_open()
+end)
+local mf_after_d = ui._test_get_mfloat()
+ok("[D path] queue empty after D keymap",
+   #queue.get_pending() == 0)
+ok("[D path] float auto-closed after D drained the queue (regression: pressing D must close the empty panel)",
+   mf_after_d == nil or not mf_after_d:is_open(),
+   string.format("queue_pending=%d, float_open=%s",
+     #queue.get_pending(),
+     tostring(mf_after_d and mf_after_d:is_open() or false)))
+
+-- Sub-case 3: with TWO entries, pressing A on the first MUST leave
+-- the float open (queue still has one). This guards against an
+-- over-eager close that would dismiss the panel while work remains.
+queue.clear()
+vim.wait(20)
+local id_two_a = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/two_a.lua",
+  old_contents = "1", new_contents = "1!",
+  tab_name = "tab-two-a",
+  callback = function() end,
+})
+local id_two_b = queue.enqueue({
+  agent_name = "jarvis",
+  file_path = "/tmp/two_b.lua",
+  old_contents = "2", new_contents = "2!",
+  tab_name = "tab-two-b",
+  callback = function() end,
+})
+ui.open()
+vim.wait(50)
+local mf_two = ui._test_get_mfloat()
+ok("[non-empty] float open with two pending entries",
+   mf_two ~= nil and mf_two:is_open() and #queue.get_pending() == 2)
+fire_buffer_keymap(mf_two:bufnr("left"), "A")
+vim.wait(100)
+local mf_two_after = ui._test_get_mfloat()
+ok("[non-empty] float stays open after A when other entries remain",
+   mf_two_after ~= nil and mf_two_after:is_open()
+     and #queue.get_pending() == 1)
+-- Drain the remaining entry to leave a clean slate for [5a].
+fire_buffer_keymap(mf_two_after:bufnr("left"), "A")
+vim.wait(100)
+
 print("\n[5a] Treesitter is started on the diff panes for viewing")
 -- Close any open float, install a mock on vim.treesitter.start, open
 -- the float with a fresh entry, and assert that update_preview

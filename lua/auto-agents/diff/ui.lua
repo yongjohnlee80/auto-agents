@@ -9,8 +9,16 @@ local queue = require("auto-agents.diff.queue")
 --- @type AutoCoreMultiFloat?
 local _mfloat = nil
 
---- @type integer|string|nil
-local _event_handle = nil
+--- Live event-subscription handles. Owned by the panel — registered
+--- in `M.open()` and released in the `on_close` callback. Wired this
+--- way (rather than at module-load) so the auto-close contract
+--- survives `events._reset_for_tests` / `:Lazy reload` mid-session:
+--- each panel open re-subscribes, so a stale events bus can't leave
+--- us with a panel that refuses to close after the user drains the
+--- queue via A/D. See `tests/diff_ui_spec.lua` section [5b] for the
+--- regression contract.
+--- @type table<string, AutoCoreSubHandle?>
+local _event_handles = { refresh = nil, autoclose = nil }
 
 --- @type AutoAgentsDiffRequest[]
 local _render_list = {}
@@ -537,17 +545,77 @@ function M.open()
         pcall(vim.api.nvim_del_autocmd, _edits_autocmd_id)
         _edits_autocmd_id = nil
       end
-      -- Finding 5: unsubscribe from events on close
+      -- Release the auto-close + refresh subscriptions registered in
+      -- M.open(). Doing this on close (rather than at module unload,
+      -- which never happens in practice) means panels stop receiving
+      -- events the instant they're dismissed — no leaked subscribers
+      -- when the user toggles the panel repeatedly.
       local ok_ev, events = pcall(require, "auto-core.events")
-      if ok_ev and events.unsubscribe and _event_handle then
-        events.unsubscribe(_event_handle)
-        _event_handle = nil
+      if ok_ev and events.unsubscribe then
+        if _event_handles.refresh   then events.unsubscribe(_event_handles.refresh)   end
+        if _event_handles.autoclose then events.unsubscribe(_event_handles.autoclose) end
+        _event_handles.refresh   = nil
+        _event_handles.autoclose = nil
       end
     end,
   })
   
   _mfloat:open()
-  
+
+  -- Register the refresh + auto-close subscriptions for THIS panel
+  -- instance. Re-subscribing on every open means the contract is
+  -- robust against `events._reset_for_tests`, `:Lazy reload`, or any
+  -- other mid-session bus reset that would otherwise leave us with a
+  -- panel that refuses to close after the user drains the queue via
+  -- A/D. The handles are released in on_close above.
+  local ok_ev2, events2 = pcall(require, "auto-core.events")
+  if ok_ev2 and events2.subscribe then
+    -- Defensive: clear any previous handles in case open() is called
+    -- twice without a close in between (the early-return at the top
+    -- of M.open should prevent this, but the cost of being safe is
+    -- two nil-checks).
+    if _event_handles.refresh   then pcall(events2.unsubscribe, _event_handles.refresh)   end
+    if _event_handles.autoclose then pcall(events2.unsubscribe, _event_handles.autoclose) end
+
+    _event_handles.refresh = events2.subscribe(
+      "auto-agents:diff_queued",
+      function()
+        vim.schedule(function()
+          if _mfloat and _mfloat:is_open() then
+            render_left()
+            update_preview()
+          end
+        end)
+      end
+    )
+
+    -- Auto-close the panel when the queue drains. Listening on
+    -- diff_removed (rather than wiring this into A/D handlers) means
+    -- every removal path triggers it: panel A/D, the native split's
+    -- save/close autocmds, and the close_tab MCP call from the agent
+    -- side. If a new diff arrives moments later the openDiff handler's
+    -- vim.schedule M.open() reopens us, so there's no race.
+    _event_handles.autoclose = events2.subscribe(
+      "auto-agents:diff_removed",
+      function(payload)
+        -- Drop any in-progress edits for the removed entry — once
+        -- it's accepted (A reads the edits, then resolves), denied
+        -- (D), or closed via close_tab, the edits no longer have
+        -- a target.
+        if payload and payload.id then
+          _edits_by_id[payload.id] = nil
+        end
+        vim.schedule(function()
+          if _mfloat and _mfloat:is_open()
+              and #queue.get_pending() == 0
+          then
+            _mfloat:close()
+          end
+        end)
+      end
+    )
+  end
+
   render_left()
   update_preview()
 end
@@ -560,37 +628,10 @@ function M._test_get_mfloat()
   return _mfloat
 end
 
---- Subscribe to diff events (auto-refresh + auto-close)
-local ok_ev, events = pcall(require, "auto-core.events")
-if ok_ev and events.subscribe then
-  events.subscribe("auto-agents:diff_queued", function()
-    vim.schedule(function()
-      if _mfloat and _mfloat:is_open() then
-        render_left()
-        update_preview()
-      end
-    end)
-  end, { id = "auto_agents_diff_ui_refresh" })
-
-  -- Auto-close the panel when the queue drains. Listening on diff_removed
-  -- (rather than wiring this into the A/D handlers) means every removal
-  -- path triggers it: panel A/D, the native split's save/close
-  -- autocmds, and the close_tab MCP call from the agent side. If a new
-  -- diff arrives moments later the openDiff handler's vim.schedule
-  -- M.open() reopens us, so there's no race.
-  events.subscribe("auto-agents:diff_removed", function(payload)
-    -- Drop any in-progress edits for the removed entry — once it's
-    -- accepted (A reads the edits, then resolves), denied (D), or
-    -- closed via close_tab, the edits no longer have a target.
-    if payload and payload.id then
-      _edits_by_id[payload.id] = nil
-    end
-    vim.schedule(function()
-      if _mfloat and _mfloat:is_open() and #queue.get_pending() == 0 then
-        _mfloat:close()
-      end
-    end)
-  end, { id = "auto_agents_diff_ui_autoclose" })
-end
+-- Subscriptions to `auto-agents:diff_queued` and `:diff_removed`
+-- are intentionally registered INSIDE `M.open()` (not at module
+-- load) so the auto-close contract survives a mid-session events
+-- bus reset. See the `_event_handles` doc-comment near the top of
+-- the file + the `on_close` callback for the lifecycle.
 
 return M
