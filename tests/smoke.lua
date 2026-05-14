@@ -472,6 +472,58 @@ ok("state.set_focused_slot(3) mirrors to aa.state.focused_slot",
   state_mod.get_focused_slot() == 3
     and aa.state.focused_slot == 3)
 
+-- Regression: refresh_winbar() must reflect the CURRENT focused slot
+-- even when the in-memory mirror (aa.state.focused_slot) has gone
+-- stale. The original bug: the `watch_focused_slot` subscriber is
+-- registered once at setup; if the auto-core events bus is reset
+-- mid-session (test harness leakage, :Lazy reload), the mirror sticks
+-- at its last value (commonly 1 = Jarvis) and refresh_winbar would
+-- render Jarvis no matter which slot the user actually focused. Fix:
+-- refresh_winbar reads the focused slot DIRECTLY from the namespace,
+-- not from the mirror. This test forces the mirror out of sync and
+-- asserts the winbar still highlights the real focused slot.
+do
+  -- Open the panel so refresh_winbar has somewhere to write.
+  aa.open(true)
+  vim.wait(20)
+  ok("regression: panel open before forced stale-mirror probe",
+    aa.state.panel_winid ~= nil
+      and vim.api.nvim_win_is_valid(aa.state.panel_winid))
+
+  -- Establish a clean baseline: focus slot 1 (Jarvis), confirm mirror.
+  state_mod.set_focused_slot(1)
+  vim.wait(20)
+
+  -- Persist focused_slot = 2 in the namespace WITHOUT going through
+  -- the watcher (simulate "events bus was reset between the namespace
+  -- write and the mirror update"). Direct namespace handle write
+  -- still publishes a change event, so we also nuke the bus state
+  -- right after to mimic the mid-session reset.
+  state_mod.set_focused_slot(2)
+  -- Force the mirror to a wrong value to prove refresh_winbar doesn't
+  -- depend on it.
+  aa.state.focused_slot = 1
+
+  -- Now call refresh_winbar. With the fix, it consults the namespace
+  -- directly; without the fix, it would read the (stale) mirror and
+  -- render slot 1 highlighted.
+  aa.refresh_winbar()
+  local wb = vim.api.nvim_get_option_value("winbar",
+    { win = aa.state.panel_winid })
+  ok("regression: winbar reflects namespace focused_slot, not the stale mirror",
+    -- Focused row uses the bracketed `[N: ...]` form per
+    -- panel/winbar.lua. Look for `[2:` to confirm slot 2 is the
+    -- highlighted one.
+    type(wb) == "string" and wb:find("[2:", 1, true) ~= nil
+      and wb:find("[1:", 1, true) == nil,
+    "winbar=" .. vim.inspect(wb))
+
+  -- Cleanup: restore mirror + persisted slot to 1.
+  state_mod.set_focused_slot(1)
+  aa.state.focused_slot = 1
+  vim.wait(20)
+end
+
 -- Restore (slot_count back to default 5 so subsequent tests aren't
 -- distorted; aa.sync_slot_count fires via the watcher).
 state_mod.set_slot_count(5)

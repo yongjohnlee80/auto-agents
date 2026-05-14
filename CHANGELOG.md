@@ -2,6 +2,52 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.4] — 2026-05-14 — diff-panel auto-close + winbar focus survive events-bus resets
+
+Two bug fixes for stale-subscription regressions that surfaced when
+the auto-core events bus gets reset mid-session (test harness leakage,
+`:Lazy reload`, etc.). In both cases the visible symptom was the
+panel state going wrong without any obvious code path having
+changed — same underlying class: module-load-time `events.subscribe`
+calls lose their handles when the bus is reset, and lua's module
+cache prevents them from being re-registered.
+
+### Fixed
+
+- **`auto-agents.diff.ui`** — the auto-close + auto-refresh
+  subscriptions for the diff panel are now registered inside
+  `M.open()` (with handles captured into `_event_handles`) and
+  released inside the float's `on_close`. Every panel open gets a
+  fresh subscription pair. Symptom this fixes: pressing A or D on
+  the last queued diff would empty the queue but leave the panel
+  open. Regression test in `tests/diff_ui_spec.lua` section [5b]
+  drives the actual A / D keymap callbacks across three scenarios
+  (drain-via-A, drain-via-D, non-empty-stays-open).
+- **`auto-agents.refresh_winbar`** — now reads the focused slot
+  DIRECTLY from the state namespace (`state.get_focused_slot()`)
+  instead of from the `M.state.focused_slot` mirror. The mirror is
+  maintained by a `watch_focused_slot` subscriber registered once
+  at setup; when the events bus is reset, the watcher silently
+  disappears and the mirror sticks at its last value (commonly 1 =
+  Jarvis). Symptom this fixes: the panel winbar always highlighted
+  Jarvis regardless of which agent the user actually focused.
+  Regression test in `tests/smoke.lua` near the existing
+  `set_focused_slot` coverage forces the mirror out of sync and
+  asserts the winbar still highlights the namespace-persisted slot.
+  Namespace `:get` doesn't publish events, so it's resilient.
+
+### Notes
+
+These fixes also flush a latent bug in `on_close`: the old code
+referenced `_event_handle` (singular) that the subscribe calls
+never captured into. The unsubscribe was a no-op too. The new
+`_event_handles = { refresh, autoclose }` table is properly written
+and released.
+
+The version-bump precedent: M.version in `lua/auto-agents/init.lua`
+was lagging at "0.2.0" while tags advanced to v0.2.3. This release
+brings the source string forward to match the tag.
+
 ## [v0.2.3] — 2026-05-13 — diff queue editorial workflow
 
 A focused iteration on the unified diff queue panel (ADR 0010): bug fix

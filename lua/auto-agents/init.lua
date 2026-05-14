@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.0"
+M.version = "0.2.4"
 
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
 -- admin; slots 1..MAX_SLOT are main agents in the right panel. There
@@ -1242,14 +1242,27 @@ end
 ---statuses. Idempotent — bails silently if the panel isn't open. Called
 ---after any state change that affects what the winbar displays
 ---(focused slot, slot rename, slot move, status transition, agent exit).
+---
+---Reads the focused slot DIRECTLY from the state namespace, not from
+---the `M.state.focused_slot` mirror. The mirror is maintained by a
+---`watch_focused_slot` subscriber registered once at setup() — if the
+---auto-core events bus ever gets reset mid-session (test harness
+---leakage, `:Lazy reload`, etc.), the watcher silently disappears
+---and the mirror sticks at the last value it saw (typically slot 1
+---= Jarvis). Bypassing the mirror here keeps the winbar truthful
+---even when the events bus is dirty. The namespace `:get` doesn't
+---publish; only `:set` does, so it's resilient.
 function M.refresh_winbar()
   if not (M.state.panel_winid and vim.api.nvim_win_is_valid(M.state.panel_winid)) then
     return
   end
   local winbar = require("auto-agents.panel.winbar")
+  local state_mod = require("auto-agents.state")
   local w = vim.api.nvim_win_get_width(M.state.panel_winid)
+  local focused = state_mod.get_focused_slot()
+                  or M.state.focused_slot or 1
   pcall(vim.api.nvim_set_option_value, "winbar",
-    winbar.render(M.state.focused_slot or 1, w),
+    winbar.render(focused, w),
     { win = M.state.panel_winid })
 end
 
