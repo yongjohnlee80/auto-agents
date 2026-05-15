@@ -1037,24 +1037,41 @@ end
 ---Send `text` to the agent's stdin via `nvim_chan_send`. Works for both
 ---main slots (native terminal) and sub-float slots (snacks terminal).
 ---
+---By default the body is wrapped in bracketed-paste markers
+---(`ESC[200~ ... ESC[201~`) so the receiving TUI routes the text to
+---its main chat input rather than whatever input the agent has
+---*currently* focused — an open `@`-mention picker, slash-command
+---autocomplete, fuzzy file picker, or the agent's own modal prompt.
+---Without bracketed paste the chan_send is interpreted as keystrokes
+---and lands wherever focus happens to be (the bug that made wakes
+---disappear into Codex pickers in early comms-1 testing). Modern TUIs
+---(Claude Code, Codex, Gemini CLI) honor bracketed paste; set
+---`opts.bracketed_paste = false` to skip the wrapping for legacy
+---TUIs that misrender the markers as literal text.
+---
 ---Optional `opts.submit = true` follows the body with a deferred CR
 ---(`"\r"`) after `opts.submit_delay_ms` (default 60ms). The split is
 ---deliberate: most TUI agents (Claude Code included) treat a single
 ---chan_send containing body+CR as a paste and DON'T submit, while a
 ---separate CR keypress after a short delay is interpreted as the user
 ---hitting Enter. Without the delay the second chan_send races the
----first and the agent often eats the CR. Mirrors the same recipe
----`auto-agents.term.send` uses for the playground T1..T4 terminals.
+---first and the agent often eats the CR. The CR is sent OUTSIDE the
+---bracketed-paste envelope on purpose — paste itself doesn't submit,
+---the trailing CR keystroke does.
 ---@param slot integer
 ---@param text string
----@param opts table?  -- { submit = boolean, submit_delay_ms = integer }
+---@param opts table?  -- { submit = boolean, submit_delay_ms = integer, bracketed_paste = boolean }
 ---@return boolean ok
 function M.send_slot(slot, text, opts)
   if not text or text == "" then return false end
   if slot < 1 or slot > M.MAX_SLOT then return false end
   local term = M.state.slot_terminals[slot]
   if not term or not term:is_alive() or not term.send then return false end
-  if not term:send(text) then return false end
+  local payload = text
+  if not (opts and opts.bracketed_paste == false) then
+    payload = "\27[200~" .. text .. "\27[201~"
+  end
+  if not term:send(payload) then return false end
   if opts and opts.submit then
     local delay = opts.submit_delay_ms or 60
     vim.defer_fn(function()
