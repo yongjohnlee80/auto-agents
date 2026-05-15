@@ -85,48 +85,6 @@ M.state = {
   mounting = false,
 }
 
--- ── diff-review parity hooks (route B) ────────────────────────────────────
---
--- claudecode.nvim's diff handler resizes whatever terminal it finds to
--- its own `terminal.split_width_percentage * total_columns` (default 0.3)
--- on diff open / accept / reject. Our panel is clamped to
--- [min_width, max_width] (default 50..120) so on wider screens claudecode's
--- naive 0.3*cols disagrees with our resolved width and the panel jumps.
---
--- We replicate the original autovim diff UX:
---   1. Diff opens as a vsplit alongside the agent panel (claudecode default).
---   2. As soon as we see the diff buffer appear (b:claudecode_diff_tab_name
---      marker), we open a 1x1 invisible "ghost" float that absorbs key-
---      strokes for ~500ms — protecting against an Enter the user was
---      typing into the agent panel from accidentally accepting/rejecting
---      the diff.
---   3. After 500ms, ghost closes, agent panel width is forcibly restored,
---      focus returns to the agent terminal so the user's next keystroke
---      goes to the agent prompt.
---   4. On diff close (BufWipeout/BufDelete on the marker buffer) we
---      restore panel width again — claudecode resizes a second time on
---      accept/reject.
-
----Use the cached width set when the panel was opened (or last
----updated by VimResized). We deliberately do NOT recompute from
----`vim.o.columns` per restore, because if the terminal got resized
----between open and restore, recomputing gives a different value than
----what the user is currently looking at, and the panel would snap.
-local function _restore_panel_width()
-  local panel = M.state.panel_winid
-  if not panel or not vim.api.nvim_win_is_valid(panel) then return end
-  local width = M.state.panel_width
-  if not width then
-    -- Fallback if the cache is missing (panel was opened before this
-    -- code path landed): recompute and stash.
-    local cfg = M.state.config
-    if not cfg then return end
-    width = require("auto-agents.config").resolve_panel_width(cfg, vim.o.columns)
-    M.state.panel_width = width
-  end
-  pcall(vim.api.nvim_win_set_width, panel, width)
-end
-
 ---Resolve the bottom_margin to use for a slot — per-slot bootstrap
 ---override first, then panel-level default. Used by both focus_slot
 ---and the VimResized handler so they pick the same value.
@@ -204,97 +162,11 @@ function M.sync_slot_count()
   if M.refresh_winbar then pcall(M.refresh_winbar) end
 end
 
----Open a 1x1 invisible "ghost" float at row 0 col 0 that grabs focus
----and swallows keystrokes for `delay_ms` ms, then closes itself,
----restores the agent panel width, and refocuses the agent terminal.
----
----v0.2.0 migration: the float creation lifts to `auto-core.ui.float.ghost`.
----auto-agents keeps the no-op key wiring (diff/agent-leak protection)
----and the deferred restore-and-refocus side-effects.
----@param delay_ms integer
-local function _ghost_buffer_then_focus_agent(delay_ms)
-  if M.state._diff_ghost_win and vim.api.nvim_win_is_valid(M.state._diff_ghost_win) then
-    return  -- already in a diff cycle; don't double-trigger
-  end
-  local handle = require("auto-core").ui.float.ghost({
-    -- Top-left corner, like the prior inline open. The bottom-left
-    -- default that auto-core uses elsewhere would visually clash
-    -- with the active diff split header.
-    row = 0,
-    col = 0,
-  })
-  if not handle or not handle.win
-      or not vim.api.nvim_win_is_valid(handle.win) then
-    return
-  end
-  -- Map common keys to no-op so they don't escape the ghost buffer
-  -- and accidentally hit the diff or agent. Done after the open so
-  -- the buffer is settled.
-  for _, lhs in ipairs({ "<CR>", "<Space>", "y", "n", "Y", "N", "q", ":" }) do
-    pcall(vim.keymap.set, "n", lhs, "<Nop>",
-      { buffer = handle.buf, silent = true, nowait = true })
-  end
-  M.state._diff_ghost_win = handle.win
-  vim.defer_fn(function()
-    handle.close()
-    M.state._diff_ghost_win = nil
-    _restore_panel_width()
-    local panel = M.state.panel_winid
-    if panel and vim.api.nvim_win_is_valid(panel) then
-      pcall(vim.api.nvim_set_current_win, panel)
-      pcall(vim.cmd, "startinsert")
-    end
-  end, delay_ms or 500)
-end
-
-local function install_diff_parity_hooks()
-  local group = vim.api.nvim_create_augroup("AutoAgentsDiffParity", { clear = true })
-
-  -- Diff opens → ghost-absorb + width restore + focus agent (via the
-  -- ghost's deferred callback).
-  vim.api.nvim_create_autocmd("BufWinEnter", {
-    group = group,
-    callback = function(args)
-      if not args.buf or not vim.api.nvim_buf_is_valid(args.buf) then return end
-      if not vim.b[args.buf].claudecode_diff_tab_name then return end
-      vim.schedule(function() _ghost_buffer_then_focus_agent(500) end)
-    end,
-  })
-
-  -- Diff accept/reject → claudecode resizes again, so re-restore.
-  vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
-    group = group,
-    callback = function(args)
-      if not args.buf or not vim.api.nvim_buf_is_valid(args.buf) then
-        -- Buffer already invalid; still schedule a restore — the diff
-        -- buffer's wipeout is what triggered us.
-      end
-      -- Even if we can't read the marker any more, schedule restores
-      -- whenever a buffer with the marker (or in claudecode's namespace)
-      -- is deleted. Keep this cheap: a few deferred restores.
-      local was_diff = args.buf and vim.api.nvim_buf_is_valid(args.buf)
-        and vim.b[args.buf].claudecode_diff_tab_name ~= nil
-      if not was_diff then return end
-      vim.schedule(_restore_panel_width)
-      vim.defer_fn(_restore_panel_width, 100)
-      vim.defer_fn(_restore_panel_width, 300)
-    end,
-  })
-
-  -- Belt-and-suspenders: any tab close also triggers a restore. Cheap
-  -- and catches edge cases where the diff buffer was inside a tab that
-  -- got torn down without firing BufWipeout for the diff buf itself.
-  vim.api.nvim_create_autocmd("TabClosed", {
-    group = group,
-    callback = function()
-      vim.defer_fn(_restore_panel_width, 50)
-    end,
-  })
-
-  -- Terminal resize → recompute the cached panel width so subsequent
-  -- diff-restore calls use the value matching the user's new screen
-  -- size (otherwise we'd lock to whatever width was current at panel
-  -- open and never adapt).
+---Install the VimResized hook that keeps the cached panel width in
+---sync with terminal size + fans out SIGWINCH to running agent
+---terminals so their PTYs match the new dims.
+local function install_resize_hooks()
+  local group = vim.api.nvim_create_augroup("AutoAgentsResize", { clear = true })
   vim.api.nvim_create_autocmd("VimResized", {
     group = group,
     callback = _refresh_panel_width_cache,
@@ -465,12 +337,16 @@ function M.setup(opts)
       M.state.diff_review_port = port
       require("auto-agents.logger").info("init",
         "diff-review bridge ready on port " .. tostring(port))
-      install_diff_parity_hooks()
     else
       require("auto-agents.logger").error("init",
         "failed to start diff-review bridge (MCP server)")
     end
   end
+
+  -- Keep the cached panel width in sync with terminal size and fan
+  -- out SIGWINCH to running agent terminals on resize. Independent of
+  -- diff-review — runs whether or not the MCP bridge is enabled.
+  install_resize_hooks()
 
   -- v0.2.7: wire the auto-core mailbox subsystem. Start the central
   -- router and register the `nvim` executioner mailbox so agents can

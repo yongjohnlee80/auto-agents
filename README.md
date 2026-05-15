@@ -62,9 +62,9 @@ without losing the main view.
 
 - **[`auto-core.nvim`](https://github.com/yongjohnlee80/auto-core.nvim)
   ^0.1.0** — foundation library for the AutoVim plugin family. Provides the
-  shared event bus, namespaced state store, panel singleton, ghost-buffer
-  float, and canonical task-status surface that auto-agents consumes as of
-  v0.2.0. Required.
+  shared event bus, namespaced state store, panel singleton, float
+  primitives, and canonical task-status surface that auto-agents consumes
+  as of v0.2.0. Required.
 - **[`folke/snacks.nvim`](https://github.com/folke/snacks.nvim)** — required
   for the sub-agent floats (slots 6–9) and the `:AutoAgentsDock` navigation
   dock.
