@@ -11,15 +11,21 @@
 ---restart, so persistence isn't desirable: the next spawn rebuilds
 ---the argv from scratch.
 ---
----Supported kinds (v0.3.0):
+---Supported kinds (v0.2.10):
 ---
 ---  * `claude` — `--add-dir <path>` (repeatable). Adds the path
 ---    to Claude Code's allowed-directories list for the session.
----  * `codex`  — `--sandbox-workspace-write-root <path>`
----    (repeatable). Adds the path to codex's writable-roots list
----    for the session.
+---  * `codex`  — `--add-dir <path>` (repeatable). Same flag name
+---    as Claude; adds the path to codex's writable workspace
+---    roots for the session. (Note: `sandbox_workspace_write
+---    .writable_roots` in `~/.codex/config.toml` is the TOML
+---    config field — NOT a CLI flag. The CLI flag is `--add-dir`,
+---    same as Claude's.)
+---  * `gemini` — `--include-directories <path>` (repeatable).
+---    Adds the path to Gemini CLI's workspace include list for
+---    the session.
 ---
----Kinds without a strategy (`gemini`, `junie`, `aider`, `goose`,
+---Kinds without a strategy (`junie`, `aider`, `goose`,
 ---`opencode`, `copilot`, `generic`) get an empty result — the
 ---agent runs unchanged. Add strategies here as flags are
 ---confirmed; track in
@@ -49,7 +55,8 @@ end
 ---@type table<string, AutoAgentsPermissionStrategy>
 local STRATEGY = {
   claude = repeatable_flag("--add-dir"),
-  codex  = repeatable_flag("--sandbox-workspace-write-root"),
+  codex  = repeatable_flag("--add-dir"),
+  gemini = repeatable_flag("--include-directories"),
 }
 
 ---Return the additional argv args to append to the spawn command

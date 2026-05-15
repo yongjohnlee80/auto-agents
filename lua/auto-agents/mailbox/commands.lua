@@ -7,7 +7,7 @@
 ---names + handlers. This module is auto-agents' contribution to that
 ---whitelist.
 ---
----Three commands ship in v0.2.8:
+---Four commands ship as of v0.2.10 (v0.2.8 originals + openDiff):
 ---
 ---  * `wake` — the wake hook the router fires on every
 ---    inbox/responses arrival (registered as `wake` so the
@@ -30,8 +30,14 @@
 ---    short messages to the user without going through stdin / a
 ---    panel send. Useful for "I'm done" / "blocked" pings.
 ---
----Other plugins (md-harpoon for `harpoon`, the diff MCP for an
----`openDiff` mirror, etc.) own their own `commands.register` calls.
+---  * `diff_queue` (v0.2.10+) — enqueue a diff into the unified
+---    diff queue UI. Fire-and-forget — the user's accept/reject
+---    verdict is NOT returned through the mailbox response. For
+---    the blocking flow (agent waits for verdict), use the MCP
+---    openDiff transport instead.
+---
+---Other plugins (md-harpoon for `harpoon`, etc.) own their own
+---`commands.register` calls.
 ---
 ---@module 'auto-agents.mailbox.commands'
 
@@ -166,6 +172,82 @@ local function handle_addressbook(args, ctx)
   }
 end
 
+---`diff_queue` handler. Enqueue a diff into the unified diff
+---queue UI. Fire-and-forget — auto-core's executor returns the
+---response immediately; the user's accept/reject does NOT flow
+---back through the mailbox transport. For a blocking verdict use
+---the MCP openDiff handler at
+---`lua/auto-agents/mcp/ws-server/tools/open_diff.lua`.
+---@param args table
+---@param ctx  table
+---@return table
+local function handle_diff_queue(args, ctx)
+  if type(args) ~= "table" then
+    return err("invalid_args", "args (table) required")
+  end
+  local required = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
+  for _, k in ipairs(required) do
+    if type(args[k]) ~= "string" or args[k] == "" then
+      return err("invalid_args", "args." .. k .. " (non-empty string) required")
+    end
+  end
+
+  -- Resolve the agent name. Prefer an explicit arg; otherwise derive
+  -- from the sender (`ctx.mailbox` is the bare id, e.g. "agent:lector").
+  local agent_name = args.agent_name
+  if type(agent_name) ~= "string" or agent_name == "" then
+    local from = ctx and ctx.mailbox or nil
+    if type(from) == "string" then
+      agent_name = from:match("^agent:(.+)$") or from
+    end
+  end
+  local aa = require("auto-agents")
+  if type(aa.resolve_diff_agent_name) == "function" then
+    agent_name = aa.resolve_diff_agent_name(agent_name) or agent_name or "?"
+  end
+  agent_name = agent_name or "?"
+
+  -- Read existing file contents (best-effort; empty if missing — new file).
+  local old_contents = ""
+  local f = io.open(args.old_file_path, "r")
+  if f then
+    old_contents = f:read("*a") or ""
+    f:close()
+  end
+
+  local diff_queue = require("auto-agents.diff.queue")
+  local id = diff_queue.enqueue({
+    agent_name   = agent_name,
+    file_path    = args.old_file_path,
+    old_contents = old_contents,
+    new_contents = args.new_file_contents,
+    tab_name     = args.tab_name,
+    -- Fire-and-forget: noop callback. The verdict event still
+    -- publishes on the auto-core bus (`auto-agents:diff_*`) so
+    -- the UI works normally; we just don't route it back through
+    -- the mailbox to the sender.
+    callback     = function(_) end,
+  })
+
+  -- Trigger UI popup.
+  vim.schedule(function()
+    local ui_ok, diff_ui = pcall(require, "auto-agents.diff.ui")
+    if ui_ok and type(diff_ui.open) == "function" then diff_ui.open() end
+  end)
+
+  return {
+    ok = true,
+    value = {
+      id           = id,
+      agent_name   = agent_name,
+      file_path    = args.old_file_path,
+      tab_name     = args.tab_name,
+      blocking     = false,
+      note         = "Fire-and-forget. Use the MCP openDiff transport to block for the user's accept/reject verdict.",
+    },
+  }
+end
+
 ---`send_user` handler. `args = { subject: string?, body: string?, level: "info"|"warn"|"error"|"debug"? }`.
 ---@param args table
 ---@param _ctx table
@@ -201,6 +283,18 @@ local SPECS = {
     description = "Surface a short message to the user via vim.notify.",
     schema      = { subject = "string?", body = "string?", level = "string?" },
     handler     = handle_send_user,
+  },
+  diff_queue = {
+    owner       = "auto-agents",
+    description = "Enqueue a diff into the unified diff queue UI (fire-and-forget; use MCP openDiff for blocking verdict).",
+    schema      = {
+      old_file_path     = "string",
+      new_file_path     = "string",
+      new_file_contents = "string",
+      tab_name          = "string",
+      agent_name        = "string?",
+    },
+    handler     = handle_diff_queue,
   },
 }
 

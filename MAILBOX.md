@@ -145,13 +145,30 @@ fire-and-forget), but it does mean **forgetting to register a
 wake command makes wakes silently fail.** This is exactly what
 happened in v0.2.7 and motivated v0.2.8.
 
-### Commands auto-agents registers (v0.2.8)
+### Commands auto-agents registers
 
-| Name | Owner | Purpose |
-|---|---|---|
-| `wake` | auto-agents | Wake a slot terminal by agent name. Default wake hook for every spawned agent. |
-| `addressbook` | auto-agents | Return every reachable mailbox address registered with auto-core. |
-| `send_user` | auto-agents | Surface a short message to the user via `vim.notify`. |
+| Name | Owner | Purpose | Shipped |
+|---|---|---|---|
+| `wake` | auto-agents | Wake a slot terminal by agent name. Default wake hook for every spawned agent. | v0.2.8 |
+| `addressbook` | auto-agents | Return every reachable mailbox address registered with auto-core. | v0.2.8 |
+| `send_user` | auto-agents | Surface a short message to the user via `vim.notify`. | v0.2.8 |
+| `diff_queue` | auto-agents | Enqueue a diff into the unified diff queue UI (fire-and-forget). | v0.2.10 |
+
+**`diff_queue` vs the MCP `openDiff` transport.** Claude-kind
+agents have first-class access to the native websocket
+`openDiff` MCP tool, which is **blocking** — the agent's tool
+call waits for the user's accept / reject verdict. Claude agents
+should keep using that path.
+
+The mailbox `diff_queue` command is for **non-Claude agents**
+(codex, gemini, …) that don't connect to the auto-agents MCP
+server. It enqueues the same diff into the same UI but the
+verdict is not routed back through the mailbox response —
+auto-core's executor returns the immediate `{ok=true, ...}`
+response as soon as the handler returns, before the user has
+seen the diff. Use `diff_queue` for "land this and notify"
+flows; use MCP `openDiff` for "I need to know whether the user
+accepted before I continue" flows.
 
 #### `wake`
 
@@ -334,11 +351,11 @@ without extra grants. To skip the per-op permission prompt for
 the mailbox dir + KB paths, auto-agents v0.2.9 appends the
 appropriate per-kind CLI flag at spawn time:
 
-| Kind   | Flag                                      |
-|--------|-------------------------------------------|
-| claude | `--add-dir <path>` (repeatable)           |
-| codex  | `--sandbox-workspace-write-root <path>` (repeatable) |
-| gemini | (not yet supported — falls back to prompt) |
+| Kind   | Flag                                       |
+|--------|--------------------------------------------|
+| claude | `--add-dir <path>` (repeatable)            |
+| codex  | `--add-dir <path>` (repeatable; same flag name as Claude) |
+| gemini | `--include-directories <path>` (repeatable) |
 
 Paths granted at spawn:
 

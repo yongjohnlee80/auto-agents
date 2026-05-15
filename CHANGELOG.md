@@ -2,7 +2,55 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## [v0.2.9] — 2026-05-14 — spawn-time permission injection (claude `--add-dir`, codex `--sandbox-workspace-write-root`)
+## [v0.2.10] — 2026-05-14 — fix codex permission flag, add gemini support, add `diff_queue` command
+
+v0.2.9 shipped with `--sandbox-workspace-write-root` as the codex
+flag (lector hallucinated it — that's actually the TOML config
+field name `sandbox_workspace_write.writable_roots`, not a CLI
+flag). The real codex CLI flag is `--add-dir <DIR>` — same name
+as Claude's. Verified by checking `codex --help` and confirming
+the documented description: "Additional directories that should
+be writable alongside the primary workspace."
+
+Also adds gemini support — `--include-directories <DIR>` per
+`gemini --help`.
+
+### Changed
+
+- **`permissions.lua`** STRATEGY table:
+  - `codex` → `--add-dir <path>` (was `--sandbox-workspace-write-root`)
+  - `gemini` → `--include-directories <path>` (new)
+- Module doc-comments updated with the correct flag names + a
+  note distinguishing the codex CLI flag from the TOML config
+  field.
+
+### Notes
+
+- v0.2.9 codex spawns errored out with `error: unexpected argument
+  '--sandbox-workspace-write-root' found`. This patch is the
+  immediate fix.
+- gemini's `--include-directories` accepts either comma-separated
+  values OR repeated flags; the repeatable form is what
+  `permissions.lua` emits.
+
+### Added (mailbox commands)
+
+- **`diff_queue` command** (auto-agents-owned). Enqueues a diff
+  into the unified diff queue UI. Fire-and-forget — the user's
+  accept/reject is NOT routed back to the sender through the
+  mailbox transport. For a blocking verdict, use the MCP openDiff
+  handler at `lua/auto-agents/mcp/ws-server/tools/open_diff.lua`.
+  `args = { old_file_path, new_file_path, new_file_contents, tab_name, agent_name? }`.
+  When `agent_name` is omitted, the handler derives it from the
+  sender's mailbox id (`ctx.mailbox` — e.g. `agent:lector` →
+  `lector`), then runs it through `resolve_diff_agent_name` for
+  the bootstrap-config lookup fallback.
+
+This rounds out the auto-agents whitelist contribution to
+**four** commands: `wake`, `addressbook`, `send_user`, `diff_queue`.
+Other plugins (e.g. md-harpoon's `harpoon`) register their own.
+
+## [v0.2.9] — 2026-05-14 — spawn-time permission injection (claude `--add-dir`, codex `--add-dir`)
 
 Agents previously prompted the user for permission on every first
 file op against their mailbox dir and the KB read/write paths.
