@@ -269,11 +269,30 @@ render_left = function()
   end
   
   local lines = { " Pending Diffs (" .. #_render_list .. ")", "" }
+  -- v0.2.6 left-column format: {wt}  {filename}  [{agent_name}]
+  -- where `wt` is the basename of the file's containing workspace
+  -- (git worktree / project root). When the workspace can't be
+  -- resolved (no .git nearby), fall back to the file's parent
+  -- directory's basename — still identifiable for the user.
+  local fs_path_ok, fs_path = pcall(require, "auto-core.fs.path")
+  local function wt_for(path)
+    if fs_path_ok and type(fs_path.workspace_root) == "function" then
+      local root = fs_path.workspace_root(path)
+      if type(root) == "string" and root ~= "" then
+        return vim.fn.fnamemodify(root, ":t")
+      end
+    end
+    return vim.fn.fnamemodify(path, ":h:t")
+  end
   for i, req in ipairs(_render_list) do
     local marker = (i == _selected_idx) and "▶" or " "
     local filename = vim.fn.fnamemodify(req.file_path, ":t")
-    -- Requirement: [N] {title} selection format
-    lines[#lines + 1] = string.format("%s [%d] %s [%s]", marker, i, filename, req.agent_name)
+    local wt = wt_for(req.file_path)
+    local agent = (type(req.agent_name) == "string"
+                   and req.agent_name ~= ""
+                   and req.agent_name ~= "agent") and req.agent_name or "?"
+    lines[#lines + 1] = string.format("%s [%d] %s/%s [%s]",
+      marker, i, wt, filename, agent)
   end
   
   set_buf_lines(buf, lines)

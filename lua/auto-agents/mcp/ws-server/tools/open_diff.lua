@@ -66,9 +66,16 @@ local function handler(params)
     f_read:close()
   end
 
-  -- Determine agent name (can be enhanced to pass context if needed)
-  -- Currently we just default to 'agent' but the adapter caller could inject this.
-  local agent_name = params._auto_agents_name or "agent"
+  -- v0.2.6: resolve agent name via auto-agents bootstrap config
+  -- when caller didn't inject one. Common case (exactly one
+  -- diff_review-enabled agent) resolves cleanly; ambiguous setups
+  -- fall back to the explicit injection or "?" placeholder.
+  local aa_ok, aa = pcall(require, "auto-agents")
+  local resolved
+  if aa_ok and type(aa.resolve_diff_agent_name) == "function" then
+    resolved = aa.resolve_diff_agent_name(params._auto_agents_name)
+  end
+  local agent_name = resolved or params._auto_agents_name or "?"
 
   -- Using the unified diff queue
   local success, result_or_err = pcall(function()

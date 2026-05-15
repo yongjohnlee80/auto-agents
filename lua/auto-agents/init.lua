@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.5"
+M.version = "0.2.6"
 
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
 -- admin; slots 1..MAX_SLOT are main agents in the right panel. There
@@ -1106,6 +1106,41 @@ function M.slot_for_name(name)
     if e.name == name then return e.slot end
   end
   return nil
+end
+
+---Best-effort resolution of "which agent is the source of an
+---inbound diff." Used by the MCP open_diff handlers + the queue UI
+---to display a meaningful name in the panel instead of the literal
+---`agent` placeholder.
+---
+---Resolution strategy (first hit wins):
+---  1. If the caller passed an explicit name, use it.
+---  2. If exactly one bootstrap entry has `diff_review = true`,
+---     return that entry's name. This is the dominant case (one
+---     CLI agent like claude-code with the diff bridge enabled).
+---  3. If multiple have it enabled, return nil — the bridge can't
+---     distinguish them at the MCP layer today, so leaving the
+---     field nil signals "unknown" rather than picking arbitrarily.
+---
+---Returns nil when no agent is identifiable; callers should fall
+---back to a literal "?" or similar.
+---@param explicit string?
+---@return string?
+function M.resolve_diff_agent_name(explicit)
+  if type(explicit) == "string" and explicit ~= ""
+      and explicit ~= "agent" then
+    return explicit
+  end
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
+  local match
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.diff_review and type(e.name) == "string" and e.name ~= "" then
+      if match then return nil end  -- ambiguous
+      match = e.name
+    end
+  end
+  return match
 end
 
 ---Read RSS for a pid in kB. Tries Linux `/proc/<pid>/status` first (cheap,

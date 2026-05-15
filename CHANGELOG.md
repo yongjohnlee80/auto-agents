@@ -2,6 +2,41 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.6] — 2026-05-14 — diff queue panel: meaningful left-column labels
+
+The unified-diff-queue panel's left column was rendering entries
+as `[N] filename [agent]` — with the literal string `agent` in
+brackets because the MCP open_diff handlers defaulted the
+`agent_name` field to that placeholder and there was no
+resolution step in between. This patch fixes both the resolution
+and the rendering.
+
+### Added
+
+- **`auto-agents.resolve_diff_agent_name(explicit?)`** —
+  best-effort resolution of "which agent is the source of an
+  inbound diff." Returns the explicit name if the caller passed
+  one, otherwise looks at the bootstrap config and returns the
+  single `diff_review = true` agent's name. Returns nil when
+  ambiguous (multiple diff_review agents) so callers can
+  surface a `?` instead of guessing.
+
+### Changed
+
+- **`agent/adapters/tools/open_diff.lua`** + **`mcp/ws-server/tools/open_diff.lua`** — both
+  open_diff handlers now route the agent identity through
+  `resolve_diff_agent_name` before enqueuing. The literal
+  `"agent"` placeholder is gone; queue entries land with the
+  actual agent name when resolvable (or `"?"` as a fallback
+  signal).
+- **`diff/ui.lua` left-column format** — entries now render as
+  `[N] {wt}/{filename} [{agent_name}]` where `{wt}` is the
+  basename of the file's enclosing workspace (resolved via
+  `auto-core.fs.path.workspace_root`, falling back to the
+  parent directory's basename when no workspace is found).
+  The `agent_name` defaults to `"?"` when unset / unresolved,
+  not the old `"agent"` literal.
+
 ## [v0.2.5] — 2026-05-14 — codex adapter no longer injects auto-agents MCP via `-c`
 
 The codex adapter previously appended
