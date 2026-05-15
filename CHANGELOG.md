@@ -2,6 +2,72 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.8] — 2026-05-14 — register mailbox commands (wake, addressbook, send_user)
+
+v0.2.7 wired the mailbox at spawn time but the wake hook silently
+no-op'd: auto-core's router calls `commands.get(<wake.command>)` on
+every inbox/responses arrival, and nothing had claimed that name.
+This patch registers three auto-agents-owned commands so the wake
+actually fires and agents can discover their peers + reach the user
+without guessing.
+
+### Added
+
+- **`lua/auto-agents/mailbox/commands.lua`** — module that registers
+  auto-agents-owned mailbox commands with auto-core's
+  `mailbox.commands.register` whitelist. `M.register_all()` is
+  idempotent (auto-core allows re-register from the same owner).
+- **`wake` command** — `args = { slot, text?, submit? }`. The
+  canonical wake hook used by the router on every inbox/responses
+  arrival (`wake = { command = "wake", args = { slot = "<name>" } }`
+  is registered per-agent in `build_agent_env`). Resolves `slot`
+  (agent name string) → integer slot via `auto_agents.slot_for_name`.
+  Calls `auto_agents.send_slot` internally to nudge the terminal.
+  When invoked as a wake hook with no explicit text, synthesizes a
+  default nudge: `[auto-agents] new <kind> from <mailbox> — check
+  $AUTO_AGENTS_MAILBOX_DIR/<kind>/`. Returns structured errors
+  (`slot_not_found`, `terminal_unavailable`). Also agent-callable —
+  one agent can wake another by sending `kind="command" command="wake"`
+  to `nvim`.
+- **`addressbook` command** — `args = { include_self? }`. Returns
+  every reachable mailbox address registered with auto-core (peer
+  agents + the `nvim` executioner) plus a virtual `user` entry
+  pointing at `send_user`. Dynamic by construction — the underlying
+  registry is populated by `mailbox.register` at agent spawn time,
+  so newly-spawned peers appear without the agent having to refresh.
+  Returned shape includes `id`, `bare_id`, `kind` (`agent`/`host`/
+  `virtual`), `dir`, `tool_root`, `executioner`, `wake_command`,
+  and `is_self`.
+- **`send_user` command** — `args = { subject?, body?, level? }`.
+  Forwards to `vim.notify` (with `title = "auto-agents.mailbox"`).
+  `level` accepts `info` (default), `warn`, `error`, `debug`.
+- **`auto-agents.setup()`** now calls
+  `require("auto-agents.mailbox.commands").register_all()` after the
+  v0.2.7 mailbox wiring.
+
+### Changed
+
+- **Per-agent wake hook in `build_agent_env`** now uses
+  `wake = { command = "wake", … }` (renamed from `"send_slot"` —
+  cleaner public API name; the internal `auto_agents.send_slot`
+  Lua function is unchanged and remains the implementation
+  primitive the handler uses).
+
+### Notes
+
+- Other plugins (md-harpoon for `harpoon`, the diff MCP for an
+  `openDiff` mirror, etc.) register their own commands via the
+  same `auto-core.mailbox.commands.register` API. This patch is
+  auto-agents' contribution to the whitelist; the architecture
+  is open to extension.
+- With `wake` registered, the router's `dispatch_wake` path
+  (auto-core router.lua:204-233) now reaches `commands.handle_message`
+  with the wake message, which fires the handler and nudges the
+  slot terminal. Lector → jarvis test messages now wake jarvis.
+- The on-disk per-instance bootstrap doc still references
+  `send_slot` (auto-core v0.1.8 baked it in). The doc template
+  update lands in auto-core v0.1.9 separately.
+
 ## [v0.2.7] — 2026-05-14 — wire the auto-core mailbox at spawn time
 
 `auto-core` v0.1.8 shipped per-instance mailbox isolation behind

@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.7"
+M.version = "0.2.8"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -474,16 +474,25 @@ function M.setup(opts)
 
   -- v0.2.7: wire the auto-core mailbox subsystem. Start the central
   -- router and register the `nvim` executioner mailbox so agents can
-  -- send `kind="command"` messages back to us (whitelisted commands:
-  -- `harpoon`, `openDiff`, `send_slot`, `send_user`). Per-agent
-  -- registration happens later in `build_agent_env` so each spawn
-  -- gets a fresh per-instance mailbox + the four
+  -- send `kind="command"` messages back to us. Per-agent registration
+  -- happens later in `build_agent_env` so each spawn gets a fresh
+  -- per-instance mailbox + the four
   -- `AUTO_AGENTS_INSTANCE_ID/MAILBOX_ID/MAILBOX_DIR/MAILBOX_BOOTSTRAP_DOC`
   -- env vars consumers need.
+  --
+  -- v0.2.8: register auto-agents-owned mailbox commands with auto-core's
+  -- whitelist registry — `send_slot` (wake hook used by the router on
+  -- inbox/responses arrival; previously a no-op because nothing claimed
+  -- the name) and `send_user` (vim.notify bridge). Other plugins
+  -- (md-harpoon for `harpoon`, the diff MCP for an `openDiff` mirror,
+  -- etc.) register their own commands via the same
+  -- `auto-core.mailbox.commands.register` API when they load — this is
+  -- just auto-agents' contribution to the whitelist.
   pcall(function()
     local mailbox = require("auto-core").mailbox
     mailbox.configure({ autostart = true })
     mailbox.register("nvim", { root = mailbox.host_fallback_root() })
+    require("auto-agents.mailbox.commands").register_all()
   end)
 
   -- Editor-window-floor invariant. AutoVim's three-column layout
@@ -708,7 +717,7 @@ local function build_agent_env(spec, cwd)
       local root = MAILBOX_ROOT_BY_KIND[spec.kind] or mailbox.host_fallback_root()
       local rec = mailbox.register("agent:" .. spec.name, {
         root = root,
-        wake = { command = "send_slot", args = { slot = spec.name } },
+        wake = { command = "wake", args = { slot = spec.name } },
       })
       for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
     end)
