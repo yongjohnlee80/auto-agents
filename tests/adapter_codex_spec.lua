@@ -1,5 +1,5 @@
---- Tests for Codex adapter MCP consumption
---- Run with: nvim --headless -u NONE -l auto-agents.nvim/unified-diff-queue/tests/adapter_codex_spec.lua
+--- Tests for Codex adapter argv (post-v0.2.5: no -c MCP override).
+--- Run with: nvim --headless -u NONE -l tests/adapter_codex_spec.lua
 
 -- Find our own path to derive project roots
 local script_path = debug.getinfo(1).source:sub(2)
@@ -13,12 +13,6 @@ for _, p in ipairs({
     vim.opt.runtimepath:prepend(p)
   end
 end
-
--- Mock auto-agents state
-local aa = require("auto-agents")
-aa.state = {
-  diff_review_port = 54321
-}
 
 local codex = require("auto-agents.agent.adapters.codex")
 
@@ -34,36 +28,27 @@ local function ok(name, cond, detail)
   end
 end
 
-print("\n[1] Codex Adapter MCP Argv")
+print("\n[1] Codex Adapter Argv — no -c MCP override (v0.2.5)")
 
--- Test case 1: diff_review = false
-local spec_no_review = {
-  kind = "codex",
-  diff_review = false
-}
-local argv1 = codex.cmd(spec_no_review)
-local has_mcp1 = false
-for _, v in ipairs(argv1) do
-  if v:find("mcp_servers") then has_mcp1 = true end
-end
-ok("diff_review=false does not include MCP config", not has_mcp1)
+-- v0.2.5: codex adapter no longer injects `-c mcp_servers.auto-agents=...`.
+-- The CLI-side registration caused codex to error out on spawn when the
+-- bridge wasn't reachable; users register the bridge in ~/.codex/config.toml
+-- themselves if they want it. Both diff_review modes should now produce
+-- argv with no `mcp_servers` entry and no `-c` flag pointing at one.
 
--- Test case 2: diff_review = true
-local spec_review = {
-  kind = "codex",
-  diff_review = true
-}
-local argv2 = codex.cmd(spec_review)
-local mcp_val = nil
-for i, v in ipairs(argv2) do
-  if v == "-c" then
-    mcp_val = argv2[i+1]
+local function has_mcp(argv)
+  for i, v in ipairs(argv) do
+    if v:find("mcp_servers") then return true end
+    if v == "-c" and argv[i + 1] and argv[i + 1]:find("mcp_servers") then return true end
   end
+  return false
 end
 
-local expected = 'mcp_servers.auto-agents={ url="http://127.0.0.1:54321/mcp" }'
-ok("diff_review=true includes -c flag", mcp_val ~= nil)
-ok("MCP config value is correct", mcp_val == expected)
+local argv1 = codex.cmd({ kind = "codex", diff_review = false })
+ok("diff_review=false does not include MCP config", not has_mcp(argv1))
+
+local argv2 = codex.cmd({ kind = "codex", diff_review = true })
+ok("diff_review=true does not include MCP config", not has_mcp(argv2))
 
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

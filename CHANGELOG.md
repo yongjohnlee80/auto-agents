@@ -2,6 +2,35 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.5] — 2026-05-14 — codex adapter no longer injects auto-agents MCP via `-c`
+
+The codex adapter previously appended
+`-c mcp_servers.auto-agents={ url="http://127.0.0.1:<port>/mcp" }` to
+the spawn argv for any agent with `diff_review = true`. With the
+bridge as it currently stands on `main`, codex can't actually
+authenticate to that endpoint, so the registration just caused codex
+to error out at startup. Users who want codex to talk to the bridge
+should register `mcp_servers.auto-agents` in `~/.codex/config.toml`
+themselves.
+
+The `diff_review` env hints in `init.lua`
+(`AUTO_AGENTS_MCP_URL`, `AUTO_AGENTS_MCP_PORT`, `CLAUDE_CODE_SSE_PORT`,
+etc.) are unchanged and still injected for the Claude-compatible
+bridge path.
+
+### Removed
+
+- **`auto-agents.agent.adapters.codex`** — dropped the M6 block that
+  appended `-c mcp_servers.auto-agents=...` when `spec.diff_review`
+  was set. The codex adapter now only emits `codex` and `--model
+  <id>` (when configured) before the spec-provided `cmd` override.
+
+### Tests
+
+- **`tests/adapter_codex_spec.lua`** — rewritten to assert that
+  neither `diff_review=false` nor `diff_review=true` produces an
+  `mcp_servers` entry in argv.
+
 ## [v0.2.4] — 2026-05-14 — diff-panel auto-close + winbar focus survive events-bus resets
 
 Two bug fixes for stale-subscription regressions that surfaced when
