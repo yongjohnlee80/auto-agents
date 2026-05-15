@@ -3,9 +3,10 @@
 --
 -- Verifies the "navigate inside the diff panes" feature:
 --   * middle / preview windows render line numbers + cursorline.
---   * left pane carries the selection keymaps (j, k, 1, A, D, <CR>).
---   * middle / preview panes do NOT shadow j, k, 1-9, or <CR>, so
---     Vim's native motions (hjkl, counts, w/b/e/f/$/gg/G, etc.) work.
+--   * left pane carries the selection keymaps (j, k, 1, A, D, O).
+--   * middle / preview panes do NOT shadow j, k, 1-9, or O, so
+--     Vim's native motions (hjkl, counts, w/b/e/f/$/gg/G, etc. — plus
+--     `O` for "open line above" when the preview is in edit mode) work.
 --   * A / D stay bound on middle / preview so accept-deny works from
 --     anywhere (mirrors worktree.graph's bind_pane_action_keys).
 --   * pane cycling (<Tab>, <S-Tab>, <C-h>, <C-l>) is bound on every
@@ -113,19 +114,21 @@ ok("left has j keymap (selection down)",      has_keymap(left_buf, "j"))
 ok("left has k keymap (selection up)",        has_keymap(left_buf, "k"))
 ok("left has 1 keymap (numeric select)",      has_keymap(left_buf, "1"))
 ok("left has 9 keymap (numeric select)",      has_keymap(left_buf, "9"))
-ok("left has <CR> keymap (open native diff)", has_keymap(left_buf, "<CR>"))
+ok("left has O keymap (open full-file diff)", has_keymap(left_buf, "O"))
+ok("left does NOT bind <CR> (former open key, renamed to O)",
+   not has_keymap(left_buf, "<CR>"))
 
 -- Middle / preview: selection keys NOT bound so Vim motions work.
 ok("middle does NOT shadow j",     not has_keymap(middle_buf, "j"))
 ok("middle does NOT shadow k",     not has_keymap(middle_buf, "k"))
 ok("middle does NOT shadow 1",     not has_keymap(middle_buf, "1"))
 ok("middle does NOT shadow 5",     not has_keymap(middle_buf, "5"))
-ok("middle does NOT shadow <CR>",  not has_keymap(middle_buf, "<CR>"))
+ok("middle does NOT shadow O",     not has_keymap(middle_buf, "O"))
 
 ok("preview does NOT shadow j",    not has_keymap(preview_buf, "j"))
 ok("preview does NOT shadow k",    not has_keymap(preview_buf, "k"))
 ok("preview does NOT shadow 1",    not has_keymap(preview_buf, "1"))
-ok("preview does NOT shadow <CR>", not has_keymap(preview_buf, "<CR>"))
+ok("preview does NOT shadow O",    not has_keymap(preview_buf, "O"))
 
 print("\n[4] Accept / Deny + cycling bound on every focusable pane")
 for _, item in ipairs({

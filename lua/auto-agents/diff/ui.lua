@@ -338,7 +338,7 @@ function M.open()
       left = { width = 0.2, cursorline = true },
       middle = { title = " Current ", cursorline = true },
       preview = { width = 0.4, title = " Proposed ", cursorline = true },
-      footer = { height = 1, content = " A/D/M Accept/Deny/Modify • E Edit (preview) • [1-9] Select • Tab Cycle • hjkl in diff • q Close " }
+      footer = { height = 1, content = " A/D/M Accept/Deny/Modify • E Edit (preview) • O Open (full file) • [1-9] Select • Tab Cycle • hjkl in diff • q Close " }
     },
     initial_focus = "left",
     on_open = function(self)
@@ -495,11 +495,15 @@ function M.open()
         )
       end
 
-      -- Selection keymaps (j/k row movement, 1-9 jump, <CR> open) are
+      -- Selection keymaps (j/k row movement, 1-9 jump, O open) are
       -- scoped to the LEFT pane only. The middle and preview panes
       -- hold the diff content; shadowing j/k/digits there would break
       -- Vim's native motions (hjkl scrolling, 5j / 10G counts,
       -- w/b/e/f/F/t/T/$/^/0/gg/G/% — everything the user asked for).
+      -- O on left → open the full-file diff in the editor floor.
+      -- Capital so it doesn't collide with `o` (cursor-down on the
+      -- list). Native `O` (open line above) stays available on the
+      -- diff panes where it's actually useful in edit mode.
       local left_buf = self:bufnr("left")
       if left_buf then
         local function map(lhs, fn)
@@ -516,7 +520,7 @@ function M.open()
           end)
         end
 
-        map("<CR>", function()
+        map("O", function()
           local req = _render_list[_selected_idx]
           if req then
             open_native_diff(req)
