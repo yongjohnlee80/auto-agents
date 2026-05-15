@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.8"
+M.version = "0.2.9"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -720,6 +720,37 @@ local function build_agent_env(spec, cwd)
         wake = { command = "wake", args = { slot = spec.name } },
       })
       for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
+
+      -- v0.3.0: spawn-time permission injection. Append the per-kind
+      -- CLI flag(s) that pre-authorize the agent to read/write its
+      -- own mailbox dir and the KB read/write paths. No prompt on
+      -- first file op; no settings-file mutation. Per-instance paths
+      -- (mailbox dir) regenerate on every nvim restart, so the next
+      -- spawn rebuilds the argv from scratch — persistence isn't
+      -- desirable here.
+      local dirs = { rec.dir }
+      for path in tostring(env.AUTO_AGENTS_KB_READ or ""):gmatch("[^:]+") do
+        if path ~= "" then dirs[#dirs + 1] = path end
+      end
+      if type(env.AUTO_AGENTS_KB_WRITE) == "string" and env.AUTO_AGENTS_KB_WRITE ~= "" then
+        local seen = false
+        for _, d in ipairs(dirs) do
+          if d == env.AUTO_AGENTS_KB_WRITE then seen = true; break end
+        end
+        if not seen then dirs[#dirs + 1] = env.AUTO_AGENTS_KB_WRITE end
+      end
+
+      local perms = require("auto-agents.permissions")
+      local extra_argv = perms.argv_for_kind(spec.kind, dirs)
+      if #extra_argv > 0 and type(spec.cmd) == "table" then
+        for _, a in ipairs(extra_argv) do
+          spec.cmd[#spec.cmd + 1] = a
+        end
+        require("auto-agents.logger").info("spawn",
+          string.format("slot %s (%s/%s) grants=%d dirs (%s)",
+            tostring(spec.slot or "?"), spec.kind, spec.name,
+            #dirs, table.concat(dirs, " ")))
+      end
     end)
     if not ok then
       require("auto-agents.logger").warn("spawn",

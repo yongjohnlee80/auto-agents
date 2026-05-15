@@ -330,11 +330,27 @@ For each `configured` agent:
 
 The user's `~/.claude/`, `~/.codex/`, `~/.gemini/` are inside
 each tool's sandbox by default — the agent can read and write
-without extra grants. But the **first** file op against a
-specific path may still prompt for permission (Claude Code's
-`Read(path/**)` permission model). Pre-authorization is a
-v0.3.0 feature item (tracked in
-`~/.config/nvim/docs/todo-lists/mailbox-wake-and-permissions.md`).
+without extra grants. To skip the per-op permission prompt for
+the mailbox dir + KB paths, auto-agents v0.2.9 appends the
+appropriate per-kind CLI flag at spawn time:
+
+| Kind   | Flag                                      |
+|--------|-------------------------------------------|
+| claude | `--add-dir <path>` (repeatable)           |
+| codex  | `--sandbox-workspace-write-root <path>` (repeatable) |
+| gemini | (not yet supported — falls back to prompt) |
+
+Paths granted at spawn:
+
+- `$AUTO_AGENTS_MAILBOX_DIR` (the agent's own mailbox)
+- Every entry of `$AUTO_AGENTS_KB_READ` (colon-split)
+- `$AUTO_AGENTS_KB_WRITE` (if not already covered by READ)
+
+Strategy module: `lua/auto-agents/permissions.lua`. Add new
+kinds by extending the `STRATEGY` table with a
+`repeatable_flag("--your-flag")` entry. No persistence — the
+per-instance mailbox dir regenerates every nvim restart, so the
+next spawn rebuilds the argv from scratch.
 
 ### 5. The router can read every mailbox's tool root
 

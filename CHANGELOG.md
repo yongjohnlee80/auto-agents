@@ -2,6 +2,47 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.9] — 2026-05-14 — spawn-time permission injection (claude `--add-dir`, codex `--sandbox-workspace-write-root`)
+
+Agents previously prompted the user for permission on every first
+file op against their mailbox dir and the KB read/write paths.
+This patch pre-authorizes those dirs at spawn time by appending
+the appropriate CLI flag(s) to the agent's argv — no settings-
+file mutation, no persistence (the per-instance mailbox path
+regenerates on every nvim restart, so the next spawn rebuilds
+the argv from scratch).
+
+### Added
+
+- **`lua/auto-agents/permissions.lua`** — per-kind spawn-time
+  permission strategy table. v0.2.9 ships strategies for two kinds:
+  - `claude` → `--add-dir <path>` (repeatable)
+  - `codex`  → `--sandbox-workspace-write-root <path>` (repeatable)
+  Kinds without a strategy (`gemini`, `junie`, `aider`, `goose`,
+  `opencode`, `copilot`, `generic`) get an empty result; the agent
+  runs unchanged. Public API:
+  `permissions.argv_for_kind(kind, dirs) -> string[]`,
+  `permissions.supported(kind)`, `permissions.supported_kinds()`.
+- **`build_agent_env`** now also assembles a dir list at spawn
+  time (`AUTO_AGENTS_MAILBOX_DIR` + every entry in
+  `AUTO_AGENTS_KB_READ` + `AUTO_AGENTS_KB_WRITE` if not already
+  covered) and appends `permissions.argv_for_kind(spec.kind, dirs)`
+  to `spec.cmd`. Logs the grant list at INFO so it's visible in
+  `:AutoCoreLogs`.
+
+### Notes
+
+- Per-tool sandboxes already grant access to each tool's config
+  dir (`~/.claude/`, `~/.codex/`, etc.); the explicit `--add-dir`
+  flag is just to skip Claude Code's permission prompt for paths
+  inside that tree that weren't pre-allowed. The KB paths live
+  outside the tool config tree and would prompt otherwise.
+- gemini support is tracked in
+  `~/.config/nvim/docs/todo-lists/mailbox-wake-and-permissions.md`.
+- This is a patch within the `v0.2.x` line — no API breaks, the
+  `permissions.lua` module is purely additive. Future strategies
+  for additional kinds land as further patches.
+
 ## [v0.2.8] — 2026-05-14 — register mailbox commands (wake, addressbook, send_user)
 
 v0.2.7 wired the mailbox at spawn time but the wake hook silently
