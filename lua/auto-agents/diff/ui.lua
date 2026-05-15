@@ -120,7 +120,18 @@ local function open_native_diff(req)
     
     vim.api.nvim_win_set_buf(new_win, new_buf)
     vim.cmd("diffthis")
-    
+
+    -- `diffthis` sets foldmethod=diff + closes folds for every equal
+    -- region. We want the full file end-to-end (the whole point of the
+    -- editor-floor view vs the in-panel preview), so unfold both
+    -- windows. winid is set per-window — `wo` instead of `o` matters
+    -- because foldenable is window-local.
+    for _, w in ipairs({ old_win, new_win }) do
+      if vim.api.nvim_win_is_valid(w) then
+        vim.wo[w].foldenable = false
+      end
+    end
+
     -- Handle Save (:w)
     vim.api.nvim_create_autocmd("BufWriteCmd", {
       buffer = new_buf,
