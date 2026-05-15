@@ -5,7 +5,25 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.6"
+M.version = "0.2.7"
+
+-- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
+-- root passed to `auto-core.mailbox.register` at spawn time so
+-- claude-backed agents land under `~/.claude/mailbox/`, codex-
+-- backed under `~/.codex/mailbox/`, gemini-backed under
+-- `~/.gemini/mailbox/`. Each tool's sandbox already grants the
+-- agent read/write on its own config dir, so the mailbox tree
+-- is reachable without extra sandbox grants.
+--
+-- Kinds not listed here fall back to
+-- `auto-core.mailbox.host_fallback_root()` — typically the
+-- nvim-side default (`~/.local/state/nvim/auto-core/mailbox`)
+-- which the agent can still reach if it shares the user's home.
+local MAILBOX_ROOT_BY_KIND = {
+  claude = vim.fn.expand("~/.claude/mailbox"),
+  codex  = vim.fn.expand("~/.codex/mailbox"),
+  gemini = vim.fn.expand("~/.gemini/mailbox"),
+}
 
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
 -- admin; slots 1..MAX_SLOT are main agents in the right panel. There
@@ -454,6 +472,20 @@ function M.setup(opts)
     end
   end
 
+  -- v0.2.7: wire the auto-core mailbox subsystem. Start the central
+  -- router and register the `nvim` executioner mailbox so agents can
+  -- send `kind="command"` messages back to us (whitelisted commands:
+  -- `harpoon`, `openDiff`, `send_slot`, `send_user`). Per-agent
+  -- registration happens later in `build_agent_env` so each spawn
+  -- gets a fresh per-instance mailbox + the four
+  -- `AUTO_AGENTS_INSTANCE_ID/MAILBOX_ID/MAILBOX_DIR/MAILBOX_BOOTSTRAP_DOC`
+  -- env vars consumers need.
+  pcall(function()
+    local mailbox = require("auto-core").mailbox
+    mailbox.configure({ autostart = true })
+    mailbox.register("nvim", { root = mailbox.host_fallback_root() })
+  end)
+
   -- Editor-window-floor invariant. AutoVim's three-column layout
   -- (AutoFinder | Editor | AutoAgents) needs at least one editor window
   -- to remain usable; without it claudecode diff requests can't find a
@@ -659,6 +691,32 @@ local function build_agent_env(spec, cwd)
         kb_root,
         spec.kb_scope or "shared",
         instr_path and (" instr=" .. instr_path) or ""))
+  end
+
+  -- v0.2.7: per-instance mailbox registration. Uses auto-core
+  -- v0.1.8's per-instance isolation — `register` auto-suffixes
+  -- the bare `agent:<name>` id with this nvim's instance_id
+  -- (`<unix-seconds>-<pid>`) so two nvims sharing a tool root
+  -- (e.g. `~/.claude/mailbox/`) get non-overlapping subtrees.
+  -- The agent finds its mailbox via the four env vars below;
+  -- the bootstrap doc at `<tool_root>/bootstrap-mailbox.md` is
+  -- upserted on every register (cheap content-hash short-circuit
+  -- when unchanged — see auto-core v0.1.7).
+  if spec.configured ~= false and spec.name and spec.kind then
+    local ok, err = pcall(function()
+      local mailbox = require("auto-core").mailbox
+      local root = MAILBOX_ROOT_BY_KIND[spec.kind] or mailbox.host_fallback_root()
+      local rec = mailbox.register("agent:" .. spec.name, {
+        root = root,
+        wake = { command = "send_slot", args = { slot = spec.name } },
+      })
+      for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
+    end)
+    if not ok then
+      require("auto-agents.logger").warn("spawn",
+        string.format("mailbox register failed for %s/%s: %s",
+          spec.kind or "?", spec.name or "?", tostring(err)))
+    end
   end
 
   if next(env) == nil then return nil end

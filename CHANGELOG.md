@@ -2,6 +2,59 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.7] — 2026-05-14 — wire the auto-core mailbox at spawn time
+
+`auto-core` v0.1.8 shipped per-instance mailbox isolation behind
+`mailbox.register` + `mailbox.env_for_agent(rec)` — but no consumer
+was actually calling those APIs. Spawned agents had no
+`AUTO_AGENTS_INSTANCE_ID` / `AUTO_AGENTS_MAILBOX_*` env vars and
+the central router was never started, so agents couldn't locate
+their mailbox even though the on-disk tree from earlier
+`transport.send` test runs was still present. This patch fills
+the consumer-side gap.
+
+### Added
+
+- **`auto-agents.setup()`** now starts the auto-core mailbox router
+  (`mailbox.configure({ autostart = true })`) and registers the
+  host-side `nvim` executioner mailbox so agents can send
+  `kind="command"` messages back (whitelisted: `harpoon`,
+  `openDiff`, `send_slot`, `send_user`).
+- **`build_agent_env(spec, cwd)`** now calls
+  `mailbox.register("agent:" .. spec.name, { root, wake })` per
+  spawn — auto-core v0.1.8 auto-suffixes the bare id with this
+  nvim's `instance_id` (`<unix-seconds>-<pid>`) so two nvims
+  sharing a tool root get non-overlapping subtrees. The four env
+  vars from `mailbox.env_for_agent(rec)` are merged into the spawn
+  env so the agent can locate its mailbox without socket access
+  (sandbox-safe).
+- **`MAILBOX_ROOT_BY_KIND` constant** — maps `claude`/`codex`/
+  `gemini` to their respective tool config dirs. Kinds not in the
+  map fall back to `mailbox.host_fallback_root()`.
+
+### Behavior
+
+Each spawn now produces (using a `claude`-kind agent named `jarvis`
+as an example):
+
+- Per-instance directory `~/.claude/mailbox/agent:jarvis:<seconds>-<pid>/`
+  with subdirs `inbox/`, `outbox/`, `responses/`, `processing/`,
+  `archive/`, `.agent-state/`.
+- Per-tool-root bootstrap doc `~/.claude/mailbox/bootstrap-mailbox.md`
+  (hoisted from per-mailbox in v0.1.8 — single doc per tool root,
+  content-hash short-circuit on upsert).
+- Spawn env: `AUTO_AGENTS_INSTANCE_ID`, `AUTO_AGENTS_MAILBOX_ID`,
+  `AUTO_AGENTS_MAILBOX_DIR`, `AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC`.
+- A registered `wake = send_slot {slot=<name>}` hook — inbox arrivals
+  wake the agent's terminal slot via auto-core's router.
+
+### Compatibility
+
+Pre-v0.2.7 bare-id mailbox trees (e.g. `~/.claude/mailbox/agent:jarvis/`)
+are left in place — they're never "live" under v0.1.8+ registration
+and will be swept by `mailbox.prune` once they exceed the 7-day age
+threshold.
+
 ## [v0.2.6] — 2026-05-14 — diff queue panel: meaningful left-column labels
 
 The unified-diff-queue panel's left column was rendering entries
