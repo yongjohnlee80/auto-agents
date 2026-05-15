@@ -338,7 +338,7 @@ function M.open()
       left = { width = 0.2, cursorline = true },
       middle = { title = " Current ", cursorline = true },
       preview = { width = 0.4, title = " Proposed ", cursorline = true },
-      footer = { height = 1, content = " A/D/M Accept/Deny/Modify • E Edit (preview) • O Open (full file) • [1-9] Select • Tab Cycle • hjkl in diff • q Close " }
+      footer = { height = 1, content = " A/D/M Accept/Deny/Modify • E Edit (preview) • O Open (full file) • [1-9]/<CR> Select • Tab Cycle • hjkl in diff • q Close " }
     },
     initial_focus = "left",
     on_open = function(self)
@@ -495,8 +495,9 @@ function M.open()
         )
       end
 
-      -- Selection keymaps (j/k row movement, 1-9 jump, O open) are
-      -- scoped to the LEFT pane only. The middle and preview panes
+      -- Selection keymaps (j/k row movement, 1-9 jump, <CR> commit
+      -- cursor row, O open) are scoped to the LEFT pane only. The
+      -- middle and preview panes
       -- hold the diff content; shadowing j/k/digits there would break
       -- Vim's native motions (hjkl scrolling, 5j / 10G counts,
       -- w/b/e/f/F/t/T/$/^/0/gg/G/% — everything the user asked for).
@@ -524,6 +525,23 @@ function M.open()
           local req = _render_list[_selected_idx]
           if req then
             open_native_diff(req)
+          end
+        end)
+
+        -- <CR>: commit whichever row the cursor is currently on to the
+        -- middle/preview panes. Redundant when the user got here via
+        -- j/k (those already auto-refresh), but the only way to pick
+        -- entries beyond #9 without iterating — `1..9` cap out before
+        -- big queues, and the cursor can land on row 10+ via G / arrow
+        -- keys / mouse. Header takes the first two lines, so entry i
+        -- sits on cursor line i + 2.
+        map("<CR>", function()
+          local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+          local idx = cursor_line - 2
+          if idx >= 1 and idx <= #_render_list then
+            _selected_idx = idx
+            render_left()
+            update_preview()
           end
         end)
 
