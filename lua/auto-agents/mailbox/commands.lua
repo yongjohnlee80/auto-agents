@@ -7,7 +7,7 @@
 ---names + handlers. This module is auto-agents' contribution to that
 ---whitelist.
 ---
----Four commands ship as of v0.2.10 (v0.2.8 originals + openDiff):
+---Five commands ship (v0.2.8 originals + openDiff + commands_list):
 ---
 ---  * `wake` — the wake hook the router fires on every
 ---    inbox/responses arrival (registered as `wake` so the
@@ -36,8 +36,13 @@
 ---    the blocking flow (agent waits for verdict), use the MCP
 ---    openDiff transport instead.
 ---
----Other plugins (md-harpoon for `harpoon`, etc.) own their own
----`commands.register` calls.
+---  * `commands_list` — return the live whitelisted command surface
+---    (name, owner, description) by querying auto-core's registry.
+---    Sibling of `addressbook`: peer discovery vs verb discovery.
+---    Optional `owner` filter narrows results to one plugin.
+---
+---Other plugins (md-harpoon for `harpoon_attach/view/render_browser`,
+---etc.) own their own `commands.register` calls.
 ---
 ---@module 'auto-agents.mailbox.commands'
 
@@ -248,6 +253,55 @@ local function handle_diff_queue(args, ctx)
   }
 end
 
+---`commands_list` handler. `args = { owner: string? }`.
+---
+---Returns the full whitelisted command surface — names, owners,
+---descriptions — by querying auto-core's command registry. Optional
+---`owner` filter narrows results to a single plugin (e.g. only
+---`md-harpoon` commands). Sibling of `addressbook`: peer discovery
+---vs. verb discovery, both backed by the live registry so results
+---stay accurate as plugins register / unregister.
+---@param args table
+---@return table
+local function handle_commands_list(args)
+  args = type(args) == "table" and args or {}
+  local filter_owner = args.owner
+  if filter_owner ~= nil
+      and (type(filter_owner) ~= "string" or filter_owner == "") then
+    return err("invalid_args", "args.owner, when provided, must be a non-empty string")
+  end
+
+  local ok, core = pcall(require, "auto-core")
+  if not ok then
+    return err("auto_core_unavailable", "require('auto-core') failed")
+  end
+  if not core.mailbox or not core.mailbox.commands
+      or type(core.mailbox.commands.list) ~= "function" then
+    return err("mailbox_unavailable", "auto-core mailbox.commands.list missing")
+  end
+
+  local all = core.mailbox.commands.list()
+  local commands = {}
+  for _, entry in ipairs(all) do
+    if filter_owner == nil or entry.owner == filter_owner then
+      commands[#commands + 1] = {
+        name        = entry.name,
+        owner       = entry.owner,
+        description = entry.description,
+      }
+    end
+  end
+
+  return {
+    ok = true,
+    value = {
+      count    = #commands,
+      filter   = filter_owner,
+      commands = commands,
+    },
+  }
+end
+
 ---`send_user` handler. `args = { subject: string?, body: string?, level: "info"|"warn"|"error"|"debug"? }`.
 ---@param args table
 ---@param _ctx table
@@ -277,6 +331,12 @@ local SPECS = {
     description = "Return every reachable mailbox address registered with auto-core, including the virtual `user` entry.",
     schema      = { include_self = "boolean?" },
     handler     = handle_addressbook,
+  },
+  commands_list = {
+    owner       = "auto-agents",
+    description = "Return the live whitelisted command surface (name, owner, description). Optional `owner` filter narrows to one plugin. Sibling of `addressbook` — peer discovery vs verb discovery.",
+    schema      = { owner = "string?" },
+    handler     = handle_commands_list,
   },
   send_user = {
     owner       = "auto-agents",
