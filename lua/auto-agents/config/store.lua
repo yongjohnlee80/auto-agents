@@ -119,7 +119,7 @@ end
 local function normalize(content)
   local ok, data = pcall(toml.decode, content)
   if not ok then
-    require("auto-agents.logger").warn("config.store",
+    require("auto-agents.log").warn("config.store",
       "failed to parse TOML: " .. tostring(data))
     return { project = nil, kb = nil, agents = {} }
   end
@@ -241,7 +241,7 @@ function M.save_current()
     -- resolved to 'none' and just created global.toml, source flips to
     -- 'global'; same for project. Matters for `config show` output.
     aa.state.config_source = target
-    require("auto-agents.logger").debug("config.store", "saved → " .. path)
+    require("auto-agents.log").debug("config.store", "saved → " .. path)
   end
   return ok, path
 end

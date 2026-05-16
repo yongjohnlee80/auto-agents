@@ -12,7 +12,7 @@
 ---@module 'auto-agents.integrations.tree'
 
 local M = {}
-local logger = require("auto-agents.logger")
+local logger = require("auto-agents.log")
 
 ---Return the [start, end] line range of the current visual selection
 ---(or the cursor line if not in visual mode). Inlined from claudecode's

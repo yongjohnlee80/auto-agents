@@ -223,7 +223,7 @@ function M.ensure(spec, kb_root, cwd)
 
   local out, err = io.open(path, "w")
   if not out then
-    require("auto-agents.logger").warn("kb.instruct",
+    require("auto-agents.log").warn("kb.instruct",
       "failed to write " .. path .. ": " .. tostring(err))
     return nil
   end

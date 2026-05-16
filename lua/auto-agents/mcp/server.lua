@@ -17,7 +17,7 @@
 
 local M = {}
 
-local logger = require("auto-agents.logger")
+local logger = require("auto-agents.log")
 local ws = require("auto-agents.mcp.ws-server")
 local lockfile = require("auto-agents.mcp.lockfile")
 

@@ -174,7 +174,7 @@ local function on_window_closed(strategy)
     end
     if M.find_editor_window() then return end
 
-    local logger = require("auto-agents.logger")
+    local logger = require("auto-agents.log")
     if strategy == "create_scratch" then
       logger.info("editor-floor",
         "no editor window remains after :q; materializing scratch to preserve layout")
@@ -218,7 +218,7 @@ local function on_diff_buf_win_enter(args, strategy)
     end
     if non_diff_editor_count > 0 then return end
 
-    local logger = require("auto-agents.logger")
+    local logger = require("auto-agents.log")
     if strategy == "warn" then
       -- Close every claudecode-marked diff buffer in the current tab
       -- and log. The user wanted "log warning rather than opening a
@@ -299,7 +299,7 @@ local function patch_claudecode_diff()
         if name == "find_main_editor_window" then
           debug.setupvalue(fn, i, our_finder)
           patched_any = true
-          require("auto-agents.logger").debug("editor-floor",
+          require("auto-agents.log").debug("editor-floor",
             "patched claudecode.diff." .. fname .. "#find_main_editor_window")
           break
         end
@@ -311,7 +311,7 @@ local function patch_claudecode_diff()
   if patched_any then
     diff._auto_agents_target_window_patched = true
   else
-    require("auto-agents.logger").warn("editor-floor",
+    require("auto-agents.log").warn("editor-floor",
       "could not find `find_main_editor_window` upvalue on any of "
         .. table.concat(patch_targets, ", ")
         .. " — claudecode upstream may have changed; diff target-window patch skipped")

@@ -4,7 +4,7 @@
 ---per-instance factory so each agent slot owns its own terminal.
 ---@module 'auto-agents.terminal.native'
 
-local logger = require("auto-agents.logger")
+local logger = require("auto-agents.log")
 
 local M = {}
 

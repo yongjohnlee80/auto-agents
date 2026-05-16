@@ -320,14 +320,16 @@ ok("dock at slot_count=7 has editor + 8 slot lines (0..7)",
 aa.state.config.panel.slot_count = 5
 aa.sync_slot_count()
 
--- ───────────────────────── 10. logger shim → auto-core.log ─────────────────────────
--- v0.2.0 migration: auto-agents.logger is now a thin shim over
--- auto-core.log. Each call routes through the canonical logger
--- with the component prefixed by "auto-agents." so the unified
--- log stream stays namespaced.
-print("\n[10] logger shim — delegates to auto-core.log with auto-agents prefix")
+-- ───────────────────────── 10. log wrapper → auto-core.log ─────────────────────────
+-- Renamed from `auto-agents.logger` → `auto-agents.log` per ADR
+-- 0021 §6 (wrapper convention). The wrapper now also exposes
+-- `notify` / `notifyIf` / `register_events` in addition to the
+-- level functions. Each call routes through auto-core.log with
+-- the component prefixed by "auto-agents." so the unified log
+-- stream stays namespaced.
+print("\n[10] log wrapper — delegates to auto-core.log with auto-agents prefix")
 
-local logger    = require("auto-agents.logger")
+local logger    = require("auto-agents.log")
 local core_log  = require("auto-core").log
 core_log._reset_for_tests()
 

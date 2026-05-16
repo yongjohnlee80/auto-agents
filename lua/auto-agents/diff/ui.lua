@@ -132,6 +132,21 @@ local function open_native_diff(req)
       end
     end
 
+    -- Land the cursor on the first diff hunk in both windows so the
+    -- user opens straight onto the first change instead of line 1 (or
+    -- wherever viminfo left them last time the file was edited). `]c`
+    -- is vim's native diff motion; from line 1 it advances to the
+    -- start of the first changed region, or no-ops on identical files.
+    -- pcall guards the no-op case (E387: 'No more items to find').
+    for _, w in ipairs({ old_win, new_win }) do
+      if vim.api.nvim_win_is_valid(w) then
+        vim.api.nvim_win_call(w, function()
+          pcall(vim.api.nvim_win_set_cursor, w, { 1, 0 })
+          pcall(vim.cmd, "normal! ]c")
+        end)
+      end
+    end
+
     -- Handle Save (:w)
     vim.api.nvim_create_autocmd("BufWriteCmd", {
       buffer = new_buf,
@@ -153,7 +168,8 @@ local function open_native_diff(req)
         end)
         
         if not write_ok then
-          vim.notify("Error saving file: " .. tostring(write_err), vim.log.levels.ERROR)
+          require("auto-agents.log").error("diff.ui",
+            "Error saving file: " .. tostring(write_err))
           return false
         end
         
@@ -334,7 +350,7 @@ function M.open()
   
   local ok, auto_core = pcall(require, "auto-core")
   if not ok or not auto_core.ui or not auto_core.ui.float.multi then
-    vim.notify("auto-core not available", vim.log.levels.ERROR)
+    require("auto-agents.log").error("diff.ui", "auto-core not available")
     return
   end
   
@@ -424,6 +440,18 @@ function M.open()
         -- the MCP bridge injects _auto_agents_name) and falls back to
         -- the focused slot otherwise — single-agent setups always
         -- have one focused slot and the user is reviewing its diff.
+        -- O (Open): drop the float and open the full-file native diff
+        -- view for the currently-selected entry. Bound on every pane so
+        -- the user can hit O without first jumping back to the list.
+        -- Cursor in the native view lands on the first changed hunk
+        -- (see open_native_diff) — same target regardless of where O
+        -- was pressed.
+        map("O", function()
+          local req = _render_list[_selected_idx]
+          if req then
+            open_native_diff(req)
+          end
+        end)
         map("M", function()
           local req = _render_list[_selected_idx]
           if not req then return end
@@ -467,17 +495,13 @@ function M.open()
           if _edit_mode then
             self:focus("preview")
             pcall(vim.cmd, "startinsert")
-            vim.notify(
+            require("auto-agents.log").notify(
               "Edit mode — press A to save your edits, E to exit",
-              vim.log.levels.INFO,
-              { title = "auto-agents diff" }
-            )
+              { component = "diff.ui", title = "auto-agents diff" })
           else
-            vim.notify(
+            require("auto-agents.log").notify(
               "View mode",
-              vim.log.levels.INFO,
-              { title = "auto-agents diff" }
-            )
+              { component = "diff.ui", title = "auto-agents diff" })
           end
           render_left()
         end, { buffer = preview_buf, silent = true, nowait = true,
@@ -507,15 +531,14 @@ function M.open()
       end
 
       -- Selection keymaps (j/k row movement, 1-9 jump, <CR> commit
-      -- cursor row, O open) are scoped to the LEFT pane only. The
-      -- middle and preview panes
-      -- hold the diff content; shadowing j/k/digits there would break
-      -- Vim's native motions (hjkl scrolling, 5j / 10G counts,
-      -- w/b/e/f/F/t/T/$/^/0/gg/G/% — everything the user asked for).
-      -- O on left → open the full-file diff in the editor floor.
-      -- Capital so it doesn't collide with `o` (cursor-down on the
-      -- list). Native `O` (open line above) stays available on the
-      -- diff panes where it's actually useful in edit mode.
+      -- cursor row) are scoped to the LEFT pane only. The middle and
+      -- preview panes hold the diff content; shadowing j/k/digits
+      -- there would break Vim's native motions (hjkl scrolling, 5j /
+      -- 10G counts, w/b/e/f/F/t/T/$/^/0/gg/G/% — everything the user
+      -- asked for). O (open full-file diff) is bound in bind_actions
+      -- on every pane — the native `O` (open line above) is shadowed
+      -- on the diff panes too, but those buffers are non-modifiable
+      -- so the loss is theoretical.
       local left_buf = self:bufnr("left")
       if left_buf then
         local function map(lhs, fn)
@@ -531,13 +554,6 @@ function M.open()
             end
           end)
         end
-
-        map("O", function()
-          local req = _render_list[_selected_idx]
-          if req then
-            open_native_diff(req)
-          end
-        end)
 
         -- <CR>: commit whichever row the cursor is currently on to the
         -- middle/preview panes. Redundant when the user got here via

@@ -313,9 +313,13 @@ local function handle_send_user(args, _ctx)
   local level   = notify_level(args.level)
   local message = body ~= "" and (subject .. ": " .. body) or subject
   vim.schedule(function()
-    vim.notify(message, level, { title = "auto-agents.mailbox" })
+    require("auto-agents.log").notify(message, {
+      component = "mailbox.send_user",
+      title     = "auto-agents.mailbox",
+      level     = level,
+    })
   end)
-  return { ok = true, value = { delivered_to = "vim.notify" } }
+  return { ok = true, value = { delivered_to = "log.notify" } }
 end
 
 ---@type table<string, AutoCoreCommandSpec>
@@ -372,7 +376,7 @@ function M.register_all()
       out.registered[#out.registered + 1] = name
     else
       out.skipped[#out.skipped + 1] = name
-      require("auto-agents.logger").warn("mailbox.commands",
+      require("auto-agents.log").warn("mailbox.commands",
         string.format("register('%s') failed: %s", name, tostring(regerr)))
     end
   end

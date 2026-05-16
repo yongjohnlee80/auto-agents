@@ -176,7 +176,7 @@ end
 ---@param opts table?
 function M.setup(opts)
   local config = require("auto-agents.config").apply(opts or {})
-  require("auto-agents.logger").setup(config)
+  require("auto-agents.log").setup(config)
 
   -- Apply the persisted slot_count to module-level MAX_SLOT so all
   -- slot-bounded code paths (focus_slot, agent dispatch, winbar tab
@@ -237,7 +237,7 @@ function M.setup(opts)
     if loaded.panel.slot_count ~= nil then
       local ok_sc, err_sc = state_mod.set_slot_count(loaded.panel.slot_count)
       if not ok_sc then
-        require("auto-agents.logger").warn("init",
+        require("auto-agents.log").warn("init",
           "ignoring legacy TOML panel.slot_count: " .. tostring(err_sc)
             .. "; using default 5")
       end
@@ -245,7 +245,7 @@ function M.setup(opts)
     if loaded.panel.width_override ~= nil then
       local ok_wo, err_wo = state_mod.set_width_override(loaded.panel.width_override)
       if not ok_wo then
-        require("auto-agents.logger").warn("init",
+        require("auto-agents.log").warn("init",
           "ignoring legacy TOML panel.width_override: " .. tostring(err_wo))
       end
     end
@@ -335,10 +335,10 @@ function M.setup(opts)
     local port = mcp.start()
     if port then
       M.state.diff_review_port = port
-      require("auto-agents.logger").info("init",
+      require("auto-agents.log").info("init",
         "diff-review bridge ready on port " .. tostring(port))
     else
-      require("auto-agents.logger").error("init",
+      require("auto-agents.log").error("init",
         "failed to start diff-review bridge (MCP server)")
     end
   end
@@ -433,7 +433,7 @@ function M.setup(opts)
         labels[#labels + 1] = string.format("slot %d (%s)",
           e.slot, e.title or e.name or e.kind or "agent")
       end
-      require("auto-agents.logger").warn("init",
+      require("auto-agents.log").warn("init",
         ("v0.1.24 migration: %d agent%s configured to slot%s above slot_count=%d: %s. "
           .. "Either run `slot add %d` in the admin REPL to grow the panel, "
           .. "or move the agent%s to a slot in 1..%d via `agent move <hi> <lo>`.")
@@ -454,7 +454,7 @@ function M.setup(opts)
     end
   end
 
-  require("auto-agents.logger").info("init",
+  require("auto-agents.log").info("init",
     string.format("auto-agents v%s initialized; config_source=%s, agents=%d",
       M.version, source, #config.agents.bootstrap))
 end
@@ -567,7 +567,7 @@ local function build_agent_env(spec, cwd)
   -- as a prompt, so we lean on each kind's auto-loaded markdown.
   if spec.configured ~= false then  -- skip empty-slot shells
     local instr_path = require("auto-agents.kb.instruct").ensure(spec, kb_root, cwd)
-    local logger = require("auto-agents.logger")
+    local logger = require("auto-agents.log")
     logger.info("spawn",
       string.format("slot %s (%s/%s) → KB=%s scope=%s%s",
         tostring(spec.slot or "?"),
@@ -622,14 +622,14 @@ local function build_agent_env(spec, cwd)
         for _, a in ipairs(extra_argv) do
           spec.cmd[#spec.cmd + 1] = a
         end
-        require("auto-agents.logger").info("spawn",
+        require("auto-agents.log").info("spawn",
           string.format("slot %s (%s/%s) grants=%d dirs (%s)",
             tostring(spec.slot or "?"), spec.kind, spec.name,
             #dirs, table.concat(dirs, " ")))
       end
     end)
     if not ok then
-      require("auto-agents.logger").warn("spawn",
+      require("auto-agents.log").warn("spawn",
         string.format("mailbox register failed for %s/%s: %s",
           spec.kind or "?", spec.name or "?", tostring(err)))
     end
@@ -661,7 +661,7 @@ end
 ---@param force boolean?
 ---@return integer|nil winid
 local function ensure_main_window(force)
-  local logger = require("auto-agents.logger")
+  local logger = require("auto-agents.log")
   local cfg = M.state.config
   if not cfg then
     logger.error("init", "auto-agents.setup() must be called first")
@@ -741,7 +741,7 @@ local function ensure_main_slot_terminal(slot, winid)
     return term:get_bufnr()
   end
 
-  local logger = require("auto-agents.logger")
+  local logger = require("auto-agents.log")
   local spec = resolve_slot_spec(slot)
   local resolved = require("auto-agents.terminal").resolve_provider(cfg)
   if resolved == "native" and spec.cmd[1] and vim.fn.executable(spec.cmd[1]) ~= 1 then
@@ -797,7 +797,7 @@ end
 ---@param force boolean?
 function M.open(force)
   if not M.state.config then
-    require("auto-agents.logger").error("init", "auto-agents.setup() must be called first")
+    require("auto-agents.log").error("init", "auto-agents.setup() must be called first")
     return
   end
   if not ensure_main_window(force) then return end
@@ -922,7 +922,7 @@ end
 ---@param slot integer
 ---@return boolean killed
 function M.kill_slot(slot)
-  local logger = require("auto-agents.logger")
+  local logger = require("auto-agents.log")
   if slot >= 1 and slot <= M.MAX_SLOT then
     local term = M.state.slot_terminals[slot]
     if not term then
@@ -965,7 +965,7 @@ end
 ---@return boolean ok
 ---@return string|nil err
 function M.attach_slot(slot, paths)
-  local logger = require("auto-agents.logger")
+  local logger = require("auto-agents.log")
   if not paths or #paths == 0 then
     local tree = require("auto-agents.integrations.tree")
     local files, err = tree.get_selected_files_from_tree()
@@ -1337,7 +1337,7 @@ function M.remove_slot(slot)
     end
     M.refresh_keymaps()
     pcall(function() require("auto-agents.config.store").save_current() end)
-    require("auto-agents.logger").info("lifecycle",
+    require("auto-agents.log").info("lifecycle",
       "slot " .. slot .. " bootstrap entry removed")
     return true, nil
   end
@@ -1508,7 +1508,7 @@ end
 ---multiplex); slots 5..9 → sub-agent floats (mutually exclusive).
 ---@param slot integer
 function M.focus_slot(slot)
-  local logger = require("auto-agents.logger")
+  local logger = require("auto-agents.log")
   local cfg = M.state.config
   if not cfg then
     logger.error("init", "auto-agents.setup() must be called first")

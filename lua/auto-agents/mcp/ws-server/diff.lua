@@ -388,39 +388,31 @@ local function cleanup_temp_file(tmp_file)
     if vim.fs and type(vim.fs.remove) == "function" then
       local ok_file, err_file = pcall(vim.fs.remove, tmp_file)
       if not ok_file then
-        vim.notify(
-          "ClaudeCode: Error removing temp file " .. tmp_file .. ": " .. tostring(err_file),
-          vim.log.levels.WARN
-        )
+        logger.warn("diff.cleanup",
+          "Error removing temp file " .. tmp_file .. ": " .. tostring(err_file))
       end
 
       local ok_dir, err_dir = pcall(vim.fs.remove, tmp_dir)
       if not ok_dir then
-        vim.notify(
-          "ClaudeCode: Error removing temp directory " .. tmp_dir .. ": " .. tostring(err_dir),
-          vim.log.levels.INFO
-        )
+        logger.info("diff.cleanup",
+          "Error removing temp directory " .. tmp_dir .. ": " .. tostring(err_dir))
       end
     else
       local reason = "vim.fs.remove is not a function"
       if not vim.fs then
         reason = "vim.fs is nil"
       end
-      vim.notify(
-        "ClaudeCode: Cannot perform standard cleanup: "
+      logger.error("diff.cleanup",
+        "Cannot perform standard cleanup: "
           .. reason
           .. ". Affected file: "
           .. tmp_file
-          .. ". Please check your Neovim setup or report this issue.",
-        vim.log.levels.ERROR
-      )
+          .. ". Please check your Neovim setup or report this issue.")
       -- Fallback to os.remove for the file.
       local os_ok, os_err = pcall(os.remove, tmp_file)
       if not os_ok then
-        vim.notify(
-          "ClaudeCode: Fallback os.remove also failed for file " .. tmp_file .. ": " .. tostring(os_err),
-          vim.log.levels.ERROR
-        )
+        logger.error("diff.cleanup",
+          "Fallback os.remove also failed for file " .. tmp_file .. ": " .. tostring(os_err))
       end
     end
   end
@@ -1449,7 +1441,7 @@ function M.accept_current_diff()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
 
   if not tab_name then
-    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    logger.warn("diff.user_cmd", "No active diff found in current buffer")
     return
   end
 
@@ -1463,7 +1455,7 @@ function M.deny_current_diff()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
 
   if not tab_name then
-    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    logger.warn("diff.user_cmd", "No active diff found in current buffer")
     return
   end
 

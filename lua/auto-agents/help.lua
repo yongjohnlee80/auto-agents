@@ -222,8 +222,8 @@ end
 function M.open(verb, sub)
   local path = M.path_for(verb)
   if not path then
-    vim.notify("auto-agents help: no docs for '" .. tostring(verb) .. "'",
-      vim.log.levels.ERROR)
+    require("auto-agents.log").error("help",
+      "no docs for '" .. tostring(verb) .. "'")
     return
   end
   -- Find a non-panel, non-float window to host the file.

@@ -1,5 +1,31 @@
----@brief Centralized logger for Claude Code Neovim integration.
--- Provides level-based logging.
+---@brief Centralized logger for the vendored Claude Code Neovim
+---server. Bridges every emit through `auto-agents.log` so the
+---auto-core ring captures ws-server activity alongside the rest
+---of the family.
+---
+---**ADR 0021 §10.2 — bridge resolution.** The 2026-05-16 audit
+---decided to PRESERVE the module shape (file path, function
+---signatures, levels table) instead of deleting the file outright:
+---
+---1. No code outside `auto-agents/mcp/ws-server/` requires this
+---   module — but the vendored tree may be re-synced from upstream
+---   `coder/claudecode.nvim` per the
+---   `vendoring-third-party-protocol-clients` playbook, and keeping
+---   the shape minimizes per-resync diff friction.
+---2. The vendored ws-server's 6 internal consumers (init, tcp,
+---   client, diff, tools/init, tools/close_tab) `require` this
+---   module by path. Keeping the shape means those internal
+---   consumers stay byte-identical with their upstream
+---   counterparts.
+---
+---**What changed in the bridge:** every emit now ALSO calls the
+---corresponding `auto-agents.log.<level>` so the entry lands in
+---the auto-core ring (component prefix `ws-server.<component>`).
+---The local prefix "[ClaudeCode]" + level filter and the
+---`vim.schedule`-wrapped vim.notify / nvim_echo behavior remain
+---intact — backward-compatible with the upstream contract any
+---future resync brings.
+---
 ---@module 'claudecode.logger'
 local M = {}
 
@@ -21,28 +47,77 @@ local level_values = {
 
 local current_log_level_value = M.levels.INFO
 
+-- Lazy handle to the family wrapper. Resolved on first use so
+-- that loading this vendored module during auto-agents bootstrap
+-- (potentially before `auto-agents.log` itself is required) never
+-- crashes on an out-of-order init.
+local _af_log
+local function af_log()
+  if _af_log ~= nil then return _af_log end
+  local ok, mod = pcall(require, "auto-agents.log")
+  if ok and type(mod) == "table" then
+    _af_log = mod
+  else
+    _af_log = false
+  end
+  return _af_log
+end
+
 ---Setup the logger module
----@param plugin_config ClaudeCodeConfig The configuration table (e.g., from claudecode.init.state.config).
+---@param plugin_config table The configuration table (e.g., from claudecode.init.state.config).
 function M.setup(plugin_config)
   local conf = plugin_config
 
   if conf and conf.log_level and level_values[conf.log_level] then
     current_log_level_value = level_values[conf.log_level]
   else
-    vim.notify(
-      "ClaudeCode Logger: Invalid or missing log_level in configuration (received: "
-        .. tostring(conf and conf.log_level)
-        .. "). Defaulting to INFO.",
-      vim.log.levels.WARN
-    )
+    -- Route via the family wrapper so the warning lands in the
+    -- auto-core ring (don't bypass the bridge for this case).
+    local fl = af_log()
+    if fl then
+      fl.warn("ws-server.logger",
+        "Invalid or missing log_level in configuration (received: "
+          .. tostring(conf and conf.log_level)
+          .. "). Defaulting to INFO.")
+    else
+      vim.notify(
+        "ClaudeCode Logger: Invalid or missing log_level in configuration (received: "
+          .. tostring(conf and conf.log_level)
+          .. "). Defaulting to INFO.",
+        vim.log.levels.WARN
+      )
+    end
     current_log_level_value = M.levels.INFO
   end
+end
+
+-- Bridge: forward every accepted emission into auto-agents.log so
+-- the auto-core ring sees ws-server activity. Component is
+-- prefixed with `ws-server.` (and further by `auto-agents.` inside
+-- the wrapper) so the ring entry reads
+-- `auto-agents.ws-server.<component>`.
+local function bridge_to_family(level, component, message_parts)
+  local fl = af_log()
+  if not fl then return end
+  local prefixed = component and ("ws-server." .. component) or "ws-server"
+  local fn
+  if level == M.levels.ERROR then fn = fl.error
+  elseif level == M.levels.WARN then fn = fl.warn
+  elseif level == M.levels.INFO then fn = fl.info
+  elseif level == M.levels.DEBUG then fn = fl.debug
+  else fn = fl.trace
+  end
+  fn(prefixed, table.unpack(message_parts))
 end
 
 local function log(level, component, message_parts)
   if level > current_log_level_value then
     return
   end
+
+  -- Bridge first — the family ring captures the entry whether or
+  -- not the local vim.notify / nvim_echo path fires.
+  bridge_to_family(level, component, message_parts)
 
   local prefix = "[ClaudeCode]"
   if component then
@@ -119,7 +194,7 @@ function M.info(component, ...)
 end
 
 ---Check if a specific log level is enabled
----@param level_name ClaudeCodeLogLevel The level name ("error", "warn", "info", "debug", "trace")
+---@param level_name string The level name ("error", "warn", "info", "debug", "trace")
 ---@return boolean enabled Whether the level is enabled
 function M.is_level_enabled(level_name)
   local level_value = level_values[level_name]

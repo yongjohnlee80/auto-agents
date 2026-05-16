@@ -63,7 +63,7 @@ end
 ---Persist M._grants to disk.
 ---@return boolean ok
 function M.save()
-  local logger = require("auto-agents.logger")
+  local logger = require("auto-agents.log")
   local path = M.file_path()
   local ok, encoded = pcall(vim.json.encode, { grants = M._grants })
   if not ok then

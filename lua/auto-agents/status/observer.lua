@@ -99,20 +99,17 @@ local function check_model_drift(obs)
 
   local agent = require("auto-agents.agent")
   local synced_ok, msg = agent.set_model(name, running)
+  local log = require("auto-agents.log")
   if synced_ok then
     obs.last_synced_model = running
     local prev = toml_model or "(CLI default)"
-    vim.notify(
-      string.format("auto-agents: %s model synced  %s → %s", name, prev, running),
-      vim.log.levels.INFO,
-      { title = "auto-agents" }
-    )
+    log.notify(
+      string.format("%s model synced  %s → %s", name, prev, running),
+      { component = "status.observer", level = "info", title = "auto-agents" })
   else
-    vim.notify(
-      string.format("auto-agents: model sync failed for %s — %s", name, msg),
-      vim.log.levels.WARN,
-      { title = "auto-agents" }
-    )
+    log.notify(
+      string.format("model sync failed for %s — %s", name, msg),
+      { component = "status.observer", level = "warn", title = "auto-agents" })
   end
 end
 

@@ -61,11 +61,8 @@ function M.register(tool_module)
     elseif type(tool_module) == "string" then -- if require failed, it might be the path string
       name = tool_module
     end
-    vim.notify(
-      "Error registering tool: Invalid tool module structure for " .. name,
-      vim.log.levels.ERROR,
-      { title = "ClaudeCode Tool Registration" }
-    )
+    require("auto-agents.mcp.ws-server.logger").error("tools.register",
+      "Invalid tool module structure for " .. name)
     return
   end
 
