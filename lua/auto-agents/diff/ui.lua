@@ -224,6 +224,53 @@ local function set_buf_lines(buf, lines)
   end
 end
 
+-- Resolve the file's containing git repo for the left-column label.
+-- See `render_left` for the layout taxonomy this implements.
+-- @param path string
+-- @return string
+local function repo_for(path)
+  -- `git -C <p>` requires a directory; queue entries always carry a
+  -- file path, so probe through the parent dir.
+  local probe_dir = vim.fn.fnamemodify(path, ":h")
+  local repo_mod_ok, repo_mod = pcall(require, "auto-core.git.repo")
+  if repo_mod_ok and type(repo_mod.common_dir) == "function" then
+    local cd = repo_mod.common_dir(probe_dir)
+    if type(cd) == "string" and cd ~= "" then
+      local base = vim.fn.fnamemodify(cd, ":t")
+      if base == ".git" or base == ".bare" then
+        return vim.fn.fnamemodify(cd, ":h:t")
+      end
+      return base
+    end
+  end
+  local fs_path_ok, fs_path = pcall(require, "auto-core.fs.path")
+  if fs_path_ok and type(fs_path.project_root) == "function" then
+    local r = fs_path.project_root({ start = probe_dir })
+    if type(r) == "string" and r ~= "" then
+      return vim.fn.fnamemodify(r, ":t")
+    end
+  end
+  return vim.fn.fnamemodify(path, ":h:t")
+end
+
+-- Normalise the agent column. Treats every known "unattributed" sentinel
+-- (nil / "" / "agent" / "?" / "unknown" / "unattributed") as one displayed
+-- string so future regressions surface a less ambiguous failure mode.
+-- The real attribution fix lives upstream (ADR 0011 §D2/D3).
+-- @param name any
+-- @return string
+local function agent_for(name)
+  if type(name) == "string"
+      and name ~= ""
+      and name ~= "agent"
+      and name ~= "?"
+      and name ~= "unknown"
+      and name ~= "unattributed" then
+    return name
+  end
+  return "unattributed"
+end
+
 -- Declaration for mutually recursive calls
 local render_left, update_preview
 
@@ -296,30 +343,27 @@ render_left = function()
   end
   
   local lines = { " Pending Diffs (" .. #_render_list .. ")", "" }
-  -- v0.2.6 left-column format: {wt}  {filename}  [{agent_name}]
-  -- where `wt` is the basename of the file's containing workspace
-  -- (git worktree / project root). When the workspace can't be
-  -- resolved (no .git nearby), fall back to the file's parent
-  -- directory's basename — still identifiable for the user.
-  local fs_path_ok, fs_path = pcall(require, "auto-core.fs.path")
-  local function wt_for(path)
-    if fs_path_ok and type(fs_path.workspace_root) == "function" then
-      local root = fs_path.workspace_root(path)
-      if type(root) == "string" and root ~= "" then
-        return vim.fn.fnamemodify(root, ":t")
-      end
-    end
-    return vim.fn.fnamemodify(path, ":h:t")
-  end
+  -- Left-column format: `{repo}/{filename}  [{agent_name}]`.
+  -- Repo resolution taxonomy:
+  --   bare repo + linked worktree  →  basename of the dir hosting the common dir
+  --     <...>/auto-agents.nvim/<branch>/lua/foo.lua
+  --     common_dir = <...>/auto-agents.nvim/.git  →  "auto-agents.nvim"
+  --   plain clone                  →  basename of the dir hosting the common dir
+  --     <...>/kb/log.md
+  --     common_dir = <...>/kb/.git  →  "kb"
+  --   bare without .git/.bare subdir (common_dir IS the bare itself)
+  --     <...>/auto-agents.nvim     →  "auto-agents.nvim"
+  --   non-git project              →  `fs.path.project_root({start=path})` basename
+  --   none of the above            →  parent dir basename (`:h:t`)
+  -- See `repo_for` at file scope. Agent column normalises every
+  -- "unattributed" sentinel to one displayed string (`agent_for`).
   for i, req in ipairs(_render_list) do
     local marker = (i == _selected_idx) and "▶" or " "
     local filename = vim.fn.fnamemodify(req.file_path, ":t")
-    local wt = wt_for(req.file_path)
-    local agent = (type(req.agent_name) == "string"
-                   and req.agent_name ~= ""
-                   and req.agent_name ~= "agent") and req.agent_name or "?"
+    local repo = repo_for(req.file_path)
+    local agent = agent_for(req.agent_name)
     lines[#lines + 1] = string.format("%s [%d] %s/%s [%s]",
-      marker, i, wt, filename, agent)
+      marker, i, repo, filename, agent)
   end
   
   set_buf_lines(buf, lines)
@@ -695,6 +739,12 @@ end
 function M._test_get_mfloat()
   return _mfloat
 end
+
+--- Test helpers: expose the pure label-resolution functions so the panel
+--- regression specs can drive them on synthetic file paths without
+--- standing up the float UI. Not part of the public contract.
+M._test_repo_for  = repo_for
+M._test_agent_for = agent_for
 
 -- Subscriptions to `auto-agents:diff_queued` and `:diff_removed`
 -- are intentionally registered INSIDE `M.open()` (not at module

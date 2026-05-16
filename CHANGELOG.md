@@ -2,6 +2,83 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.12] — 2026-05-16 — diff panel labels: repo column + unattributed placeholder (ADR 0011 Patch 1)
+
+Renumbered from the pre-rebase v0.2.11 → v0.2.12 because v0.2.11 was
+claimed upstream by the ADR 0021 Phase 2 logging refactor; this work
+rebases on top of that and bumps to the next patch in line.
+
+The Pending Diffs panel in v0.2.10 rendered `Projects/log.md [?]`
+for diffs of files in the user's bare-worktree layout, with no
+agent name attached. Two independent bugs in the
+`v0.2.6` left-column code (see ADR 0011 §Findings):
+
+1. **Repo column resolved to `Projects`.** `wt_for` called
+   `fs_path.workspace_root(path)` positionally, but the API takes
+   an options table. With `opts.start = nil` the resolver walked
+   from `vim.fn.getcwd()` instead of the file path, then —
+   finding no `.git`/`.bare` in any ancestor — fell back to the
+   "last resort: parent of start" branch and returned the cwd's
+   parent (`~/Source/Projects`), basename `"Projects"`. Even with
+   the call fixed, `workspace_root` returns the *parent of* the
+   git container, not the repo itself; for bare-worktree layouts
+   the file's worktree basename (`fix-diff-panel`, `main`) is a
+   branch name, not a repo identity.
+
+2. **Agent column showed `[?]`.** The display predicate stripped
+   the literal placeholders `""` / `"agent"` but rendered the
+   sentinel `"?"` (used by the MCP openDiff handlers when the
+   bootstrap `resolve_diff_agent_name(nil)` returns nil under
+   any 2+ `diff_review = true` config) verbatim. The user's
+   global.toml has 4 such agents, so the resolver is always
+   ambiguous.
+
+### Changed
+
+- **`lua/auto-agents/diff/ui.lua`** (`render_left`):
+  - Replace `wt_for` with `repo_for`, lifted to file scope so the
+    panel spec can drive it. Resolves the label through
+    `auto-core.git.repo.common_dir({ start = parent(path) })` and
+    derives the basename:
+    * common_dir basename is `.git` / `.bare` → parent basename
+      (`auto-agents.nvim`, `kb`).
+    * common_dir basename is anything else (bare repo with no
+      `.git`/`.bare` subdir — common_dir IS the bare itself) →
+      that basename verbatim.
+  - Non-git fallback: parent-dir basename via `:h:t`. The earlier
+    `fs_path.project_root` step was removed after Lector's round-2
+    review showed it leaked ancestor markers (`.luarc.json`,
+    `package.json`, ...) into the panel label.
+  - Add `agent_for` (file-scope helper). Normalises every known
+    "unattributed" sentinel (nil, `""`, `"agent"`, `"?"`,
+    `"unknown"`, `"unattributed"`, non-string values) to the
+    literal display string `unattributed`. Real attributions
+    (`jarvis`, `lector`, `agent-foo`, etc.) pass through
+    unchanged.
+  - Add `M._test_repo_for` / `M._test_agent_for` for the
+    regression spec — not part of the public contract.
+
+### Added
+
+- **`tests/diff_panel_labels_spec.lua`** — headless regression
+  spec for the new label resolvers. Stands up real git fixtures
+  in a tmpdir (bare + linked worktrees, plain clone, non-git
+  dir) and asserts the exact strings the user reported as
+  broken. Existing `diff_ui_spec.lua` / `diff_queue_spec.lua`
+  pass unchanged.
+
+### Notes
+
+- This patch is **Patch 1 of the ADR 0011 rollout**. It fixes
+  both visible columns at the display layer. Patches 2-4
+  (websocket attribution + mailbox sender propagation) close
+  the upstream attribution gaps so the `agent_for` fallback to
+  `unattributed` becomes a defense-in-depth rather than the
+  primary failure mode.
+- ADR 0011 lives at
+  `docs/adr/0011-diff-panel-label-resolution-bug.md` and
+  documents the spike + per-slot bridge proposal for Patch 2.
+
 ## [v0.2.11] — 2026-05-16 — ADR 0021 Phase 2 wrapper + diff-queue / send_slot / mailbox improvements
 
 Bundle release. Eight commits accumulated on the `comms-1` worktree
