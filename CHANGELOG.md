@@ -2,6 +2,150 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.11] — 2026-05-16 — ADR 0021 Phase 2 wrapper + diff-queue / send_slot / mailbox improvements
+
+Bundle release. Eight commits accumulated on the `comms-1` worktree
+since v0.2.10 — the Phase 2 logging refactor is the headline, but
+seven smaller collab improvements ship alongside.
+
+### ADR 0021 Phase 2 — wrapper rename + sweep + ws-server bridge
+
+Largest single piece. Per the wrapper convention (ADR 0021 §6,
+codified at `shared/conventions/auto-family-logging.md`),
+auto-agents now owns `lua/auto-agents/log.lua` as the single
+insertion point for all emissions. Renamed from `logger.lua`,
+broadened to expose `notify` / `notifyIf` / `register_events`,
+and soft-dep tolerant for pre-Phase-1 auto-core.
+
+- **Renamed `lua/auto-agents/logger.lua` → `lua/auto-agents/log.lua`**
+  via `git mv` (history preserved). The new wrapper exposes:
+
+  ```lua
+  local log = require("auto-agents.log")
+
+  log.error / .warn / .info / .debug / .trace  -- with auto-agents.* component prefix
+  log.notify(msg, opts?)                        -- force-toast single emission
+  log.notifyIf(event, msg, opts?)               -- toast iff event subscribed
+  log.register_events(events)                   -- declare at setup
+  log.is_level_enabled(name)                    -- predicate
+  log.setup(cfg)                                -- forward cfg.log_level
+  ```
+
+- **9 require paths swept** across `init.lua`,
+  `integrations/{editor_floor,tree}.lua`, `mcp/server.lua`,
+  `mailbox/commands.lua`, `config/store.lua`, `kb/instruct.lua`,
+  `terminal/native.lua`, `resources/grants.lua`. All
+  `require("auto-agents.logger")` → `require("auto-agents.log")`.
+
+- **9 non-fork bare `vim.notify` call sites swept** —
+  `diff/ui.lua` (4 sites: save-error, auto-core soft-dep,
+  edit-mode toast, view-mode toast), `mailbox/commands.lua` (the
+  `send_user` agent → user toast bridge),
+  `help.lua` (missing-docs error),
+  `status/observer.lua` (2 sites: model-sync success + failure).
+  Custom toast titles (`"auto-agents diff"`, `"auto-agents"`)
+  preserved via `opts.title`.
+
+- **ws-server vendored claudecode logger — BRIDGE (ADR 0021 §10.2).**
+  Audit verdict: no code outside `auto-agents/mcp/ws-server/`
+  imports the vendored module by path. But the
+  `vendoring-third-party-protocol-clients` playbook requires
+  preserving the upstream-shape so future re-syncs from
+  `coder/claudecode.nvim` minimize diff churn. Kept the file +
+  signatures; rewired internals so every emit ALSO forwards to
+  `auto-agents.log.<level>("ws-server.<component>", …)`. Lazy
+  resolution via `af_log()` avoids init-order coupling.
+
+- **6 ws-server-internal bare `vim.notify` calls swept** through
+  the (now-bridged) vendored logger:
+  `tools/init.lua` (tool-registration error), `diff.lua` x5
+  (cleanup paths + user-command no-active-diff warnings).
+
+Soft-dep tolerance: when running against an auto-core older
+than v0.1.11 (no `notify` / `notifyIf` / `events.register`),
+each new method in the wrapper degrades to a ring-only emission
+instead of crashing. Users without auto-core get the
+`[auto-agents.<component>] <msg>` fallback vim.notify so the
+toast surface is preserved.
+
+### diff queue UX — `O` opens full-file diff, `<CR>` commits cursor row
+
+Pre-v0.2.11 the diff queue's panel bound `<CR>` to "open full-file
+diff in editor", which was awkward when the queue had >9 entries
+and `<CR>` was the natural "commit row N" gesture. v0.2.11
+swaps:
+
+- `<CR>` now commits the cursor row (accept the diff under
+  cursor). Replaces the prior numeric-prefix flow for queues > 9.
+- `O` opens the full-file diff in the editor (the action that
+  used to be on `<CR>`).
+- When `O` opens, the editor's view is unfolded so the user
+  sees the full pre/post buffer pair without manually
+  expanding folds.
+
+### `send_slot` wraps text in bracketed-paste
+
+When auto-agents drives `send_slot(slot, text, { submit = true })`
+into a TUI's terminal (claude / codex / gemini), the receiver may
+interpret the body+CR as multiple keystrokes and lose characters
+to its own paste-detection heuristics. Wrapping in
+`ESC[200~ … ESC[201~` (the bracketed-paste sequence) tells the
+TUI "this is one paste, not typed input" — characters land
+atomically.
+
+The post-body `\r` (from `opts.submit = true`) is sent OUTSIDE the
+paste brackets so the TUI sees the submit explicitly, not as part
+of the paste.
+
+### kb.instruct — inject mailbox protocol into every spawn
+
+Every agent spawn's instruction file now carries the canonical
+mailbox protocol section (the same one in
+`<tool-root>/bootstrap-mailbox.md`) so agents know how to operate
+their mailbox from cold start without an explicit ingest step.
+Replaces the prior pattern where each agent had to either
+hardcode the protocol or ingest the bootstrap doc themselves.
+
+### mailbox.commands — add `commands_list` for verb discovery
+
+New whitelisted verb. Agents send `kind = "command"` with
+`verb = "commands_list"` and receive the live registry of every
+verb currently mounted on the `nvim` executioner (across every
+plugin that called `mailbox.commands.register`). Replaces the
+prior pattern of hardcoding the agent-known verb set.
+
+### diff-parity / panel restore on diff-close
+
+Removed the diff-parity ghost-absorber that papered over a panel
+column-restore bug; root-caused the panel column collapse and
+restored the layout directly when the diff buffer closes.
+
+### Tests
+
+`tests/smoke.lua` — 92 passed, 5 failed. The 5 failures are
+pre-existing on `comms-1` BEFORE the Phase 2 sweep:
+
+- 3 slot-count failures (`MAX_SLOT defaults to 5`,
+  `slot_count mirrored to 7`, `MAX_SLOT updated via
+  sync_slot_count`) — caused by the global.toml having 6 agents
+  rather than the smoke's assumed 5-floor. Test data, not
+  auto-agents code. Tracked for a future test-fixture refresh.
+- 2 send_slot bracketed-paste failures (`body sent immediately`,
+  `send_slot without submit fires one chan_send`) — pre-dated
+  this ship; tracked alongside the diff-queue work that landed
+  earlier.
+
+**Zero new failures introduced by the Phase 2 sweep.**
+
+### Migration
+
+Soft. Consumers pin via `version = "^0.2.0"` and auto-update.
+`require("auto-agents.logger")` callers — none in the family
+besides auto-agents itself — should switch to
+`require("auto-agents.log")`. The wrapper soft-deps against
+pre-Phase-1 auto-core so consumers can stage the upgrade in any
+order.
+
 ## [v0.2.10] — 2026-05-14 — fix codex permission flag, add gemini support, add `diff_queue` command
 
 v0.2.9 shipped with `--sandbox-workspace-write-root` as the codex
