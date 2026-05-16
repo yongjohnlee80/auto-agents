@@ -1099,6 +1099,39 @@ function M.slot_for_name(name)
   return nil
 end
 
+---Enumerate every running agent slot that has `diff_review = true`,
+---along with its agent name and live PID. Used by the openDiff MCP
+---bridge to attribute an incoming connection to its originating slot
+---via peer-PID lookup (procfs on Linux). Slots that aren't currently
+---running, or whose PID can't be probed, are omitted.
+---
+---Output is a flat array — callers usually want all of it (the
+---peer_identity module does an O(N) lsof-style match), but the slot
+---and name are both included so single-result lookups are also cheap.
+---@return { slot: integer, name: string, pid: integer }[]
+function M.diff_review_slots_with_pid()
+  local out = {}
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return out end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.diff_review and type(e.name) == "string" and e.name ~= ""
+        and type(e.slot) == "number"
+    then
+      local term = M.state.slot_terminals[e.slot]
+      if term and term:is_alive() and term.get_jobid then
+        local jobid = term:get_jobid()
+        if jobid and jobid > 0 then
+          local ok, pid = pcall(vim.fn.jobpid, jobid)
+          if ok and type(pid) == "number" and pid > 0 then
+            out[#out + 1] = { slot = e.slot, name = e.name, pid = pid }
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+
 ---Best-effort resolution of "which agent is the source of an
 ---inbound diff." Used by the MCP open_diff handlers + the queue UI
 ---to display a meaningful name in the panel instead of the literal

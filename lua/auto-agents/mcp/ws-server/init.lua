@@ -76,6 +76,13 @@ function M.start(config, auth_token)
         ", reason:",
         (reason or "N/A") .. ")"
       )
+      -- Drop any cached slot-identity attribution for this client so
+      -- a re-spawned slot rebinding to the same client.id doesn't
+      -- inherit a stale mapping. See peer_identity.lua.
+      local pi_ok, pi = pcall(require, "auto-agents.mcp.ws-server.peer_identity")
+      if pi_ok and type(pi.forget) == "function" then
+        pcall(pi.forget, client.id)
+      end
     end,
     on_error = function(error_msg)
       logger.error("server", "WebSocket server error:", error_msg)

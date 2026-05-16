@@ -32,8 +32,11 @@ local schema = {
 ---Handles the openDiff tool invocation.
 ---Uses the unified diff queue and blocks until user interaction (save/close).
 ---@param params table The input parameters for the tool
+---@param ctx    table? Optional ws-server context (`{ client = WebSocketClient }`).
+---                     Used by the peer-PID identity resolver when the
+---                     agent doesn't self-identify via `_auto_agents_name`.
 ---@return table response MCP-compliant response with content array
-local function handler(params)
+local function handler(params, ctx)
   -- Validate required parameters
   local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
   for _, param_name in ipairs(required_params) do
@@ -66,16 +69,45 @@ local function handler(params)
     f_read:close()
   end
 
-  -- v0.2.6: resolve agent name via auto-agents bootstrap config
-  -- when caller didn't inject one. Common case (exactly one
-  -- diff_review-enabled agent) resolves cleanly; ambiguous setups
-  -- fall back to the explicit injection or "?" placeholder.
+  -- Agent-name resolution chain (most authoritative first):
+  --
+  --   1. `params._auto_agents_name` (explicit; agent self-identified)
+  --   2. Peer-PID lookup: map the ws connection's source port back to
+  --      its owning slot via /proc/net/tcp + /proc/<pid>/fd. Closes
+  --      the multi-`diff_review` ambiguity reported by the user — see
+  --      ADR 0011 §D2-B and `peer_identity.lua` for the OS-level walk.
+  --   3. Bootstrap resolver: works only when EXACTLY ONE bootstrap
+  --      entry has `diff_review = true` — kept as last-resort.
+  --   4. Literal "?" sentinel (panel maps to "unattributed").
   local aa_ok, aa = pcall(require, "auto-agents")
-  local resolved
-  if aa_ok and type(aa.resolve_diff_agent_name) == "function" then
-    resolved = aa.resolve_diff_agent_name(params._auto_agents_name)
+  local agent_name = params._auto_agents_name
+
+  if not (type(agent_name) == "string" and agent_name ~= "" and agent_name ~= "agent") then
+    -- Try peer-PID identity. Requires the ws-server's context block.
+    local listen_port
+    if aa_ok and aa.state and type(aa.state.diff_review_port) == "number" then
+      listen_port = aa.state.diff_review_port
+    end
+    if ctx and ctx.client and listen_port then
+      local pi_ok, pi = pcall(require, "auto-agents.mcp.ws-server.peer_identity")
+      if pi_ok and type(pi.resolve) == "function" then
+        local resolved_by_peer = pi.resolve(ctx.client, listen_port)
+        if type(resolved_by_peer) == "string" and resolved_by_peer ~= "" then
+          agent_name = resolved_by_peer
+        end
+      end
+    end
   end
-  local agent_name = resolved or params._auto_agents_name or "?"
+
+  -- Final bootstrap-resolver fallback. Returns `agent_name` unchanged
+  -- when it's already a valid explicit name; resolves the
+  -- one-`diff_review`-agent case for setups that haven't grown
+  -- multi-agent yet.
+  if aa_ok and type(aa.resolve_diff_agent_name) == "function" then
+    local resolved = aa.resolve_diff_agent_name(agent_name)
+    agent_name = resolved or agent_name or "?"
+  end
+  if type(agent_name) ~= "string" or agent_name == "" then agent_name = "?" end
 
   -- Using the unified diff queue
   local success, result_or_err = pcall(function()

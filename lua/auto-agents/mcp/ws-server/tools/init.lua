@@ -92,13 +92,21 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
   -- 1. Raise an error (e.g., error({code=..., message=...}) or error("string"))
   -- 2. Return (false, "error message string" or {code=..., message=...}) for pcall-style errors
   -- 3. Return the result directly for success.
-  -- Check if this tool requires coroutine context for blocking behavior
+  --
+  -- Handler signature: `handler(input, ctx)`. The `ctx` table forwards the
+  -- ws-server's per-call context — currently just `{ client = client }` — so
+  -- handlers can attribute the call to its originating connection (used by
+  -- the openDiff handler to derive an agent name via peer-PID lookup when
+  -- the agent doesn't self-identify via `_auto_agents_name`). Existing
+  -- handlers that take a single `input` arg ignore the second parameter,
+  -- so this is additive.
+  local ctx = { client = client }
   local pcall_results
   if tool_data.requires_coroutine then
     -- Wrap in coroutine for blocking behavior
     require("auto-agents.mcp.ws-server.logger").debug("tools", "Wrapping " .. tool_name .. " in coroutine for blocking behavior")
     local co = coroutine.create(function()
-      return tool_data.handler(input)
+      return tool_data.handler(input, ctx)
     end)
 
     require("auto-agents.mcp.ws-server.logger").debug("tools", "About to resume coroutine for " .. tool_name)
@@ -124,7 +132,7 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
     )
     pcall_results = { success, result }
   else
-    pcall_results = { pcall(tool_data.handler, input) }
+    pcall_results = { pcall(tool_data.handler, input, ctx) }
   end
   local pcall_success = pcall_results[1]
   local handler_return_val1 = pcall_results[2]
