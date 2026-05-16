@@ -55,13 +55,34 @@ local function handler(params)
     -- Unified diff-queue path: when the agent dismisses a diff out-of-band
     -- (e.g. the user pressed `q` to hide the panel and then answered yes/no
     -- in the CLI terminal), Claude Code sends close_tab with the same
-    -- tab_name it used for openDiff. Reject the matching pending entry so
-    -- the yielded coroutine resumes with DIFF_REJECTED and the panel
-    -- (subscribed to auto-agents:diff_removed) refreshes.
+    -- tab_name it used for openDiff. Normally we reject the matching
+    -- pending entry so the yielded coroutine resumes with DIFF_REJECTED
+    -- and the panel (subscribed to auto-agents:diff_removed) refreshes.
+    --
+    -- Cascade-drain guard: when the diff panel IS open, the panel — not
+    -- the agent — owns the resolution lifecycle for pending entries. After
+    -- the user presses `A` on one queue entry, Claude Code's CLI sees the
+    -- FILE_SAVED response and proactively sends close_tab for *every other*
+    -- pending diff tab in its session (Claude's UI model treats the queue
+    -- as a single batch). Without this guard, one `A` press would reject
+    -- all sibling entries in the queue — exactly the user-reported
+    -- regression. With the panel open we return TAB_CLOSED without
+    -- mutating the queue; the user keeps control of A/D/M per entry.
+    -- The panel-closed path is unchanged (CLI-terminal dismissals still
+    -- work).
     local queue_ok, queue = pcall(require, "auto-agents.diff.queue")
     if queue_ok and queue.find_by_tab_name then
       local req = queue.find_by_tab_name(tab_name)
       if req then
+        local ui_ok, ui = pcall(require, "auto-agents.diff.ui")
+        if ui_ok and type(ui.is_open) == "function" and ui.is_open() then
+          log.debug("close_tab ignored — panel is open and owns " .. req.id)
+          return {
+            content = {
+              { type = "text", text = "TAB_CLOSED" },
+            },
+          }
+        end
         log.debug("close_tab matched pending queue entry: " .. req.id)
         queue.reject(req.id)
         return {

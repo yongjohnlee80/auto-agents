@@ -2,11 +2,45 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## [v0.2.12] — 2026-05-16 — diff panel labels: repo column + unattributed placeholder (ADR 0011 Patch 1)
+## [v0.2.12] — 2026-05-16 — diff panel: labels + cascade-drain + websocket/mailbox attribution (ADR 0011)
 
 Renumbered from the pre-rebase v0.2.11 → v0.2.12 because v0.2.11 was
 claimed upstream by the ADR 0021 Phase 2 logging refactor; this work
 rebases on top of that and bumps to the next patch in line.
+
+Bundle release of every fix on the `fix-diff-panel` branch. The
+panel-labels work (ADR 0011 Patch 1) is the headline; the
+cascade-drain fix and the websocket/mailbox attribution patches
+(2/3/4) ship together because they all converge on the same
+multi-agent diff-review surface.
+
+### Cascade-drain fix — `A` no longer empties the queue
+
+Symptom: with N pending entries in the Pending Diffs panel, one `A`
+press at position 1 dismissed ALL N entries. Cause: after the user
+accepts a diff via `A`, the resolved entry's coroutine resumes with
+`FILE_SAVED` and Claude Code's CLI treats that as "the user processed
+the queue" — it then sends `close_tab` for every sibling diff tab in
+its session. The pre-fix close_tab handler called `queue.reject` on
+each match, so one `A` produced an agent-driven cascade of rejections.
+
+Fix (`lua/auto-agents/mcp/ws-server/tools/close_tab.lua`): when the
+diff panel is OPEN, close_tab is a no-op for pending queue entries —
+returns `TAB_CLOSED` without mutating the queue. The panel owns the
+resolution lifecycle while it's up; A/D/M are the only paths that
+remove an entry. When the panel is closed, close_tab works as before
+(CLI-terminal dismiss still drains orphaned entries).
+
+Surface: new public predicate `auto-agents.diff.ui.is_open()` so the
+close_tab handler can check panel state without poking at internals.
+
+Test: new `tests/diff_cascade_drain_spec.lua` reproduces the
+user-reported scenario end-to-end — enqueue 3 entries, open the
+panel, fire close_tab for two of them, assert all three remain
+pending. Then close the panel and assert close_tab still drains
+(legacy CLI-dismiss path intact). 15 assertions.
+
+### Diff panel labels — repo column + unattributed placeholder (ADR 0011 Patch 1)
 
 The Pending Diffs panel in v0.2.10 rendered `Projects/log.md [?]`
 for diffs of files in the user's bare-worktree layout, with no

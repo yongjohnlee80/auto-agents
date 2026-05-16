@@ -732,6 +732,15 @@ function M.open()
   update_preview()
 end
 
+--- Whether the diff queue panel is currently displayed. Public so other
+--- modules — notably the `close_tab` MCP tool — can treat the panel as
+--- the authoritative source of resolution for pending queue entries
+--- while it's up. See the cascade-drain fix note in `close_tab.lua`.
+--- @return boolean
+function M.is_open()
+  return _mfloat ~= nil and _mfloat:is_open()
+end
+
 --- Test helper: expose the live multi-float instance so headless specs
 --- can introspect pane winid/bufnr and assert window options + keymaps.
 --- Not part of the public contract.
