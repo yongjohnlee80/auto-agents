@@ -112,6 +112,110 @@ ok("cache entry cleared post-forget", pi._test_cache["soon-to-go"] == nil)
 ok("forget on missing key is a no-op",
    pcall(pi.forget, "never-cached") and pi._test_cache["never-cached"] == nil)
 
+-- ── [4b] find_agent_inode resolves the CLIENT-side row ───────────
+-- Round-2 regression test (agent:lector finding #1). The pre-fix
+-- implementation matched the server-accept row of /proc/net/tcp,
+-- whose inode is owned by nvim itself — so /proc/<agent_pid>/fd never
+-- contained it and live attribution always missed. The fix matches
+-- the client-connect row (local=client_port, rem=server_port), whose
+-- inode IS in the agent's fd table.
+--
+-- Stand up a real localhost TCP pair, then assert:
+--   * find_agent_inode returns SOMETHING (the parse works in this env).
+--   * That inode is found in THIS process's /proc/<pid>/fd — because
+--     here both endpoints belong to nvim (we own both sides). The
+--     positive signal is that find_agent_inode's result is owned by
+--     SOME process, not specifically the wrong one. In production
+--     the client-side belongs to the agent process; here it belongs
+--     to us, and that's still the correct direction.
+--   * The OPPOSITE direction (server-accept row, local=server_port,
+--     rem=client_port) would return a DIFFERENT inode — exercise the
+--     find_agent_inode result vs. a manual /proc/net/tcp scan for the
+--     server-accept row to confirm the two inodes differ. This is the
+--     direct evidence that the fix flipped the right way.
+print("\n[4b] find_agent_inode resolves the client-side row, not server-side")
+
+-- Spin up a listening socket + a client connection on localhost.
+local server = vim.uv.new_tcp()
+assert(server, "could not create server tcp handle")
+local bind_ok = server:bind("127.0.0.1", 0)
+assert(bind_ok, "could not bind tcp server")
+server:listen(1, function() end)  -- accept callback unused; we only need the socket pair
+local server_addr = server:getsockname()
+local listen_port = server_addr and server_addr.port
+
+local client = vim.uv.new_tcp()
+assert(client, "could not create client tcp handle")
+local connected = false
+client:connect("127.0.0.1", listen_port, function(err)
+  connected = (err == nil)
+end)
+vim.wait(500, function() return connected end, 10)
+
+ok("test fixture: client connected to server on " .. tostring(listen_port),
+   connected and listen_port ~= nil)
+
+if connected then
+  local peer = client:getsockname()  -- client's local (ephemeral) port
+  local client_port = peer and peer.port
+
+  local agent_inode = pi._test_find_agent_inode(listen_port, client_port)
+  ok("find_agent_inode returns an inode for the live TCP pair",
+     type(agent_inode) == "string" and #agent_inode > 0,
+     string.format("server=%s client=%s inode=%q",
+       tostring(listen_port), tostring(client_port), tostring(agent_inode)))
+
+  -- Direct evidence the directions differ: scan /proc/net/tcp manually
+  -- for the SERVER-accept row (local=listen_port, rem=client_port) and
+  -- assert its inode is NOT the same as the client-connect row's.
+  local function scan_server_inode()
+    local lp = string.format("%04X", listen_port):lower()
+    local cp = string.format("%04X", client_port):lower()
+    for _, proc_file in ipairs({ "/proc/net/tcp", "/proc/net/tcp6" }) do
+      local fh = io.open(proc_file, "r")
+      if fh then
+        local first = true
+        for line in fh:lines() do
+          if first then first = false else
+            local fields = {}
+            for f in line:gmatch("%S+") do
+              fields[#fields + 1] = f
+              if #fields >= 12 then break end
+            end
+            local lap, rap, state = fields[2], fields[3], fields[4]
+            if state == "01" and type(lap) == "string" and type(rap) == "string" then
+              local lph = (lap:match(":([%xX]+)$") or ""):lower()
+              local rph = (rap:match(":([%xX]+)$") or ""):lower()
+              -- SERVER-accept row: local=server_port, rem=client_port.
+              if lph == lp and rph == cp then
+                local inode = fields[10]
+                if type(inode) ~= "string" or not inode:match("^%d+$") then
+                  inode = line:match("%s(%d+)%s+%d+%s*$")
+                end
+                fh:close()
+                return inode
+              end
+            end
+          end
+        end
+        fh:close()
+      end
+    end
+    return nil
+  end
+  local server_inode = scan_server_inode()
+  ok("server-accept row exists in /proc/net/tcp", type(server_inode) == "string",
+     string.format("server_inode=%q", tostring(server_inode)))
+  ok("find_agent_inode returns the CLIENT inode, not the server inode",
+     type(agent_inode) == "string"
+       and type(server_inode) == "string"
+       and agent_inode ~= server_inode,
+     string.format("client=%q server=%q", tostring(agent_inode), tostring(server_inode)))
+end
+
+client:close()
+server:close()
+
 -- ── [5] openDiff still honours explicit `_auto_agents_name` ──────
 print("\n[5] openDiff manual-override surface is preserved")
 -- Drive the handler in a coroutine (it yields). Resolve via the

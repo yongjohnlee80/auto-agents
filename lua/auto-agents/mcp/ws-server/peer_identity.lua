@@ -55,21 +55,35 @@ local function port_hex_lc(port)
   return string.format("%04X", port):lower()
 end
 
---- Walk `/proc/net/tcp` and `/proc/net/tcp6` for a row matching
---- `local_address == listen_port` AND `rem_address == peer_port`. Returns
---- the inode field as a string, or nil if no match.
+--- Walk `/proc/net/tcp` and `/proc/net/tcp6` for the **client-side** row
+--- of an established TCP connection between our server (`server_port`)
+--- and an agent process (whose connect-side ephemeral port is
+--- `client_port`). Returns the client-side socket inode as a string, or
+--- nil if no match.
+---
+--- Why client-side: for a localhost connection, /proc/net/tcp contains
+--- BOTH endpoints — the server-accept row and the client-connect row.
+--- The server-accept row's inode belongs to THIS nvim process; matching
+--- against agent PIDs always misses. The client-connect row's inode
+--- belongs to the agent process — the row we actually need.
+---
+--- Server-accept row : local = SERVER:port  rem = CLIENT:port   (nvim owns this inode)
+--- Client-connect row: local = CLIENT:port  rem = SERVER:port   (agent owns this inode) ← THIS
+---
+--- The pre-round-2 implementation matched the wrong direction. Caught
+--- by agent:lector in the round-2 review of ADR 0011.
 ---
 --- /proc/net/tcp row format (header line first):
 ---   sl  local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode ...
 ---   0:  0100007F:9F4D 0100007F:A82A 01 ...                                              123456
 ---
 --- We only care about ESTABLISHED (state 01).
---- @param listen_port integer
---- @param remote_port integer
---- @return string?
-local function find_inode_for_peer(listen_port, remote_port)
-  local lp = port_hex_lc(listen_port)
-  local rp = port_hex_lc(remote_port)
+--- @param server_port integer  our ws-server listening port
+--- @param client_port integer  agent's connect-side ephemeral port (from getpeername)
+--- @return string?  inode of the AGENT-SIDE socket, or nil
+local function find_agent_inode(server_port, client_port)
+  local sp = port_hex_lc(server_port)
+  local cp = port_hex_lc(client_port)
   for _, proc_file in ipairs({ "/proc/net/tcp", "/proc/net/tcp6" }) do
     local fh = io.open(proc_file, "r")
     if fh then
@@ -89,9 +103,10 @@ local function find_inode_for_peer(listen_port, remote_port)
           local rem_ap   = fields[3]
           local state    = fields[4]
           if state == "01" and type(local_ap) == "string" and type(rem_ap) == "string" then
-            local local_port  = (local_ap:match(":([%xX]+)$") or ""):lower()
+            local local_port_hex  = (local_ap:match(":([%xX]+)$") or ""):lower()
             local remote_port_hex = (rem_ap:match(":([%xX]+)$") or ""):lower()
-            if local_port == lp and remote_port_hex == rp then
+            -- Client-connect row: local = client_port, rem = server_port.
+            if local_port_hex == cp and remote_port_hex == sp then
               local inode = fields[10]  -- after uid (8) and timeout (9), inode is 10th
               -- The /proc/net/tcp column order is documented but the
               -- spacing varies on some kernels. Search the line for a
@@ -152,7 +167,7 @@ function M.resolve(client, listen_port)
   local pp = peer_port(client)
   if not pp or not listen_port then return nil end
 
-  local inode = find_inode_for_peer(listen_port, pp)
+  local inode = find_agent_inode(listen_port, pp)
   if not inode then return nil end
 
   local ok, aa = pcall(require, "auto-agents")
@@ -181,7 +196,7 @@ end
 M._test_cache             = _cache
 M._test_peer_port         = peer_port
 M._test_port_hex_lc       = port_hex_lc
-M._test_find_inode_for_peer = find_inode_for_peer
+M._test_find_agent_inode = find_agent_inode
 M._test_pid_owns_socket   = pid_owns_socket
 
 return M

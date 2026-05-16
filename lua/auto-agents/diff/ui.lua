@@ -243,13 +243,16 @@ local function repo_for(path)
       return base
     end
   end
-  local fs_path_ok, fs_path = pcall(require, "auto-core.fs.path")
-  if fs_path_ok and type(fs_path.project_root) == "function" then
-    local r = fs_path.project_root({ start = probe_dir })
-    if type(r) == "string" and r ~= "" then
-      return vim.fn.fnamemodify(r, ":t")
-    end
-  end
+  -- Non-git: parent-dir basename. The earlier draft consulted
+  -- `fs_path.project_root` (markers: go.mod / package.json / pyproject /
+  -- etc.) before this fallback, but that introduced a non-determinism
+  -- in tests: when the tmpdir happened to be a descendant of a path
+  -- containing any of those markers (review-round-2 found this on
+  -- agent:lector's machine where `/tmp` had `.luarc.json`), `repo_for`
+  -- returned the surprising ancestor name instead of the file's own
+  -- parent. The diff panel label is meant to identify *this file's
+  -- locality*, not "the nearest project marker anywhere up the tree"
+  -- — so skip project_root and go straight to `:h:t`.
   return vim.fn.fnamemodify(path, ":h:t")
 end
 

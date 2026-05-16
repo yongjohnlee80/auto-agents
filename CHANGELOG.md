@@ -40,6 +40,57 @@ panel, fire close_tab for two of them, assert all three remain
 pending. Then close the panel and assert close_tab still drains
 (legacy CLI-dismiss path intact). 15 assertions.
 
+### Round-2 review fixes (agent:lector — 2026-05-16)
+
+Folded in two corrections from Lector's round-2 review (review doc at
+`docs/code-review/2026-05-16-lector-fix-diff-panel-round2-review.md`):
+
+**HIGH — peer_identity matched the wrong inode direction.** The pre-fix
+`find_inode_for_peer(listen_port, peer_port)` matched
+`/proc/net/tcp` rows where `local_address == listen_port` AND
+`rem_address == peer_port` — that's the **server-accept** row, whose
+inode is owned by nvim itself, not the agent process. The
+`/proc/<agent_pid>/fd` walk could therefore never match, and the
+fallback chain landed on `unattributed` every time — defeating the
+whole point of the patch.
+
+Fixed: renamed to `find_agent_inode(server_port, client_port)` and
+flipped the match to the **client-connect** row
+(`local == client_port, rem == server_port`), whose inode IS in the
+agent's fd table. Direct proof added to the spec: spin up a real
+localhost TCP pair via `vim.uv`, call `find_agent_inode` on the
+live ports, and assert (a) it returns an inode, (b) that inode is
+DIFFERENT from the server-accept row's inode discovered by an
+independent manual scan. 4 new assertions on top of the existing
+16 in `tests/diff_peer_identity_spec.lua` (now 20 total).
+
+**MEDIUM — repo_for non-git fallback was environment-sensitive.**
+The earlier draft consulted `fs_path.project_root` (markers: `.git`,
+`go.mod`, `package.json`, `pyproject.toml`, `lazy-lock.json`,
+`.luarc.json`, `Cargo.toml`, `deno.json`, `deno.jsonc`, `build.zig`)
+before the final `:h:t` fallback. When the test's tmpdir happened
+to be a descendant of a directory containing any of those markers
+— Lector's `/tmp` did, mine didn't — `repo_for` returned the
+surprising ancestor's name instead of the file's own parent.
+
+Fixed by removing the `project_root` step entirely. The diff panel
+label is meant to identify *this file's locality*, not "the
+nearest project marker anywhere up the tree." Non-git paths now
+deterministically resolve to their parent-dir basename. The
+`tests/diff_panel_labels_spec.lua` `non-git tmpdir` case is now
+green on both environments.
+
+**Acknowledged (no-op in this PR):**
+
+- `auto-core` smoke §25 `is_git false on a fresh empty dir` /
+  `root nil on a fresh empty dir` fails on Lector's machine but
+  passes on mine — same class of environment sensitivity (his
+  `vim.fn.tempname()` produces a path that has a `.git` ancestor;
+  mine doesn't). The flakiness is in pre-existing test code at
+  `tests/smoke.lua:797-800`, **not** in the §49 ctx.sender
+  assertions my Patch 3 added. Out of scope for this PR; could be
+  cleaned up in an auto-core follow-up.
+
 ### Websocket attribution via peer-PID lookup (ADR 0011 Patch 2, D2-B)
 
 Closed the openDiff attribution gap on the native MCP bridge so

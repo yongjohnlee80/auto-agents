@@ -115,6 +115,14 @@ eq("file in plain-clone/log.md labels as plain-clone",
    "plain-clone")
 
 print("\n[3] repo_for / non-git fallback")
+-- Repo_for's non-git fallback is now `:h:t` (parent dir basename) —
+-- the earlier draft consulted `fs_path.project_root` first, but that
+-- introduced non-determinism: when a tmpdir's ancestors contained any
+-- of the project markers (`.git`, `.luarc.json`, `package.json`, ...)
+-- the resolver returned an ancestor basename instead of the file's
+-- own parent dir. Caught by agent:lector round-2 review (his `/tmp`
+-- happened to contain a marker; mine didn't — the test was leaking
+-- environment state).
 eq("file in non-git tmpdir labels as parent basename",
    ui._test_repo_for(nongit .. "/foo.lua"),
    "nongit")
