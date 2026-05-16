@@ -40,6 +40,51 @@ panel, fire close_tab for two of them, assert all three remain
 pending. Then close the panel and assert close_tab still drains
 (legacy CLI-dismiss path intact). 15 assertions.
 
+### Websocket attribution via peer-PID lookup (ADR 0011 Patch 2, D2-B)
+
+Closed the openDiff attribution gap on the native MCP bridge so
+diffs from any `diff_review = true` slot (jarvis, lector,
+wanda-maximoff, white-vision in the user's setup) render with
+their actual agent name instead of `[unattributed]`. Chose D2-B
+over D2-A per ADR 0011 §Recommendation — D2-A's singleton→factory
+refactor wasn't justified given the spike couldn't conclusively
+prove `CLAUDE_CODE_SSE_PORT` wins over lockfile discovery.
+
+New module `lua/auto-agents/mcp/ws-server/peer_identity.lua` maps
+a TCP connection back to its owning slot via `/proc/net/tcp` +
+`/proc/<pid>/fd` (Linux only; non-Linux returns nil and the panel
+renders `unattributed` — no regression). `tools/init.lua`
+forwards `client` to handlers via a new `ctx` arg (additive).
+`open_diff.lua` consults `peer_identity` when
+`_auto_agents_name` is absent. Cache invalidated on disconnect.
+
+Test: `tests/diff_peer_identity_spec.lua` — 16 assertions
+covering ctx propagation, port_hex_lc round-trip, degraded-path
+nil-handling, cache eviction, and explicit `_auto_agents_name`
+override preservation. The full /proc walk needs a live TCP pair
+from a spawned claude-code slot — verify manually after merge.
+
+### Mailbox sender attribution (ADR 0011 Patch 4)
+
+Companion fix to the websocket path for diffs routed via the
+mailbox `diff_queue` command. Pre-patch, the handler derived
+`agent_name` from `ctx.mailbox` — which auto-core's executor
+populates with the EXECUTOR's mailbox (`nvim`), not the SENDER.
+Every mailbox-routed diff therefore mislabelled as `[nvim]`.
+
+Post-patch, attribution prefers in order: `args.agent_name`
+(explicit override) → `ctx.sender_bare` (auto-core v0.1.11+ — the
+sender's bare mailbox id, e.g. `agent:jarvis`) → legacy
+`ctx.mailbox` (for older auto-core) → bootstrap resolver → "?".
+
+Couples auto-agents to auto-core ≥ v0.1.11 for the headline fix,
+but the legacy fallback chain keeps the handler functional against
+older auto-core versions — it just falls back to the old (wrong)
+behavior in that case.
+
+Test: `tests/diff_mailbox_sender_spec.lua` — 10 assertions across
+the four resolution chain branches.
+
 ### Diff panel labels — repo column + unattributed placeholder (ADR 0011 Patch 1)
 
 The Pending Diffs panel in v0.2.10 rendered `Projects/log.md [?]`

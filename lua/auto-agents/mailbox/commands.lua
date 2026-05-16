@@ -197,13 +197,35 @@ local function handle_diff_queue(args, ctx)
     end
   end
 
-  -- Resolve the agent name. Prefer an explicit arg; otherwise derive
-  -- from the sender (`ctx.mailbox` is the bare id, e.g. "agent:lector").
+  -- Resolve the agent name in priority order:
+  --   1. `args.agent_name` — explicit override (caller knows best).
+  --   2. `ctx.sender_bare` — the sender's bare mailbox id, surfaced
+  --      by auto-core v0.1.11+ on the executor-path ctx (auto-core
+  --      ADR §D3). Strip the `agent:` prefix to get the agent name.
+  --      This is the CORRECT field for "who sent this command" —
+  --      `ctx.mailbox` is the EXECUTOR (always `nvim`).
+  --   3. `ctx.mailbox` — legacy fallback for older auto-core that
+  --      doesn't ship ctx.sender_bare. Will incorrectly resolve to
+  --      `nvim` but the resolver below will reject it later via the
+  --      bootstrap scan.
+  --   4. `resolve_diff_agent_name` — last-resort bootstrap scan;
+  --      only resolves when exactly one bootstrap entry has
+  --      `diff_review = true`.
+  --   5. `"?"` literal — the panel maps this to `[unattributed]`.
   local agent_name = args.agent_name
   if type(agent_name) ~= "string" or agent_name == "" then
-    local from = ctx and ctx.mailbox or nil
-    if type(from) == "string" then
-      agent_name = from:match("^agent:(.+)$") or from
+    local sender_bare = ctx and ctx.sender_bare or nil
+    if type(sender_bare) == "string" and sender_bare ~= "" then
+      agent_name = sender_bare:match("^agent:(.+)$") or sender_bare
+    else
+      -- Legacy fallback (pre-0.1.11 auto-core). ctx.mailbox is the
+      -- executor (`nvim`), so the agent: match will fail and we'll
+      -- end up with the literal "nvim" — which then falls through
+      -- to the bootstrap resolver below.
+      local from = ctx and ctx.mailbox or nil
+      if type(from) == "string" then
+        agent_name = from:match("^agent:(.+)$") or from
+      end
     end
   end
   local aa = require("auto-agents")
