@@ -2,7 +2,6 @@
 *.swo
 *.luac
 .DS_Store
-.luarc.json
 .luarc.local.json
 .tests/
 # Auto-created by the plugin if smoke-tested in this repo's own cwd.
