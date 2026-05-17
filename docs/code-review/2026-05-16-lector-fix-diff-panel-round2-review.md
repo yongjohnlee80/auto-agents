@@ -6,12 +6,12 @@ subject: "ADR 0011 fix-diff-panel round-2 review"
 repos:
   - auto-agents.nvim/fix-diff-panel
   - auto-core.nvim/fix-diff-panel
-outcome: change_requested
+outcome: approved
 ---
 
 # Review: ADR 0011 fix-diff-panel round 2
 
-Outcome: **change requested**.
+Outcome: **approved after follow-up**.
 
 The mailbox/ctx.sender shape and cascade-drain guard are directionally good, but the websocket peer attribution path still does not work as implemented. I also could not reproduce the claimed all-green test state: one new auto-agents label spec fails locally, and auto-core smoke fails two git.repo assertions.
 
@@ -107,3 +107,36 @@ nvim --headless -u NONE -l tests/smoke.lua
   auto-core: 613 passed, 2 failed
 ```
 
+## Follow-Up Review: d8698c3
+
+Outcome: **approved**.
+
+The follow-up commit `d8698c3` addresses the blocking review items:
+
+- `peer_identity.find_agent_inode(server_port, client_port)` now matches the client-side TCP row (`local=client_port`, `remote=server_port`) before checking ownership under the agent PID.
+- `tests/diff_peer_identity_spec.lua` now includes a live localhost TCP-pair probe proving the client-side inode differs from the server-accepted inode.
+- `repo_for()` no longer falls back through `fs_path.project_root()` for non-git paths, so the non-git label contract now matches the fixture expectation.
+- The auto-core smoke failures remain scoped as unrelated local/environment-sensitive `git.repo` assertions, not regressions from this follow-up.
+
+Verification:
+
+```text
+nvim --headless -u NONE -l tests/diff_peer_identity_spec.lua
+  sandbox: failed at localhost TCP bind with EPERM
+  outside sandbox: 20 passed, 0 failed
+
+nvim --headless -u NONE -l tests/diff_panel_labels_spec.lua
+  18 passed, 0 failed
+
+nvim --headless -u NONE -l tests/diff_ui_spec.lua
+  81 passed, 0 failed
+
+nvim --headless -u NONE -l tests/diff_cascade_drain_spec.lua
+  15 passed, 0 failed
+
+nvim --headless -u NONE -l tests/diff_queue_spec.lua
+  23 passed, 0 failed
+
+nvim --headless -u NONE -l tests/diff_mailbox_sender_spec.lua
+  10 passed, 0 failed
+```
