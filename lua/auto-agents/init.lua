@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.12"
+M.version = "0.2.13"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -608,7 +608,7 @@ local function build_agent_env(spec, cwd)
         local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
         if ri_ok then
           local record = ri.build_record(
-            spec.slot, spec.name, rec.tool_root, rec.dir,
+            spec.slot, spec.name, rec.root, rec.dir,
             "auto-agents.spawn", nil)
           local sidecar_path = ri.path_for(spec.slot)
           local wok, werr = ri.write(sidecar_path, record)

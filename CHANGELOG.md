@@ -2,6 +2,129 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.13] — 2026-05-16 — ADR 0023: resumed-agent identity reconciliation (verb + sidecar + adopt command)
+
+Closes the agent-side and host-side tracks of the resumed-agent
+identity drift bug per
+[ADR 0023](https://github.com/yongjohnlee80/auto-agents/blob/main/shared/adrs/0023-resumed-agent-identity-reconciliation.md).
+When an agent is resumed (`/resume` in claude-code / codex), its
+`$AUTO_AGENTS_MAILBOX_DIR` env stays frozen at the original
+spawn's instance suffix while the host has moved on to a new
+live instance. Prior to v0.2.13 the agent would silently send to
+a stale outbox that the live router no longer scans, and the
+host couldn't reconcile the slot without a full restart.
+
+Requires auto-core v0.1.13+ (`mailbox.stale_orphan_detected`
+event + wake `identity_hint` field).
+
+### Added
+
+- **`refresh_agent_id` mailbox verb** (agent-initiated
+  reconciliation). Registered in
+  `lua/auto-agents/mailbox/commands.lua` with a JSON-schema
+  whitelist:
+  ```
+  { agent_pid :: integer, stamped_by :: string }
+  ```
+  Handler resolves the calling slot from the sender's bare id,
+  builds the canonical runtime-identity record via
+  `runtime_identity.build_record`, atomic-writes it to the
+  sidecar path, and responds with `{ ok = true,
+  runtime_identity_path = <path> }` so the agent can re-read
+  identity on the next wake. Designed for the agent path where
+  the wake-payload `identity_hint` reveals drift.
+- **`lua/auto-agents/runtime_identity.lua`** — sidecar identity
+  plumbing. New module:
+  - `path_for(slot)` → `<stdpath('data')>/auto-agents/runtime-identity-<slot>.json`
+    (or `AUTO_AGENTS_RUNTIME_IDENTITY_PATH` env override for
+    tests).
+  - `build_record(slot, agent_name, tool_root, mailbox_dir,
+    stamped_by, agent_pid)` → canonical JSON-serializable
+    record with `slot`, `agent_name`, `agent_pid`,
+    `mailbox_bare`, `mailbox_full`, `mailbox_dir`, `tool_root`,
+    `instance_id`, `stamped_by`, `stamped_at`.
+  - `write(slot, record)` — atomic write via temp + rename.
+  - `read(slot)` — best-effort read, returns nil if absent.
+- **Spawn-time sidecar write.** `lua/auto-agents/init.lua`'s
+  spawn path now calls `runtime_identity.build_record + write`
+  after `env_for_agent`, so every freshly-spawned agent has a
+  sidecar from t=0. Used by the agent to read its own
+  identity rather than trusting the fork-frozen env vars.
+- **`addressbook` augmentation.** The mailbox `addressbook`
+  command now includes a `runtime_identity` field on each agent
+  entry, populated from the slot's sidecar when present. Lets
+  peers read identity metadata without parsing the registry.
+- **`:AutoAgentsAdoptResumedAgent <slot>`** user command
+  (host-initiated reconciliation). When the user knows a slot
+  was just `/resume`d and wants to reconcile without waiting
+  for the agent to detect drift on its own. Behavior:
+  1. Resolve the slot's live PID via
+     `state.slot_terminals[slot]:pid()`.
+  2. Look up the agent name from the bootstrap config.
+  3. Idempotently register the mailbox at the live instance
+     (bare-id `register` auto-resolves under v0.1.8 semantics).
+  4. Build + write the canonical sidecar record.
+  5. Inject a wake message into the agent's live inbox with
+     the new record + sidecar path + a preamble explaining the
+     reconciliation, so the agent re-reads on next wake.
+  Tab-completion lists currently-live slot numbers.
+
+### Tests
+
+Smoke section `[16]` — Phase 2 surface (11 assertions):
+- `refresh_agent_id` verb registered + accepts schema-conformant
+  args + rejects missing fields.
+- Sidecar written by spawn path (idempotent, atomic).
+- Addressbook entry carries `runtime_identity` when sidecar
+  exists.
+- Sidecar `path_for` honors env override.
+
+Smoke section `[17]` — Phase 3 surface (11 assertions including
+the §5.3 acceptance criterion):
+- `:AutoAgentsAdoptResumedAgent` command registered + tab
+  completion lists live slots.
+- Missing-arg + unknown-slot diagnostics surface ERROR notifies.
+- Command runs without error on a live slot; sidecar lands;
+  record carries slot + agent_name + agent_pid; stamped_by
+  reflects the adopt path.
+- Wake message lands in the inbox with `runtime_identity_path`
+  and the reconciliation preamble.
+- **Round-trip §5.3:** post-adopt, an outbox write from the
+  reconciled slot lands in the peer's inbox via the STANDARD
+  router scan path (not direct-write, not silently dropped).
+
+All 22 ADR 0023 assertions across Phase 1+2+3 green. Suite at
+117 passed, 2 failed — both pre-existing `send_slot`
+bracketed-paste fails from comms-1, unrelated to ADR 0023.
+
+### Notes
+
+- **Additive.** No existing mailbox verb, command, state key, or
+  spawn-time behavior changed. Pre-resume flows ride through
+  byte-identically; resumed-agent flows now have a working
+  reconciliation path.
+- **Sidecar is the source of truth** post-resume. Agents that
+  detect `identity_hint` drift (via the v0.1.13 wake field)
+  should send `refresh_agent_id` and re-read their identity
+  from the returned sidecar path, NOT from their fork-frozen
+  env. The convention is documented in the auto-core v0.1.13
+  bootstrap doc §"Resumed-agent identity reconciliation".
+- Renumbered from a pre-rebase v0.2.11 → v0.2.13 because
+  v0.2.11 was claimed upstream by the ADR 0021 Phase 2 logging
+  refactor and v0.2.12 by the diff-panel labels ship. This work
+  rebases on top of v0.2.12 and bumps to the next patch.
+
+### Files touched
+
+- `lua/auto-agents/runtime_identity.lua` (new)
+- `lua/auto-agents/mailbox/commands.lua` (+`refresh_agent_id`
+  handler + spec; +`addressbook.runtime_identity` field)
+- `lua/auto-agents/init.lua` (spawn-time sidecar write;
+  version 0.2.12 → 0.2.13)
+- `plugin/auto-agents.lua` (+`:AutoAgentsAdoptResumedAgent`
+  user command + tab completion)
+- `tests/smoke.lua` (sections `[16]` + `[17]`)
+
 ## [v0.2.12] — 2026-05-16 — diff panel: labels + cascade-drain + websocket/mailbox attribution (ADR 0011)
 
 Renumbered from the pre-rebase v0.2.11 → v0.2.12 because v0.2.11 was
