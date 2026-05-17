@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.13"
+M.version = "0.2.14"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -1106,6 +1106,225 @@ function M.send_slot(slot, text, opts)
     end, delay)
   end
   return true
+end
+
+---Sorted list of slot numbers that have a bootstrap entry (i.e. the
+---live `cfg.agents.bootstrap` set). The right abstraction for any
+---module that needs to enumerate "the configured agents", as opposed
+---to the panel's `MAX_SLOT` upper-bound capacity. Returns an empty
+---table when setup hasn't run yet or there are no entries.
+---@return integer[]
+function M.configured_slots()
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return {} end
+  local out = {}
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if type(e.slot) == "number" then out[#out + 1] = e.slot end
+  end
+  table.sort(out)
+  return out
+end
+
+---Bootstrap entry lookup by slot. Internal helper for the pickers
+---below; returns the raw `cfg.agents.bootstrap` entry or nil.
+---@param slot integer
+---@return table|nil
+local function _bootstrap_entry(slot)
+  local cfg = M.state.config
+  if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
+  for _, e in ipairs(cfg.agents.bootstrap) do
+    if e.slot == slot then return e end
+  end
+  return nil
+end
+
+---Resolve the live mailbox record for a bootstrap entry. Returns nil
+---if the agent isn't registered (not yet spawned, or the registry was
+---wiped). Used by the bootstrap-refresh pickers to read the live
+---authoritative identity env vars via `mailbox.env_for_agent(rec)`.
+---@param entry table  -- bootstrap entry (must have .name)
+---@return AutoCoreMailboxRecord|nil
+local function _live_mailbox_record(entry)
+  if not (entry and type(entry.name) == "string" and entry.name ~= "") then return nil end
+  local ok, mailbox = pcall(function() return require("auto-core").mailbox end)
+  if not ok or not mailbox or not mailbox.get then return nil end
+  local rec_ok, rec = pcall(mailbox.get, "agent:" .. entry.name)
+  if not rec_ok then return nil end
+  return rec
+end
+
+---Compute the live authoritative env surface for a bootstrap entry.
+---Mirrors what `build_agent_env` would produce on a fresh spawn —
+---KB scope env vars from `kb.scope.env_for(entry, kb_root)` plus the
+---mailbox identity vars from `mailbox.env_for_agent(rec)`. Used by
+---the reassert-identity picker as the authoritative source of truth
+---to compare the agent's cached env against.
+---@param entry table
+---@return table<string,string>|nil
+local function _live_env_for(entry)
+  if not entry then return nil end
+  local env = {}
+  local ok_kb, kb_mod = pcall(require, "auto-agents.kb")
+  local ok_scope, scope_mod = pcall(require, "auto-agents.kb.scope")
+  if ok_kb and ok_scope then
+    local kb_root_ok, kb_root = pcall(kb_mod.root)
+    if kb_root_ok and kb_root then
+      for k, v in pairs(scope_mod.env_for(entry, kb_root) or {}) do env[k] = v end
+    end
+  end
+  local rec = _live_mailbox_record(entry)
+  if rec then
+    local ok_mb, mailbox = pcall(function() return require("auto-core").mailbox end)
+    if ok_mb and mailbox and mailbox.env_for_agent then
+      for k, v in pairs(mailbox.env_for_agent(rec) or {}) do env[k] = v end
+    end
+  end
+  return env
+end
+
+---Build the list of picker entries for the bootstrap-refresh keymaps.
+---Only includes slots that (a) have a bootstrap entry and (b) have a
+---live terminal. Empty slots are hidden from the picker (ADR 0024 §2.1).
+---@return { slot: integer, entry: table, label: string }[]
+local function _refresh_picker_items()
+  local items = {}
+  for _, slot in ipairs(M.configured_slots()) do
+    local term = M.state.slot_terminals[slot]
+    if term and term.is_alive and term:is_alive() then
+      local entry = _bootstrap_entry(slot)
+      if entry then
+        local name = entry.name or entry.title or ("agent" .. tostring(slot))
+        local kind = entry.kind or "?"
+        items[#items + 1] = {
+          slot  = slot,
+          entry = entry,
+          label = string.format("%d: %s (%s)", slot, name, kind),
+        }
+      end
+    end
+  end
+  return items
+end
+
+---Deterministic re-ingest prompt body. Owned by auto-agents — the
+---whole point of the keymap is to eliminate per-invocation prompt
+---variation. Resolves the agent's bootstrap doc path from the live
+---registry, not from any hardcoded per-CLI path.
+---@param entry table
+---@return string|nil body, string|nil err
+local function _build_reingest_body(entry)
+  local rec = _live_mailbox_record(entry)
+  if not rec then
+    return nil, "no live mailbox record for agent:" .. tostring(entry.name)
+  end
+  local ok_mb, mailbox = pcall(function() return require("auto-core").mailbox end)
+  if not ok_mb or not mailbox or not mailbox.env_for_agent then
+    return nil, "auto-core.mailbox.env_for_agent unavailable"
+  end
+  local env = mailbox.env_for_agent(rec) or {}
+  local doc = env.AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC
+  if not doc or doc == "" then
+    return nil, "no AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC in live env"
+  end
+  return table.concat({
+    "Re-ingest your bootstrap-mailbox protocol doc.",
+    "",
+    "Path (canonical, from $AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC): " .. doc,
+    "",
+    "Read the doc end-to-end. If its `revision:` frontmatter differs",
+    "from the value in your `.agent-state/seen-revision` file, update",
+    "that file to match and adopt any protocol changes the doc",
+    "describes. Then acknowledge here with the revision you adopted.",
+  }, "\n")
+end
+
+---Deterministic re-assert-identity prompt body. Enumerates the live
+---authoritative identity surface from the host registry — what the
+---agent SHOULD see if it were freshly spawned right now. The agent
+---compares against its own cached env / sidecar; on drift it calls
+---`refresh_agent_id` (ADR 0023 §3.2) and adopts the sidecar.
+---@param entry table
+---@return string|nil body, string|nil err
+local function _build_reassert_body(entry)
+  local env = _live_env_for(entry)
+  if not env or not env.AUTO_AGENTS_MAILBOX_ID then
+    return nil, "no live identity surface for agent:" .. tostring(entry.name)
+  end
+  local keys = {
+    "AUTO_AGENTS_INSTANCE_ID",
+    "AUTO_AGENTS_MAILBOX_ID",
+    "AUTO_AGENTS_MAILBOX_DIR",
+    "AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC",
+    "AUTO_AGENTS_KB_ROOT",
+    "AUTO_AGENTS_KB_READ",
+    "AUTO_AGENTS_KB_WRITE",
+  }
+  local lines = {
+    "Re-assert your runtime identity.",
+    "",
+    "Your live authoritative env (per the host registry — this is what",
+    "a fresh spawn would receive right now):",
+    "",
+  }
+  for _, k in ipairs(keys) do
+    lines[#lines + 1] = "  " .. k .. "=" .. tostring(env[k] or "")
+  end
+  vim.list_extend(lines, {
+    "",
+    "Compare each value to your cached env (and sidecar at",
+    "$AUTO_AGENTS_RUNTIME_IDENTITY_PATH if set). If ANY value differs,",
+    "call the `refresh_agent_id` mailbox command (ADR 0023 §3.2) with",
+    "your current process PID as `actor_pid`. Adopt the returned",
+    "sidecar identity as authoritative, then acknowledge here.",
+  })
+  return table.concat(lines, "\n")
+end
+
+---Bootstrap-refresh picker shared between §2.1 and §2.2. Opens
+---`vim.ui.select` over the live (configured + alive) slots, then
+---feeds the selected slot through `build_body` to produce the prompt
+---and submits it via `M.send_slot(slot, body, { submit = true })`.
+---@param banner string
+---@param build_body fun(entry: table): string|nil, string|nil
+local function _bootstrap_refresh_picker(banner, build_body)
+  local items = _refresh_picker_items()
+  if #items == 0 then
+    vim.notify("auto-agents: no live agent slots to target", vim.log.levels.WARN)
+    return
+  end
+  vim.ui.select(items, {
+    prompt = banner,
+    format_item = function(item) return item.label end,
+  }, function(choice)
+    if not choice then return end
+    local body, err = build_body(choice.entry)
+    if not body then
+      vim.notify("auto-agents: " .. (err or "failed to build prompt"),
+        vim.log.levels.ERROR)
+      return
+    end
+    local ok = M.send_slot(choice.slot, body, { submit = true })
+    if not ok then
+      vim.notify("auto-agents: send_slot failed for slot " .. choice.slot,
+        vim.log.levels.ERROR)
+    end
+  end)
+end
+
+---ADR 0024 §2.1 — re-ingest bootstrap doc into a live agent slot.
+---Slot picker → deterministic prompt → paste-safe submit. Bound to
+---`<leader>am` by the autovim consumer config.
+function M.reingest_bootstrap_picker()
+  _bootstrap_refresh_picker("Re-ingest bootstrap doc into slot:", _build_reingest_body)
+end
+
+---ADR 0024 §2.2 — re-assert runtime identity for a resumed agent.
+---Slot picker → deterministic prompt naming the live env values from
+---`mailbox.env_for_agent(rec)` → paste-safe submit. The agent
+---reconciles via `refresh_agent_id` if its cached env has drifted.
+---Bound to `<leader>ai` by the autovim consumer config.
+function M.reassert_identity_picker()
+  _bootstrap_refresh_picker("Re-assert identity for slot:", _build_reassert_body)
 end
 
 ---Resolve an agent slot from its name. Returns nil if no bootstrap

@@ -81,19 +81,27 @@ function M.agent(mode, slot)
     and ("auto-agents: edit slot " .. tostring(slot or "?"))
     or  "auto-agents: new agent"
 
+  -- ADR 0024 §2.3: validate against the live panel slot_count, not a
+  -- stale hardcoded `1..9`. The slot_count comes from the user's
+  -- configurable panel state (admin DSL: `slot add` / `slot remove`).
+  local slot_max = require("auto-agents").MAX_SLOT or 5
+  local range_str = "1.." .. tostring(slot_max)
+
   local steps = {
     {
       field = "slot",
       prompt = "slot",
       default = (mode == "edit" and slot and tostring(slot)) or nil,
-      placeholder = (mode == "edit" and slot and tostring(slot)) or "1..9",
+      placeholder = (mode == "edit" and slot and tostring(slot)) or range_str,
       parse = function(v)
         local n = tonumber(v)
         if not n then error("slot must be a number") end
         return n
       end,
       validate = function(n)
-        if not n or n < 1 or n > 9 then return false, "slot must be 1..9" end
+        if not n or n < 1 or n > slot_max then
+          return false, "slot must be " .. range_str
+        end
         if mode == "add" and find_entry(n) then
           return false, "slot " .. n .. " is already taken (use 'agent edit " .. n .. "' instead)"
         end
@@ -408,18 +416,23 @@ end
 ---@param slot integer|nil
 ---@return table
 function M.kb_scope(slot)
+  -- ADR 0024 §2.3: range from live panel slot_count, not hardcoded.
+  local slot_max = require("auto-agents").MAX_SLOT or 5
+  local range_str = "1.." .. tostring(slot_max)
   return {
     name = "kb.scope",
     banner = "auto-agents: change kb_scope",
     steps = {
       {
         field = "slot",
-        prompt = "slot (1..9)",
+        prompt = "slot (" .. range_str .. ")",
         default = slot and tostring(slot) or nil,
-        placeholder = slot and tostring(slot) or "1..9",
+        placeholder = slot and tostring(slot) or range_str,
         parse = function(v) return tonumber(v) end,
         validate = function(n)
-          if not n or n < 1 or n > 9 then return false, "slot must be 1..9" end
+          if not n or n < 1 or n > slot_max then
+            return false, "slot must be " .. range_str
+          end
           if not find_entry(n) then return false, "slot " .. n .. " has no bootstrap entry" end
           return true
         end,

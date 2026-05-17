@@ -62,11 +62,20 @@ end
 ---back to a compact format where unfocused slots show only `N` (or
 ---`N<sigil>` when status is non-idle), and the focused slot keeps
 ---its label.
----@param focused_slot integer  -- 0..MAX_SLOT
+---
+---Slot range comes from the live `configured_slots()` set, not a
+---hardcoded `1..MAX_SLOT` capacity bound (ADR 0024 §2.3). Admin
+---(slot 0) is always painted; main slots are exactly the ones with
+---a bootstrap entry. Empty trailing slots do not render at all.
+---@param focused_slot integer  -- 0 or any configured slot number
 ---@param available_width integer|nil  -- panel window width; nil disables the fit check
 ---@return string
 function M.render(focused_slot, available_width)
-  local main_max = require("auto-agents").MAX_SLOT or 5
+  local aa = require("auto-agents")
+  local slots = { 0 }  -- admin is always painted
+  for _, s in ipairs(aa.configured_slots and aa.configured_slots() or {}) do
+    slots[#slots + 1] = s
+  end
 
   -- Plain-text length (excluding %<minwid>@..%X click markup and
   -- %#hl#..%* highlight markup, which contribute zero displayed width).
@@ -74,18 +83,18 @@ function M.render(focused_slot, available_width)
   -- '[N: <sigil>label]' for focused (same length). Single-space separators.
   local labels, sigils = {}, {}
   local full_len = 0
-  for slot = 0, main_max do
+  for _, slot in ipairs(slots) do
     local label, sigil = slot_render(slot)
     labels[slot] = label
     sigils[slot] = sigil
     full_len = full_len + 4 + #tostring(slot) + #label + #sigil
   end
-  full_len = full_len + main_max  -- inter-slot single spaces
+  full_len = full_len + math.max(0, #slots - 1)  -- inter-slot single spaces
 
   local use_compact = available_width and available_width > 0 and full_len > available_width
 
   local parts = {}
-  for slot = 0, main_max do
+  for _, slot in ipairs(slots) do
     local label, sigil = labels[slot], sigils[slot]
     local hl = sigil_hl(sigil)
     local text
