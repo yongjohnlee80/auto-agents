@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.15"
+M.version = "0.2.16"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -1269,9 +1269,10 @@ local function _build_reingest_body(entry)
     "Path (canonical, from $AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC): " .. doc,
     "",
     "Read the doc end-to-end. If its `revision:` frontmatter differs",
-    "from the value in your `.agent-state/seen-revision` file, update",
-    "that file to match and adopt any protocol changes the doc",
-    "describes. Then acknowledge here with the revision you adopted.",
+    "from the value in the persistent tool-root state file next to",
+    "the doc (`$(dirname \"$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC\")/.agent-state/seen-revision`),",
+    "update that file to match and adopt any protocol changes the",
+    "doc describes. Then acknowledge here with the revision you adopted.",
   }, "\n")
 end
 

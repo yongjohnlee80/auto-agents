@@ -2,6 +2,28 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.16] — 2026-05-17 — bootstrap revision audit uses tool-root state
+
+Corrects the auto-agents prompts that tell spawned agents how to
+decide whether `bootstrap-mailbox.md` needs to be re-ingested.
+The seen revision now lives beside the shared per-tool-root
+bootstrap doc instead of only inside the per-instance mailbox dir.
+
+### Changed
+
+- **Spawn-injected KB instructions** now tell agents to check the
+  bootstrap revision on spawn and before mailbox work by comparing
+  `$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC` frontmatter against
+  `$(dirname "$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC")/.agent-state/seen-revision`.
+- **`<leader>am` / `reingest_bootstrap_picker()` prompt** now points
+  at the same persistent tool-root `seen-revision` path.
+- `M.version` bumped from `0.2.15` to `0.2.16`.
+
+### Compatibility
+
+Prompt/instruction-only patch. No public Lua API, mailbox command, or
+state shape changed.
+
 ## [v0.2.13] — 2026-05-16 — ADR 0023: resumed-agent identity reconciliation (verb + sidecar + adopt command)
 
 Closes the agent-side and host-side tracks of the resumed-agent
