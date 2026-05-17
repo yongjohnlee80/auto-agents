@@ -63,17 +63,21 @@ end
 ---`N<sigil>` when status is non-idle), and the focused slot keeps
 ---its label.
 ---
----Slot range comes from the live `configured_slots()` set, not a
----hardcoded `1..MAX_SLOT` capacity bound (ADR 0024 §2.3). Admin
----(slot 0) is always painted; main slots are exactly the ones with
----a bootstrap entry. Empty trailing slots do not render at all.
----@param focused_slot integer  -- 0 or any configured slot number
+---Slot range is `0..MAX_SLOT`, where `MAX_SLOT` mirrors the live
+---`panel.slot_count`. Admin (slot 0) is always painted; main slots
+---1..MAX_SLOT are all painted regardless of bootstrap state — slots
+---without a configured agent render as `shell` (the unconfigured
+---fallback in `resolve_slot_spec`), which is a usable workspace, not
+---an empty placeholder. To shrink the strip, lower `slot_count` via
+---the admin verb `slot remove N`.
+---@param focused_slot integer  -- 0 or any slot in 0..MAX_SLOT
 ---@param available_width integer|nil  -- panel window width; nil disables the fit check
 ---@return string
 function M.render(focused_slot, available_width)
   local aa = require("auto-agents")
+  local max_slot = aa.MAX_SLOT or 5
   local slots = { 0 }  -- admin is always painted
-  for _, s in ipairs(aa.configured_slots and aa.configured_slots() or {}) do
+  for s = 1, max_slot do
     slots[#slots + 1] = s
   end
 

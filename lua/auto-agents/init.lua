@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.14"
+M.version = "0.2.15"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -290,10 +290,19 @@ function M.setup(opts)
   local pin = state_mod.get_width_override()
   if pin then M._panel:resize(pin) end
 
-  -- Watcher: slot_count change → mirror + sync_slot_count side-effect.
+  -- Watcher: slot_count change → mirror + sync_slot_count +
+  -- refresh_keymaps. The keymap re-registration is what makes
+  -- `slot add N` / `slot remove N` reflect in `<leader>aN`
+  -- bindings immediately: setup() owns the initial registration,
+  -- and this watcher keeps it in sync without a nvim restart.
+  -- Without this hook, growing slot_count from 7 to 9 would
+  -- leave `<leader>a8` / `<leader>a9` unbound until the next
+  -- agent rename / move / remove (the only other refresh_keymaps
+  -- callsites).
   state_mod.watch_slot_count(function(payload)
     config.panel.slot_count = payload.new
     M.sync_slot_count()
+    M.refresh_keymaps()
   end)
 
   -- Watcher: width_override change → mirror + drive the panel's
@@ -453,6 +462,14 @@ function M.setup(opts)
                   config.panel.slot_count))
     end
   end
+
+  -- Refresh `<leader>aN` keymap descriptions now that the bootstrap
+  -- is populated. The autovim consumer's lazy.nvim spec registers
+  -- these keys with static descriptions ("Focus slot N"); this call
+  -- overrides them with live `slot_desc(N)` ("Focus slot N — Jarvis",
+  -- "Focus slot N — shell", etc.) so which-key shows agent identity
+  -- immediately, not just after the first rename/move/remove.
+  M.refresh_keymaps()
 
   require("auto-agents.log").info("init",
     string.format("auto-agents v%s initialized; config_source=%s, agents=%d",
@@ -925,17 +942,30 @@ function M.slot_desc(slot, bootstrap)
       return string.format("Focus slot %d — %s", slot, label)
     end
   end
-  return string.format("Focus slot %d — shell (main, empty)", slot)
+  return string.format("Focus slot %d — shell", slot)
 end
 
----Re-register the <leader>a[0..9] keymaps with descriptions reflecting
----current bootstrap state. Called automatically from agent rename /
----add / edit so which-key et al. stay in sync.
+---Re-register the `<leader>a[0..MAX_SLOT]` keymaps with descriptions
+---reflecting current bootstrap state, and `nvim_del_keymap` any
+---`<leader>aN` for N > MAX_SLOT that a previous consumer-spec or
+---earlier slot_count may have left behind. Called from setup() so
+---initial descriptions are accurate, and from agent rename / move /
+---remove so which-key et al. stay in sync with live state.
 function M.refresh_keymaps()
-  for slot = 0, 9 do
+  for slot = 0, M.MAX_SLOT do
     pcall(vim.keymap.set, "n", "<leader>a" .. slot,
       "<cmd>AutoAgentsFocus " .. slot .. "<cr>",
       { desc = M.slot_desc(slot), silent = true })
+  end
+  -- Defensive del-sweep: a consumer's static lazy.nvim spec may
+  -- have registered `<leader>a8` / `<leader>a9` from the pre-flat-
+  -- refactor era when 6..9 were hardcoded float slots. With the
+  -- live `MAX_SLOT` configurable (and typically < 9), those
+  -- bindings now point at AutoAgentsFocus N for N out-of-range,
+  -- which the focus guard rejects. Drop them so they stop showing
+  -- in which-key. Range cap is 9 to cover the legacy hardcode.
+  for slot = M.MAX_SLOT + 1, 9 do
+    pcall(vim.api.nvim_del_keymap, "n", "<leader>a" .. slot)
   end
 end
 
@@ -1147,8 +1177,15 @@ end
 local function _live_mailbox_record(entry)
   if not (entry and type(entry.name) == "string" and entry.name ~= "") then return nil end
   local ok, mailbox = pcall(function() return require("auto-core").mailbox end)
-  if not ok or not mailbox or not mailbox.get then return nil end
-  local rec_ok, rec = pcall(mailbox.get, "agent:" .. entry.name)
+  if not ok or not mailbox or not mailbox.registry or not mailbox.registry.get then
+    return nil
+  end
+  -- Lookup is on `mailbox.registry.get`, NOT `mailbox.get` — the
+  -- top-level mailbox module doesn't expose a `get` shortcut; record
+  -- lookups go through `registry`. ADR 0024 originally called
+  -- `mailbox.get` and every <leader>am / <leader>ai call returned
+  -- "no live mailbox record" regardless of agent. Fixed in v0.2.15.
+  local rec_ok, rec = pcall(mailbox.registry.get, "agent:" .. entry.name)
   if not rec_ok then return nil end
   return rec
 end
