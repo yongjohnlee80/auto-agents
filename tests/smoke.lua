@@ -11,10 +11,16 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
--- Standard worktree layout: sibling auto-core.nvim/main
-local core_root = plugins_root .. "/auto-core.nvim/main"
+-- Sibling auto-core.nvim worktree. Prefer `comms-2` if present
+-- (where ADR 0023's Phase 1 wire-format additions live, and where
+-- the matching bootstrap doc with `schema_version: 5` lives). Fall
+-- back to `main`, then the plain repo, so the suite runs on any
+-- developer machine.
+local core_root = plugins_root .. "/auto-core.nvim/comms-2"
 if vim.fn.isdirectory(core_root) == 0 then
-  -- Fallback to plain repo if no worktree
+  core_root = plugins_root .. "/auto-core.nvim/main"
+end
+if vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
 
@@ -683,6 +689,122 @@ ok("slot_for_name returns nil for empty input", aa.slot_for_name("") == nil)
 ok("slot_for_name returns nil for nil input", aa.slot_for_name(nil) == nil)
 
 aa.state.config.agents.bootstrap = {}
+
+-- ────────── 16. ADR 0023 — runtime identity sidecar + refresh_agent_id ──────────
+print("\n[16] ADR 0023 — runtime_identity sidecar + refresh_agent_id")
+do
+  local ri = require("auto-agents.runtime_identity")
+  local cmds = require("auto-agents.mailbox.commands")
+
+  -- Isolate the sidecar path to a temp file so we don't pollute
+  -- the user's real `~/.local/share/nvim/auto-agents/`.
+  local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-1.json"
+  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
+
+  ok("ADR 0023 §3.1: path_for honors AUTO_AGENTS_RUNTIME_IDENTITY_PATH env",
+    ri.path_for(1) == tmp_sidecar)
+
+  -- Plant a fake slot + register the refresh handler. Clear
+  -- slot_terminals first so leftovers from earlier sections (section
+  -- 5 plants a slot 3 with no pid() method) don't pollute the
+  -- live_slots enumeration.
+  aa.state.slot_terminals = {}
+  aa.state.config.agents = aa.state.config.agents or {}
+  aa.state.config.agents.bootstrap = {
+    { slot = 1, name = "jarvis", kind = "claude" },
+  }
+  local fake_pid = 1234567
+  aa.state.slot_terminals[1] = {
+    get_bufnr = function() return -1 end,
+    is_alive  = function() return true end,
+    resize_to = function() end,
+    pid       = function() return fake_pid end,
+  }
+  cmds.register_all()
+
+  -- Direct handler invocation via the mailbox command dispatch.
+  local core = require("auto-core")
+  local result = core.mailbox.commands.handle_message({
+    kind    = "command",
+    from    = "agent:jarvis:STALE-INSTANCE-ID",
+    to      = "nvim",
+    command = "refresh_agent_id",
+    args    = {
+      claimed_instance_id = "STALE-INSTANCE-ID",
+      claimed_mailbox_id  = "agent:jarvis:STALE-INSTANCE-ID",
+      actor_pid           = fake_pid,
+    },
+  }, { mailbox = "nvim" })
+
+  ok("ADR 0023 §3.2: refresh_agent_id returns ok = true on matched actor_pid",
+    type(result) == "table" and result.ok == true,
+    vim.inspect(result))
+  ok("ADR 0023 §3.2: response.value carries preamble + runtime_identity_path",
+    result.value
+      and type(result.value.preamble) == "string"
+      and result.value.preamble:find("`/resume`") ~= nil
+      and result.value.runtime_identity_path == tmp_sidecar)
+  ok("ADR 0023 §3.2: response.value carries canonical mailbox_id + bare_id + instance_id",
+    result.value
+      and type(result.value.instance_id) == "string"
+      and type(result.value.mailbox_id) == "string"
+      and result.value.bare_id == "agent:jarvis"
+      and result.value.agent_name == "jarvis"
+      and result.value.slot == 1)
+  ok("ADR 0023 §3.2: response.value.stamped_by reflects the refresh path",
+    result.value and result.value.stamped_by == "auto-agents.refresh_agent_id")
+
+  -- Sidecar file actually lands on disk + decodes.
+  local record, rerr = ri.read(tmp_sidecar)
+  ok("ADR 0023 §3.1: sidecar identity file written + readable",
+    type(record) == "table" and rerr == nil, tostring(rerr))
+  ok("ADR 0023 §3.1: sidecar record matches the response value",
+    record
+      and record.slot       == 1
+      and record.agent_name == "jarvis"
+      and record.bare_id    == "agent:jarvis"
+      and record.mailbox_id == result.value.mailbox_id)
+
+  -- Mismatched PID → unknown_actor_pid + live_slots enumeration.
+  local miss = core.mailbox.commands.handle_message({
+    kind = "command", from = "agent:jarvis:STALE", to = "nvim",
+    command = "refresh_agent_id",
+    args    = { actor_pid = 9999999 },
+  }, { mailbox = "nvim" })
+  ok("ADR 0023 §3.2: unknown PID returns ok=false with code='unknown_actor_pid'",
+    type(miss) == "table" and miss.ok == false
+      and miss.code == "unknown_actor_pid")
+  ok("ADR 0023 §3.2: unknown PID response carries live_slots enumeration",
+    type(miss.live_slots) == "table" and #miss.live_slots == 1
+      and miss.live_slots[1].slot == 1
+      and miss.live_slots[1].pid == fake_pid,
+    vim.inspect(miss))
+
+  -- addressbook now carries the runtime_identity field. mailbox_full
+  -- must follow the v0.1.8 instance-id shape `<unix>-<pid>` (e.g.
+  -- `1234567890-12345`) for `mb_path.bare_id` to strip the suffix
+  -- correctly. Non-conforming suffixes pass through unchanged
+  -- (deliberate — see auto-core/mailbox/path.lua).
+  local fake_full = "agent:jarvis:1234567890-12345"
+  local ab = core.mailbox.commands.handle_message({
+    kind = "command", from = "agent:jarvis:1111111111-11111", to = "nvim",
+    command = "addressbook",
+    args    = {},
+  }, { mailbox = "nvim", mailbox_full = fake_full })
+  ok("ADR 0023 §3.4: addressbook value carries runtime_identity field",
+    ab.ok == true and type(ab.value.runtime_identity) == "table",
+    vim.inspect(ab.value and ab.value.runtime_identity))
+  ok("ADR 0023 §3.4: addressbook runtime_identity.expected_mailbox_id mirrors ctx.mailbox_full",
+    ab.value.runtime_identity.expected_mailbox_id == fake_full
+      and ab.value.runtime_identity.expected_bare_id == "agent:jarvis",
+    vim.inspect(ab.value.runtime_identity))
+
+  -- Teardown.
+  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
+  pcall(vim.fn.delete, tmp_sidecar)
+  aa.state.config.agents.bootstrap = {}
+  aa.state.slot_terminals[1] = nil
+end
 
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))

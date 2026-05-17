@@ -166,11 +166,31 @@ local function handle_addressbook(args, ctx)
     return tostring(a.id) < tostring(b.id)
   end)
 
+  -- ADR 0023 §3.4 — runtime_identity field on every addressbook
+  -- response gives the caller a single point at which to compare
+  -- their cached identity (env vars / sidecar) against the host's
+  -- authoritative state. Mismatch → caller invokes refresh_agent_id.
+  local expected_bare_id
+  if type(caller_full) == "string" then
+    local mb_path_ok, mb_path = pcall(require, "auto-core.mailbox.path")
+    if mb_path_ok and type(mb_path.bare_id) == "function" then
+      expected_bare_id = mb_path.bare_id(caller_full)
+    end
+  end
+
   return {
     ok = true,
     value = {
       instance_id = core.mailbox.get_instance_id(),
       caller      = caller_full,
+      runtime_identity = {
+        expected_instance_id = core.mailbox.get_instance_id(),
+        expected_mailbox_id  = caller_full,
+        expected_bare_id     = expected_bare_id,
+        hint                  = "Compare against your env / sidecar identity. "
+                                .. "If different, call `refresh_agent_id` to reconcile. "
+                                .. "See bootstrap-mailbox.md §Resumed-agent identity reconciliation.",
+      },
       count       = #addresses,
       addresses   = addresses,
     },
@@ -344,6 +364,140 @@ local function handle_send_user(args, _ctx)
   return { ok = true, value = { delivered_to = "log.notify" } }
 end
 
+---`refresh_agent_id` handler. ADR 0023 §3.2. Self-service recovery
+---for agents whose `AUTO_AGENTS_*` env vars were frozen at fork and
+---are now stale (typically after `claude --resume` or equivalent).
+---
+---Resolution: match `args.actor_pid` against
+---`state.slot_terminals[<slot>]:pid()` to find which slot owns the
+---calling process. Build the canonical identity record + write the
+---sidecar file + return the preamble. On failure, return
+---`unknown_actor_pid` with the live-slots enumeration so the agent
+---can surface to the user.
+---@param args table
+---@param _ctx table
+---@return table
+local function handle_refresh_agent_id(args, _ctx)
+  args = type(args) == "table" and args or {}
+  local actor_pid = tonumber(args.actor_pid)
+  if not actor_pid then
+    return err("missing_actor_pid",
+      "args.actor_pid (integer) required — pass your process PID so the host can match it to a slot.")
+  end
+
+  local aa_ok, aa = pcall(require, "auto-agents")
+  if not aa_ok then
+    return err("auto_agents_unavailable",
+      "require('auto-agents') failed")
+  end
+
+  -- Walk the slot table for a match. Collect every live slot
+  -- along the way so we can return the diagnostic enumeration
+  -- on miss.
+  local slot_term = aa.state and aa.state.slot_terminals or {}
+  local live_slots = {}
+  local matched_slot
+  local matched_term
+  for slot, term in pairs(slot_term) do
+    local pid = nil
+    if type(term) == "table" and type(term.pid) == "function" then
+      local pok, p = pcall(term.pid, term)
+      if pok and type(p) == "number" then pid = p end
+    end
+    local cfg = aa.state.config or {}
+    local agents = (cfg.agents and cfg.agents.bootstrap) or {}
+    -- Look up agent name from config — falls back to slot for diagnostics.
+    local agent_name
+    for _, a in ipairs(agents) do
+      if tonumber(a.slot) == tonumber(slot) then
+        agent_name = a.name
+        break
+      end
+    end
+    live_slots[#live_slots + 1] = {
+      slot = tonumber(slot), name = agent_name, pid = pid,
+    }
+    if pid and pid == actor_pid then
+      matched_slot = tonumber(slot)
+      matched_term = term
+    end
+  end
+
+  if not matched_slot then
+    -- err() returns the standard shape; we extend it with
+    -- live_slots so the agent can surface the enumeration to the
+    -- user verbatim. ADR 0023 §3.2 specifies this diagnostic shape.
+    local out = err("unknown_actor_pid",
+      ("PID %d isn't owned by any registered slot in this nvim instance. "
+        .. "This nvim may not be the right host for your resumed transcript — "
+        .. "try `:AutoAgentsAdoptResumedAgent` in the host that spawned you, "
+        .. "or restart your slot."):format(actor_pid))
+    out.live_slots = live_slots
+    return out
+  end
+
+  -- Resolve the slot's agent record so we can build the sidecar.
+  local matched_agent_name
+  local agents_cfg = aa.state.config and aa.state.config.agents
+                       and aa.state.config.agents.bootstrap or {}
+  for _, a in ipairs(agents_cfg) do
+    if tonumber(a.slot) == matched_slot then
+      matched_agent_name = a.name
+      break
+    end
+  end
+  if not matched_agent_name then
+    return err("slot_without_agent_name",
+      "Found PID " .. actor_pid .. " on slot " .. matched_slot
+        .. " but the slot has no registered agent name. "
+        .. "This usually means the slot config was edited mid-session — "
+        .. "re-run :AutoAgentsSetup or restart the slot.")
+  end
+
+  -- Build + write the sidecar identity record.
+  local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
+  if not ri_ok then
+    return err("runtime_identity_unavailable",
+      "require('auto-agents.runtime_identity') failed")
+  end
+  local core_ok, core = pcall(require, "auto-core")
+  if not core_ok then
+    return err("auto_core_unavailable",
+      "require('auto-core') failed")
+  end
+  local tool_root = core.mailbox.host_fallback_root()  -- approximation; agent's tool root may differ
+  local record = ri.build_record(
+    matched_slot, matched_agent_name, tool_root, nil,
+    "auto-agents.refresh_agent_id", actor_pid)
+  local path = ri.path_for(matched_slot)
+  local wok, werr = ri.write(path, record)
+  if not wok then
+    return err("sidecar_write_failed",
+      "Failed to atomic-write sidecar identity file at " .. path .. ": " .. tostring(werr))
+  end
+
+  return {
+    ok = true,
+    value = {
+      preamble = "Your context was overwritten by a `/resume` (or equivalent). "
+        .. "Your runtime identity is now the values below — REPLACE every cached "
+        .. "AUTO_AGENTS_* reference in your in-context memory and use the sidecar "
+        .. "file at `runtime_identity_path` for all future mailbox traffic. "
+        .. "See bootstrap-mailbox.md §Resumed-agent identity reconciliation.",
+      runtime_identity_path = path,
+      instance_id           = record.instance_id,
+      mailbox_id            = record.mailbox_id,
+      bare_id               = record.bare_id,
+      mailbox_dir           = record.mailbox_dir,
+      mailbox_bootstrap_doc = record.mailbox_bootstrap_doc,
+      slot                  = record.slot,
+      agent_name            = record.agent_name,
+      stamped_at            = record.stamped_at,
+      stamped_by            = record.stamped_by,
+    },
+  }
+end
+
 ---@type table<string, AutoCoreCommandSpec>
 local SPECS = {
   wake = {
@@ -369,6 +523,16 @@ local SPECS = {
     description = "Surface a short message to the user via vim.notify.",
     schema      = { subject = "string?", body = "string?", level = "string?" },
     handler     = handle_send_user,
+  },
+  refresh_agent_id = {
+    owner       = "auto-agents",
+    description = "ADR 0023 self-service identity reconciliation for resumed agents. Pass your process PID via args.actor_pid; the host resolves which slot owns the PID and returns your canonical runtime identity (writing a sidecar JSON file the agent reads as authoritative). Call this whenever ctx.identity_hint or addressbook's value.runtime_identity disagrees with your env / cached identity. On unknown_actor_pid the response carries `live_slots` for diagnostics.",
+    schema      = {
+      claimed_instance_id = "string?",
+      claimed_mailbox_id  = "string?",
+      actor_pid           = "number",
+    },
+    handler     = handle_refresh_agent_id,
   },
   diff_queue = {
     owner       = "auto-agents",

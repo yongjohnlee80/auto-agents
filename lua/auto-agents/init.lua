@@ -597,6 +597,31 @@ local function build_agent_env(spec, cwd)
       })
       for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
 
+      -- ADR 0023 §3.1 — sidecar identity file. Write a JSON record
+      -- to a stable path the agent reads as authoritative; bootstrap
+      -- doc instructs the agent to prefer this file over the
+      -- fork-frozen `AUTO_AGENTS_*` env. On `claude --resume` the
+      -- env is stale but the sidecar (and `refresh_agent_id`'s
+      -- rewrite of it) carries the live identity. spec.slot is
+      -- nil for unconfigured/preview spawns — skip in that case.
+      if spec.slot ~= nil then
+        local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
+        if ri_ok then
+          local record = ri.build_record(
+            spec.slot, spec.name, rec.tool_root, rec.dir,
+            "auto-agents.spawn", nil)
+          local sidecar_path = ri.path_for(spec.slot)
+          local wok, werr = ri.write(sidecar_path, record)
+          if wok then
+            env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = sidecar_path
+          else
+            require("auto-agents.log").warn("spawn",
+              "sidecar identity write failed at " .. sidecar_path
+                .. ": " .. tostring(werr))
+          end
+        end
+      end
+
       -- v0.3.0: spawn-time permission injection. Append the per-kind
       -- CLI flag(s) that pre-authorize the agent to read/write its
       -- own mailbox dir and the KB read/write paths. No prompt on
