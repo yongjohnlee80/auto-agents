@@ -270,3 +270,191 @@ vim.keymap.set("n", "<F11>", function()
     vim.notify("AutoAgentsDiffQueue: diff UI not available", vim.log.levels.ERROR)
   end
 end, { desc = "Toggle unified diff queue" })
+
+-- :AutoAgentsAdoptResumedAgent <slot>
+--
+-- ADR 0023 §3.3 Track C — host-side adopt-on-resume bridge. The
+-- manual recovery path for the case where a resumed agent hasn't
+-- detected its own identity drift (Track A/B mechanisms) yet, but
+-- the USER realizes they just ran `/resume` and wants to reconcile
+-- the slot's runtime identity with the live host.
+--
+-- Behavior:
+--   1. Resolve `state.slot_terminals[<slot>]:pid()` → agent_pid.
+--   2. Look up the slot's bootstrap agent name from
+--      `state.config.agents.bootstrap`.
+--   3. Register the mailbox at the live instance if not already
+--      present (bare-id registration auto-resolves to the live
+--      instance suffix per v0.1.8 path semantics).
+--   4. Build the canonical sidecar identity record via
+--      `auto-agents.runtime_identity.build_record`.
+--   5. Atomic-write the sidecar to its canonical path
+--      (`<stdpath('data')>/auto-agents/runtime-identity-<slot>.json`).
+--   6. Inject a wake message into the agent's inbox containing the
+--      preamble + sidecar path so the agent re-reads on next wake.
+--
+-- Counterpart to the agent-initiated `refresh_agent_id` mailbox
+-- verb. Both end up writing the same sidecar; only the trigger
+-- differs.
+vim.api.nvim_create_user_command("AutoAgentsAdoptResumedAgent", function(opts)
+  local raw_slot = opts.fargs[1]
+  if not raw_slot or raw_slot == "" then
+    vim.notify("AutoAgentsAdoptResumedAgent: <slot> required (e.g. `:AutoAgentsAdoptResumedAgent 5`)",
+      vim.log.levels.ERROR)
+    return
+  end
+  local slot = tonumber(raw_slot)
+  if not slot then
+    vim.notify("AutoAgentsAdoptResumedAgent: <slot> must be an integer (got '"
+        .. tostring(raw_slot) .. "')", vim.log.levels.ERROR)
+    return
+  end
+
+  local aa_ok, aa = pcall(require, "auto-agents")
+  if not aa_ok then
+    vim.notify("AutoAgentsAdoptResumedAgent: require('auto-agents') failed",
+      vim.log.levels.ERROR)
+    return
+  end
+
+  -- Resolve the slot's terminal + PID. The terminal must expose
+  -- a `pid()` method per the AutoAgentsTerminalInstance contract.
+  local term = aa.state and aa.state.slot_terminals
+                  and aa.state.slot_terminals[slot]
+  if not term then
+    vim.notify(("AutoAgentsAdoptResumedAgent: slot %d has no live terminal"):format(slot),
+      vim.log.levels.ERROR)
+    return
+  end
+  local agent_pid
+  if type(term.pid) == "function" then
+    local pok, p = pcall(term.pid, term)
+    if pok and type(p) == "number" then agent_pid = p end
+  end
+  -- agent_pid can be nil for terminals that haven't started or
+  -- that don't expose .pid(). Sidecar still lands; pid field stays
+  -- nil. Surface as a warning, don't abort.
+  if not agent_pid then
+    vim.notify(("AutoAgentsAdoptResumedAgent: slot %d terminal didn't report a PID; "
+      .. "writing sidecar without it"):format(slot), vim.log.levels.WARN)
+  end
+
+  -- Look up the slot's agent name.
+  local agents_cfg = aa.state.config and aa.state.config.agents
+                       and aa.state.config.agents.bootstrap or {}
+  local agent_name
+  for _, a in ipairs(agents_cfg) do
+    if tonumber(a.slot) == slot then
+      agent_name = a.name
+      break
+    end
+  end
+  if not agent_name then
+    vim.notify(("AutoAgentsAdoptResumedAgent: slot %d has no registered agent name "
+      .. "in state.config.agents.bootstrap"):format(slot), vim.log.levels.ERROR)
+    return
+  end
+
+  -- Register the mailbox at the live instance if not present.
+  -- Idempotent re-registration is safe per ADR 0013 §1.
+  local core_ok, core = pcall(require, "auto-core")
+  if not core_ok then
+    vim.notify("AutoAgentsAdoptResumedAgent: require('auto-core') failed",
+      vim.log.levels.ERROR)
+    return
+  end
+  pcall(function() core.mailbox.register("agent:" .. agent_name) end)
+
+  -- Build + write the sidecar identity record.
+  local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
+  if not ri_ok then
+    vim.notify("AutoAgentsAdoptResumedAgent: require('auto-agents.runtime_identity') failed",
+      vim.log.levels.ERROR)
+    return
+  end
+  local tool_root = core.mailbox.host_fallback_root()
+  local record = ri.build_record(slot, agent_name, tool_root, nil,
+    "auto-agents:AutoAgentsAdoptResumedAgent", agent_pid)
+  local sidecar_path = ri.path_for(slot)
+  local wok, werr = ri.write(sidecar_path, record)
+  if not wok then
+    vim.notify(("AutoAgentsAdoptResumedAgent: sidecar write failed at %s: %s")
+        :format(sidecar_path, tostring(werr)), vim.log.levels.ERROR)
+    return
+  end
+
+  -- Inject a wake message into the agent's inbox so it sees the
+  -- reconciliation preamble on next interaction. We write directly
+  -- to the live inbox (bypassing the agent's outbox) because the
+  -- whole point of adopt is that the agent's outbox may be stale.
+  local mb_path = require("auto-core.mailbox.path")
+  local rec_full = mb_path.full_id("agent:" .. agent_name)
+  local mailbox_dir = tool_root .. "/" .. rec_full
+  local inbox_dir = mailbox_dir .. "/inbox"
+  vim.fn.mkdir(inbox_dir, "p")
+
+  local mid = tostring(os.time()) .. "-adopt-resumed-" .. tostring(slot)
+  local wake_msg = {
+    id      = mid,
+    kind    = "message",
+    from    = "nvim",
+    to      = "agent:" .. agent_name,
+    subject = "[adopt-resumed-agent] runtime identity reconciled by host",
+    body    = "Your runtime identity was reconciled by the host via "
+      .. ":AutoAgentsAdoptResumedAgent. REPLACE every cached AUTO_AGENTS_* "
+      .. "reference in your in-context memory with the values in the "
+      .. "sidecar file at `" .. sidecar_path .. "`. See bootstrap-mailbox.md "
+      .. "§Resumed-agent identity reconciliation for the protocol.",
+    runtime_identity = record,
+    runtime_identity_path = sidecar_path,
+  }
+  local tmp = inbox_dir .. "/" .. mid .. ".tmp"
+  local final = inbox_dir .. "/" .. mid .. ".json"
+  local f, ferr = io.open(tmp, "w")
+  if not f then
+    vim.notify(("AutoAgentsAdoptResumedAgent: wake-message open failed: %s")
+        :format(tostring(ferr)), vim.log.levels.WARN)
+  else
+    f:write(vim.fn.json_encode(wake_msg))
+    f:close()
+    local rok = os.rename(tmp, final)
+    if not rok then
+      pcall(os.remove, tmp)
+      vim.notify("AutoAgentsAdoptResumedAgent: wake-message rename failed",
+        vim.log.levels.WARN)
+    end
+  end
+
+  -- Surface success via the family logger so the entry lands in
+  -- the auto-core ring alongside the audit trail.
+  local log_ok, log = pcall(require, "auto-agents.log")
+  if log_ok then
+    log.notify(
+      ("slot %d (%s) adopted — runtime identity reconciled. Sidecar: %s")
+        :format(slot, agent_name, sidecar_path),
+      { component = "adopt-resumed", level = "info",
+        title = "auto-agents" })
+  else
+    vim.notify(("AutoAgentsAdoptResumedAgent: slot %d (%s) adopted; sidecar at %s")
+        :format(slot, agent_name, sidecar_path), vim.log.levels.INFO)
+  end
+end, {
+  nargs = "?",
+  complete = function()
+    -- Suggest live slot numbers from the current state.
+    local aa_ok, aa = pcall(require, "auto-agents")
+    if not aa_ok then return {} end
+    local out = {}
+    local slot_term = aa.state and aa.state.slot_terminals or {}
+    for slot, _ in pairs(slot_term) do
+      out[#out + 1] = tostring(slot)
+    end
+    table.sort(out, function(a, b) return tonumber(a) < tonumber(b) end)
+    return out
+  end,
+  desc = "ADR 0023 §3.3 — host-side adopt-on-resume for a slot whose agent's "
+    .. "AUTO_AGENTS_* env is fork-frozen (typically post-/resume). Writes the "
+    .. "canonical sidecar identity file and injects a wake message into the "
+    .. "agent's inbox so it re-reads on next wake. Use when the agent itself "
+    .. "hasn't detected the drift yet.",
+})

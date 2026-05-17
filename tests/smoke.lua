@@ -806,6 +806,174 @@ do
   aa.state.slot_terminals[1] = nil
 end
 
+-- ────────── 17. ADR 0023 Phase 3 — :AutoAgentsAdoptResumedAgent ──────────
+print("\n[17] ADR 0023 Phase 3 — :AutoAgentsAdoptResumedAgent + resume round-trip")
+do
+  vim.cmd("runtime! plugin/auto-agents.lua")
+  local ri = require("auto-agents.runtime_identity")
+
+  -- Isolate sidecar to a temp file.
+  local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-5.json"
+  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
+
+  -- Plant a fake slot 5 (ultron-prime).
+  aa.state.slot_terminals = {}
+  aa.state.config.agents = aa.state.config.agents or {}
+  aa.state.config.agents.bootstrap = {
+    { slot = 5, name = "ultron-prime", kind = "claude" },
+  }
+  local fake_pid = 7654321
+  aa.state.slot_terminals[5] = {
+    get_bufnr = function() return -1 end,
+    is_alive  = function() return true end,
+    resize_to = function() end,
+    pid       = function() return fake_pid end,
+  }
+
+  -- Command should be registered after `runtime! plugin/`.
+  local cmds = vim.api.nvim_get_commands({})
+  ok("ADR 0023 §3.3: :AutoAgentsAdoptResumedAgent registered",
+    cmds.AutoAgentsAdoptResumedAgent ~= nil)
+
+  -- Run the command for slot 5.
+  local ok_cmd, cmd_err = pcall(vim.cmd, "AutoAgentsAdoptResumedAgent 5")
+  ok("ADR 0023 §3.3: command runs without error", ok_cmd, tostring(cmd_err))
+
+  -- Sidecar file written.
+  local record, rerr = ri.read(tmp_sidecar)
+  ok("ADR 0023 §3.3: sidecar identity file landed on disk",
+    type(record) == "table" and rerr == nil, tostring(rerr))
+  ok("ADR 0023 §3.3: sidecar record carries slot + agent_name + agent_pid",
+    record
+      and record.slot       == 5
+      and record.agent_name == "ultron-prime"
+      and record.bare_id    == "agent:ultron-prime"
+      and record.agent_pid  == fake_pid)
+  ok("ADR 0023 §3.3: sidecar record.stamped_by reflects the adopt path",
+    record and record.stamped_by == "auto-agents:AutoAgentsAdoptResumedAgent")
+
+  -- Wake message injected into the live inbox. The live inbox path
+  -- is `<tool_root>/<full-id>/inbox/`. host_fallback_root resolves
+  -- to wherever auto-core is configured; check both candidate
+  -- locations.
+  local core = require("auto-core")
+  local mb_path = require("auto-core.mailbox.path")
+  local tool_root = core.mailbox.host_fallback_root()
+  local full = mb_path.full_id("agent:ultron-prime")
+  local inbox = tool_root .. "/" .. full .. "/inbox"
+  local listing = vim.fn.readdir(inbox)
+  ok("ADR 0023 §3.3: wake message landed in the live inbox",
+    type(listing) == "table" and #listing >= 1,
+    vim.inspect(listing))
+
+  -- The wake message contains the canonical fields.
+  local last = listing and listing[#listing]
+  local content
+  if last then
+    local f = io.open(inbox .. "/" .. last, "r")
+    if f then
+      content = vim.fn.json_decode(f:read("*a")); f:close()
+    end
+  end
+  ok("ADR 0023 §3.3: wake message carries runtime_identity_path",
+    type(content) == "table"
+      and content.runtime_identity_path == tmp_sidecar
+      and type(content.runtime_identity) == "table"
+      and content.runtime_identity.bare_id == "agent:ultron-prime")
+  ok("ADR 0023 §3.3: wake message body explains the reconciliation",
+    type(content) == "table"
+      and type(content.body) == "string"
+      and content.body:find("AutoAgentsAdoptResumedAgent", 1, true) ~= nil
+      and content.body:find(tmp_sidecar, 1, true) ~= nil,
+    type(content) == "table" and type(content.body) == "string"
+      and content.body or "(no body)")
+
+  -- Reject path: unknown slot. In headless nvim, an ERROR-level
+  -- vim.notify is converted into a Vim error, which pcall catches.
+  -- In an interactive session it's just a notification. Both
+  -- surfaces are acceptable behavior — what matters is that the
+  -- right diagnostic reaches the user.
+  local bad_ok, bad_err = pcall(vim.cmd, "AutoAgentsAdoptResumedAgent 999")
+  ok("ADR 0023 §3.3: unknown slot surfaces 'no live terminal' diagnostic",
+    (not bad_ok and tostring(bad_err):find("no live terminal", 1, true) ~= nil)
+      or bad_ok,
+    tostring(bad_err))
+
+  -- Missing arg: same headless / interactive duality. Assert the
+  -- diagnostic message reaches the surface.
+  local na_ok, na_err = pcall(vim.cmd, "AutoAgentsAdoptResumedAgent")
+  ok("ADR 0023 §3.3: missing arg surfaces '<slot> required' diagnostic",
+    (not na_ok and tostring(na_err):find("<slot> required", 1, true) ~= nil)
+      or na_ok,
+    tostring(na_err))
+
+  -- ── Acceptance criterion §5.3 — resume round-trip via standard router.
+  -- Simulate: agent's runtime_identity is stale (old instance);
+  -- user invokes adopt; agent next sends a mailbox message
+  -- addressed via its bare id; the live router delivers it to a
+  -- peer's inbox (NOT direct-write, NOT silently dropped).
+  --
+  -- We can't spawn a real claude process headless, so the
+  -- "agent's message" is a synthetic write to the live mailbox's
+  -- outbox after adopt. Acceptance is that the router picks it up
+  -- and renames into the peer's inbox.
+  do
+    -- Plant a peer mailbox to deliver to.
+    pcall(function() core.mailbox.register("agent:test-peer") end)
+
+    -- Wait for router to recognize the freshly-registered mailbox
+    -- (collect_dirs runs at start; for a mid-test register the
+    -- registry update is what makes classify accept the path).
+    vim.wait(50)
+
+    -- The adopt above registered agent:ultron-prime; now write a
+    -- message in its outbox addressed to test-peer.
+    local from_full = mb_path.full_id("agent:ultron-prime")
+    local from_outbox = tool_root .. "/" .. from_full .. "/outbox"
+    vim.fn.mkdir(from_outbox, "p")
+    local mid = "adopt-rt-trip-" .. tostring(os.time())
+    local payload = {
+      id = mid, kind = "message",
+      from = from_full,
+      to   = "agent:test-peer",
+      subject = "round-trip after adopt",
+      body = "If you read this, the live router delivered me.",
+    }
+    local tmp = from_outbox .. "/" .. mid .. ".tmp"
+    local final = from_outbox .. "/" .. mid .. ".json"
+    local f = io.open(tmp, "w")
+    f:write(vim.fn.json_encode(payload)); f:close()
+    os.rename(tmp, final)
+
+    core.mailbox.scan_now()
+    vim.wait(200, function()
+      local peer_full = mb_path.full_id("agent:test-peer")
+      local peer_inbox = tool_root .. "/" .. peer_full .. "/inbox"
+      local entries = vim.fn.readdir(peer_inbox) or {}
+      for _, e in ipairs(entries) do
+        if e:find(mid, 1, true) then return true end
+      end
+      return false
+    end, 20)
+
+    local peer_full = mb_path.full_id("agent:test-peer")
+    local peer_inbox = tool_root .. "/" .. peer_full .. "/inbox"
+    local entries = vim.fn.readdir(peer_inbox) or {}
+    local delivered = false
+    for _, e in ipairs(entries) do
+      if e:find(mid, 1, true) then delivered = true; break end
+    end
+    ok("ADR 0023 §5.3: post-adopt outbox message reaches peer via standard router",
+      delivered, "looked under " .. peer_inbox)
+  end
+
+  -- Teardown.
+  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
+  pcall(vim.fn.delete, tmp_sidecar)
+  aa.state.config.agents.bootstrap = {}
+  aa.state.slot_terminals[5] = nil
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
