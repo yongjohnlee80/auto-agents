@@ -978,6 +978,119 @@ do
   aa.state.slot_terminals[5] = nil
 end
 
+-- ─────────── 18. agent_add wizard — KB-type conflict ACK (v0.2.22+) ──────────
+-- The `agent add` wizard's `_kb_type` field LOOKS like a per-agent
+-- pick but its side effect is project-scoped (cfg.kb.type gets
+-- overwritten). v0.2.22 adds a conflict-detection ACK step that
+-- fires when the new pick differs from the existing project type
+-- AND the new agent's kb_scope = "shared". Demands the user type
+-- "YES_CHANGE_PROJECT_TYPE" verbatim. v0.2.23 also defaults the
+-- `_kb_type` prompt to the current project type when set, so a
+-- no-op <CR> keeps things unchanged.
+print("\n[18] agent_add wizard — KB-type conflict ACK (v0.2.22+)")
+do
+  local specs = require("auto-agents.panel.wizard_specs")
+
+  -- Stash + restore the project config so we don't pollute later
+  -- sections of the smoke. The wizard reads cfg.kb.type directly.
+  local saved_kb = aa.state.config.kb
+  aa.state.config.kb = { type = "coding" }
+
+  local spec = specs.agent("add", 9)
+  local conflict_step
+  local kb_type_step
+  for _, s in ipairs(spec.steps) do
+    if s.field == "_kb_type_conflict_ack" then conflict_step = s end
+    if s.field == "_kb_type" then kb_type_step = s end
+  end
+
+  ok("agent_add spec includes _kb_type step", kb_type_step ~= nil)
+  ok("agent_add spec includes _kb_type_conflict_ack step", conflict_step ~= nil)
+
+  -- Default injection: when cfg.kb.type is set, the _kb_type
+  -- default should match it (so a no-op <CR> keeps the project
+  -- type unchanged).
+  if kb_type_step and type(kb_type_step.default) == "function" then
+    local d = kb_type_step.default({})
+    ok("_kb_type default returns current cfg.kb.type when set",
+       d == "coding", "got " .. tostring(d))
+  end
+
+  -- Default injection: when cfg.kb is unset, fall back to "coding".
+  aa.state.config.kb = nil
+  if kb_type_step and type(kb_type_step.default) == "function" then
+    local d = kb_type_step.default({})
+    ok("_kb_type default falls back to 'coding' when cfg.kb absent",
+       d == "coding", "got " .. tostring(d))
+  end
+  aa.state.config.kb = { type = "coding" }  -- restore for ACK tests
+
+  if conflict_step then
+    -- Skip rules — five cases:
+
+    -- (1) Pick matches current type → skip.
+    ok("ACK skipped when _kb_type matches current type",
+       conflict_step.skip({ _kb_type = "coding", kb_scope = "shared" }) == true)
+
+    -- (2) Pick is "none" (user opted out of KB init) → skip.
+    ok("ACK skipped when _kb_type is 'none'",
+       conflict_step.skip({ _kb_type = "none", kb_scope = "shared" }) == true)
+
+    -- (3) Diff type but kb_scope = private → skip (per-agent dir,
+    -- no immediate shared-tree damage).
+    ok("ACK skipped when kb_scope is 'private'",
+       conflict_step.skip({ _kb_type = "wiki", kb_scope = "private" }) == true)
+
+    -- (4) Diff type but kb_scope = isolated → skip.
+    ok("ACK skipped when kb_scope is 'isolated'",
+       conflict_step.skip({ _kb_type = "wiki", kb_scope = "isolated" }) == true)
+
+    -- (5) Diff type AND kb_scope = shared → DO NOT skip (ACK fires).
+    ok("ACK FIRES when diff type AND kb_scope = shared",
+       conflict_step.skip({ _kb_type = "wiki", kb_scope = "shared" }) == false)
+
+    -- No current type (first-ever add) → skip even on shared scope.
+    aa.state.config.kb = nil
+    ok("ACK skipped when no current cfg.kb.type",
+       conflict_step.skip({ _kb_type = "wiki", kb_scope = "shared" }) == true)
+    aa.state.config.kb = { type = "coding" }
+
+    -- Validate rules.
+    local v_ok = conflict_step.validate("YES_CHANGE_PROJECT_TYPE")
+    ok("ACK validate accepts 'YES_CHANGE_PROJECT_TYPE'", v_ok == true)
+
+    local v_no_yes = conflict_step.validate("yes")
+    ok("ACK validate REJECTS lowercase 'yes'", v_no_yes == false)
+
+    local v_y = conflict_step.validate("y")
+    ok("ACK validate REJECTS single 'y'", v_y == false)
+
+    local v_partial = conflict_step.validate("YES")
+    ok("ACK validate REJECTS partial 'YES'", v_partial == false)
+
+    local v_empty = conflict_step.validate("")
+    ok("ACK validate REJECTS empty input", v_empty == false)
+
+    -- pre_emit returns multi-line banner that names both types.
+    if type(conflict_step.pre_emit) == "function" then
+      local lines = conflict_step.pre_emit({ _kb_type = "wiki", kb_scope = "shared" })
+      ok("ACK pre_emit returns a table", type(lines) == "table")
+      ok("ACK pre_emit produces multiple lines", #lines >= 5)
+      local joined = table.concat(lines, "\n")
+      ok("ACK banner names CURRENT type (uppercase)",
+         joined:find("CODING", 1, true) ~= nil)
+      ok("ACK banner names PICKED type (uppercase)",
+         joined:find("WIKI", 1, true) ~= nil)
+      ok("ACK banner shouts WARNING",
+         joined:find("WARNING", 1, true) ~= nil)
+      ok("ACK banner mentions the required confirmation phrase",
+         joined:find("YES_CHANGE_PROJECT_TYPE", 1, true) ~= nil)
+    end
+  end
+
+  aa.state.config.kb = saved_kb
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

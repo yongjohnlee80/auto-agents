@@ -2,6 +2,54 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.23] — 2026-05-18 — `agent add` KB-type default + smoke section [18]
+
+Two follow-ons to v0.2.22's KB-type conflict ACK.
+
+### Added
+
+- **Default-value injection** on the wizard's `_kb_type` step. When
+  `cfg.kb.type` is already set, the step's default returns the
+  current value — so a no-op `<CR>` keeps the project type
+  unchanged. Falls back to `"coding"` only on first-ever adds. The
+  combined effect with v0.2.22's ACK is that the happy path
+  (re-adding agents into an existing project) becomes one `<CR>`,
+  and the conflict path (genuinely picking a different type) still
+  fires the SHOUTY ACK.
+- **Smoke section [18]** in `tests/smoke.lua` covering both the
+  v0.2.22 ACK and the v0.2.23 default injection — 20 assertions:
+  - Spec includes `_kb_type` and `_kb_type_conflict_ack` steps
+  - `_kb_type` default returns current `cfg.kb.type` when set
+  - `_kb_type` default falls back to `"coding"` when cfg.kb absent
+  - ACK skip rules — match (skip), `"none"` (skip), `private` /
+    `isolated` scope (skip), no-current-type (skip), and the
+    conflict case (DO NOT skip)
+  - ACK validate accepts only the exact `YES_CHANGE_PROJECT_TYPE`
+    phrase — `yes`, `y`, partial `YES`, and empty all rejected
+  - ACK `pre_emit` banner names current type, picked type, the
+    word WARNING, and the exact confirmation phrase
+
+### Changed
+
+- `panel/wizard_specs.lua` — `_kb_type` `default` now `function()`
+  instead of static `"coding"`. Reads from `cfg.kb.type` at wizard
+  start.
+- `panel/wizard_specs.lua` — ACK `pre_emit` banner now explicitly
+  shows the required confirmation phrase
+  (`TO CONFIRM, TYPE EXACTLY: YES_CHANGE_PROJECT_TYPE`) above the
+  prompt line. Avoids the "wait, what was the phrase?" failure
+  mode where users see the WARNING block but miss the prompt below
+  it.
+
+### Smoke
+
+140 passed / 0 failed across 2 consecutive isolated runs. The
+section [9] intermittent (tracked in the KB) continues to surface
+under chained IO.
+
+Additive — no removals, no signature changes. Autovim caret
+`^0.2.0` covers v0.2.23.
+
 ## [v0.2.22] — 2026-05-18 — `agent add` warns on KB-type conflict (shared scope only)
 
 Defensive prompt during the admin panel's `agent add` wizard: if the

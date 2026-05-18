@@ -263,7 +263,20 @@ function M.agent(mode, slot)
       field = "_kb_type",
       prompt = "KB type",
       choices = choices,
-      default = "coding",  -- nvim users skew coding, so it's the sensible default
+      -- Default to the project's current `[kb].type` when already set
+      -- so a no-op `<CR>` keeps the project type unchanged. Falls
+      -- back to "coding" for first-ever adds (nvim users skew
+      -- coding). When the user explicitly picks a different value
+      -- AND their kb_scope is "shared", the follow-on
+      -- `_kb_type_conflict_ack` step fires the SHOUTY warning.
+      default = function()
+        local cfg = require("auto-agents").state.config
+        local existing = cfg and cfg.kb and cfg.kb.type
+        if type(existing) == "string" and existing ~= "" then
+          return existing
+        end
+        return "coding"
+      end,
       validate = function(v)
         for _, c in ipairs(choices) do if c == v then return true end end
         return false, "must be one of " .. table.concat(choices, "|")
@@ -351,6 +364,8 @@ function M.agent(mode, slot)
           "    - kb_scope = isolated / private  (agent gets its own subdir)",
           "    - kb_type = general              (no opinionated layout)",
           "    - kb_type = custom + own seed    (hand-crafted layout)",
+          "",
+          "  TO CONFIRM, TYPE EXACTLY: YES_CHANGE_PROJECT_TYPE",
           "",
         }
       end,
