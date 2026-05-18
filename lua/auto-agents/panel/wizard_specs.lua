@@ -289,6 +289,77 @@ function M.agent(mode, slot)
         return true
       end,
     })
+
+    -- Project-KB-type conflict ACK. The wizard's `_kb_type` prompt
+    -- LOOKS like a per-agent choice but the side effect is project-
+    -- scoped: `cfg.kb.type` gets overwritten with the picked value.
+    -- For `kb_scope = "shared"` agents this is real damage — both
+    -- types' layout dirs end up coexisting under the same `shared/`
+    -- tree, AGENTS.md stays describing the old contract, and the
+    -- two paradigms' mutability models collide (especially nasty
+    -- when mixing coding/ops "living-doc" style with wiki's
+    -- finalized-cards style).
+    --
+    -- For `private` / `isolated` scope, the new agent writes to its
+    -- own `agents/<name>/` subdir — no immediate damage. The TOML's
+    -- `[kb].type` still changes (which affects FUTURE shared-scope
+    -- agents) but the ACK only fires for shared scope to avoid
+    -- prompt fatigue on the common scope-isolation case.
+    --
+    -- The ACK demands `YES_CHANGE_PROJECT_TYPE` (uppercase, full
+    -- phrase) so muscle-memory `y` / `yes` / <CR> doesn't bypass.
+    table.insert(steps, {
+      field = "_kb_type_conflict_ack",
+      skip = function(values)
+        local cfg = require("auto-agents").state.config
+        local current = cfg and cfg.kb and cfg.kb.type
+        if not current or current == "" then return true end           -- no existing type
+        if values._kb_type == "none" then return true end              -- user opted out
+        if values._kb_type == current then return true end             -- no change
+        if (values.kb_scope or "shared") ~= "shared" then              -- per-agent isolation: no immediate conflict
+          return true
+        end
+        return false
+      end,
+      pre_emit = function(values)
+        local cfg = require("auto-agents").state.config
+        local current = (cfg and cfg.kb and cfg.kb.type) or "?"
+        local picked = values._kb_type or "?"
+        local cur_up = string.upper(tostring(current))
+        local pick_up = string.upper(tostring(picked))
+        return {
+          "",
+          "  ════════════════════════════════════════════════════════════",
+          "  ⚠  WARNING — PROJECT KB TYPE CONFLICT",
+          "  ════════════════════════════════════════════════════════════",
+          "",
+          "  CURRENT PROJECT KB TYPE: " .. cur_up,
+          "  YOU PICKED:              " .. pick_up,
+          "  KB_SCOPE FOR THIS AGENT: SHARED (writes into shared/)",
+          "",
+          "  PROCEEDING WILL:",
+          "    - OVERWRITE [kb].type IN THE TOML (" .. cur_up .. " → " .. pick_up .. ")",
+          "    - LEAVE AGENTS.md DESCRIBING THE OLD CONTRACT (" .. cur_up .. ")",
+          "    - CREATE BOTH TYPES' LAYOUT DIRS SIDE BY SIDE UNDER shared/",
+          "    - MIX MUTABILITY MODELS IN shared/synthesis/",
+          "",
+          "  THIS IS USUALLY A MISCONFIG. CODING/OPS USE LIVING DOCS",
+          "  THAT ITERATE; WIKI USES FINALIZED ZETTEL CARDS. MIXING",
+          "  THEM IN ONE SHARED TREE CONFUSES BOTH AGENT STYLES.",
+          "",
+          "  IF YOU REALLY WANT A HYBRID, CONSIDER:",
+          "    - kb_scope = isolated / private  (agent gets its own subdir)",
+          "    - kb_type = general              (no opinionated layout)",
+          "    - kb_type = custom + own seed    (hand-crafted layout)",
+          "",
+        }
+      end,
+      prompt = "Type exactly 'YES_CHANGE_PROJECT_TYPE' (uppercase) to confirm, or <C-c> to cancel",
+      validate = function(v)
+        if v == "YES_CHANGE_PROJECT_TYPE" then return true end
+        return false, "must type exactly 'YES_CHANGE_PROJECT_TYPE' (uppercase) — or <C-c> to cancel"
+      end,
+    })
   end
 
   return {

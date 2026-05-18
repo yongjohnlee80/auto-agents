@@ -23,13 +23,14 @@ local M = {}
 
 ---@class AutoAgentsWizardStep
 ---@field field string                                 -- key to set in values
----@field prompt string                                -- shown above the input
+---@field prompt string|(fun(values: table): string)   -- shown above the input; function form receives accumulated values
 ---@field default string|nil                           -- prepopulated default
 ---@field choices string[]|nil                         -- shown after prompt as " (a|b|c)"
 ---@field placeholder string|nil                       -- shown as "[<placeholder>]"
 ---@field validate (fun(value: string, values: table): boolean, string?)|nil
 ---@field parse (fun(value: string): any)|nil          -- transforms input → final value
 ---@field skip (fun(values: table): boolean)|nil       -- skip step if true
+---@field pre_emit (fun(values: table): string[])|nil  -- optional banner lines emitted before the prompt (multi-line context for ACK/confirmation steps)
 
 ---@class AutoAgentsWizardSpec
 ---@field name string                                  -- for log/error context
@@ -74,13 +75,31 @@ local function compose_question(step, values)
     hint = " (" .. table.concat(step.choices, "|") .. ")"
   end
   local default_hint = placeholder and ("  [" .. placeholder .. "]") or ""
-  return step.prompt .. hint .. default_hint .. ":"
+  -- `step.prompt` may be a string OR a function(values) -> string. The
+  -- function form lets ACK / confirmation steps embed already-collected
+  -- values (e.g. the picked KB type) directly into the single-line
+  -- prompt. Multi-line context belongs in `step.pre_emit`.
+  local prompt_text = step.prompt
+  if type(prompt_text) == "function" then prompt_text = prompt_text(values) end
+  return prompt_text .. hint .. default_hint .. ":"
 end
 
 local function render_step()
   local emit = _state.emit
   local step = _state.spec.steps[_state.index]
   if not step then return end
+  -- Optional pre-emit banner: a step can return string[] from
+  -- `pre_emit(values)` that gets rendered before the single-line
+  -- question. Used by ACK / confirmation steps that need to display
+  -- multi-line context (warnings, summaries) the user has to read
+  -- before answering. Pre-emitted lines are inserted verbatim;
+  -- callers handle their own indentation.
+  if type(step.pre_emit) == "function" then
+    local ok, lines = pcall(step.pre_emit, _state.values)
+    if ok and type(lines) == "table" and #lines > 0 then
+      emit(lines)
+    end
+  end
   emit({ "  " .. compose_question(step, _state.values) })
 end
 

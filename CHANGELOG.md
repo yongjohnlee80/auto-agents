@@ -2,6 +2,81 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.22] — 2026-05-18 — `agent add` warns on KB-type conflict (shared scope only)
+
+Defensive prompt during the admin panel's `agent add` wizard: if the
+picked `_kb_type` differs from the project's existing `[kb].type` AND
+the new agent's `kb_scope = "shared"`, the wizard now stops and demands
+the user type `YES_CHANGE_PROJECT_TYPE` (uppercase, full phrase) to
+proceed. Closes the silent-misconfig hole where the wizard's per-agent
+KB-type prompt LOOKED like a per-agent choice but actually overwrote
+the project-scoped `[kb].type`, leaving:
+
+- TOML `[kb].type` set to the last-added agent's pick
+- `AGENTS.md` still describing the first-added agent's contract
+- Both types' layout dirs coexisting under `shared/` (additive)
+- Mutability paradigms colliding in `shared/synthesis/` (esp. severe
+  for `coding+wiki` / `ops+wiki` — living-doc vs zettel-card models
+  talk past each other)
+
+### Added
+
+- `lua/auto-agents/panel/wizard.lua` — new optional `step.pre_emit`
+  hook: `pre_emit(values) -> string[]` runs before the step's
+  single-line prompt and lets the runner emit multi-line context
+  (banners, warnings, summaries). Used by the new conflict ACK step
+  to render the SHOUTY warning before asking for confirmation.
+  Backward-compatible — existing specs without `pre_emit` are
+  unaffected.
+- `lua/auto-agents/panel/wizard.lua` — `step.prompt` now accepts a
+  `fun(values) -> string` in addition to a plain string. Lets ACK
+  steps embed already-collected wizard values (the picked type, the
+  current type, the kb_scope) directly into the question line.
+- `lua/auto-agents/panel/wizard_specs.lua` `_kb_type_conflict_ack`
+  step in the `agent add` flow. `skip` rules:
+  - skipped if no existing `cfg.kb.type` (first-ever add)
+  - skipped if `_kb_type == "none"` (user opted out of KB init)
+  - skipped if `_kb_type == current` (no change)
+  - skipped if `kb_scope != "shared"` (per-agent dir; no immediate
+    shared-tree damage — the TOML still flips but it only affects
+    future shared agents)
+  - otherwise the ACK runs and demands the exact phrase
+    `YES_CHANGE_PROJECT_TYPE` (uppercase). `y` / `yes` / `<CR>` are
+    all rejected by design — muscle-memory shouldn't bypass.
+
+### Rationale
+
+The wizard's `_kb_type` field looks like a per-agent property but
+its side effect is project-scoped (`cfg.kb.type = values._kb_type`).
+There's no per-agent KB type in the TOML schema — `[kb].type` lives
+at the project root and drives the layout, AGENTS.md seed, and (now)
+the KB_RULES.md companion. For `kb_scope = "shared"` agents, picking
+a different type silently creates a hybrid KB whose mutability model
+varies by which agent wrote which doc — the worst case being the
+coding/ops "living docs that iterate" pattern colliding with wiki's
+"finalized zettel cards" pattern in the same `shared/synthesis/` dir.
+
+For `kb_scope = "private"` and `"isolated"` agents, the immediate
+damage is much smaller — those agents write to `kb/agents/<name>/`,
+which the type-driven layout doesn't touch. The TOML's `[kb].type`
+still gets overwritten (affecting future shared-scope agents) but
+the ACK only fires for shared scope to avoid prompt fatigue.
+
+### Smoke
+
+119 passed, 0 failed across 5 consecutive isolated runs. The
+`tests/auto-agents-smoke-intermittent-section-9-max-slot.md` flake
+in `shared/synthesis/` of the auto-agents KB continues to surface
+under chained IO load (~1 in 5 in this session); production behavior
+of the affected section ([9] `flat slot model`) verified unchanged.
+
+### Consumer impact
+
+None — additive. New wizard step is `skip`-gated by the conflict
+predicate; in the common case (first agent, or matching type, or
+non-shared scope) the wizard runs unchanged. Autovim caret
+`^0.2.0` covers v0.2.22; no autovim retag needed.
+
 ## [v0.2.21] — 2026-05-18 — KB_RULES.md + Phase 2 logging sweep + smoke fixture fix
 
 Three bundled patches plus the M.version sync-forward (v0.2.20's
