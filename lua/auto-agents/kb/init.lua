@@ -125,6 +125,23 @@ function M.ensure_layout(root, opts)
     end
   end
 
+  -- KB_RULES.md: universal cross-KB-type rules (log.md weekly rotation,
+  -- mandatory dual-surface frontmatter). Shipped as `_kb-rules.md`
+  -- alongside the per-type seeds; copied into every new KB so the rules
+  -- live in the KB tree itself, not implicitly in the plugin. Same
+  -- absent-or-forced semantics as AGENTS.md.
+  local kb_rules_md = root .. "/KB_RULES.md"
+  local kb_rules_seed = types.seeds_dir() .. "/_kb-rules.md"
+  if vim.fn.filereadable(kb_rules_seed) == 1
+      and (opts.force_schema or vim.fn.filereadable(kb_rules_md) == 0) then
+    local f = io.open(kb_rules_seed, "r")
+    if f then
+      local content = f:read("*a"); f:close()
+      local out = io.open(kb_rules_md, "w")
+      if out then out:write(content); out:close() end
+    end
+  end
+
   local pointer_body = table.concat({
     "# %s",
     "",
@@ -152,11 +169,24 @@ function M.ensure_layout(root, opts)
     end
   end
 
-  -- log.md and index.md as append-only stubs.
+  -- log.md and index.md as append-only stubs. log.md is created with
+  -- the rotation-pointer header per KB_RULES.md §R1 so fresh KBs start
+  -- in the rotated shape from day one (no migration needed when log
+  -- grows past the first ISO week).
   local log = root .. "/log.md"
   if vim.fn.filereadable(log) == 0 then
     local f = io.open(log, "w")
-    if f then f:write("# auto-agents knowledge-base log\n\n"); f:close() end
+    if f then
+      f:write(table.concat({
+        "# auto-agents knowledge-base log",
+        "",
+        "> **Current ISO week only.** Closed weeks live in `log/YYYY-W<NN>.md`;",
+        "> weeks older than 3 months live in `archive/log/YYYY-W<NN>.md`.",
+        "> See [`KB_RULES.md`](./KB_RULES.md) §R1 for the rotation procedure.",
+        "",
+      }, "\n"))
+      f:close()
+    end
   end
   local index = root .. "/index.md"
   if vim.fn.filereadable(index) == 0 then

@@ -2,6 +2,79 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.21] — 2026-05-18 — KB_RULES.md + Phase 2 logging sweep + smoke fixture fix
+
+Three bundled patches plus the M.version sync-forward (v0.2.20's
+release commit shipped without bumping `M.version` from `0.2.19`; this
+patch resolves the drift). See `KB_MIGRATION_V2.md` at the plugin root
+for the playbook to retrofit a legacy KB.
+
+### Added
+
+- New top-level `KB_RULES.md` in every freshly-initialized KB —
+  universal rules that apply across all KB types
+  (`coding`/`wiki`/`research`/`ops`/`general`/`custom`). Codifies:
+  - **R1 — `log.md` weekly rotation.** Live `log.md` retains the
+    current ISO week only; closed weeks roll into
+    `log/YYYY-W<NN>.md`; partitions older than 3 months move to
+    `archive/log/`. Cadence is manual / on-demand.
+  - **R2 — Mandatory dual-surface frontmatter** on new docs under
+    `shared/` and `agents/`. Both YAML (`--- ... ---` block at the
+    top) AND inline `**Tags:**` + `**Abstract:**` lines (after the
+    H1) are required. Inline is the source of truth for state
+    (status flips happen there first); YAML is the tool-readable echo.
+  - **R3 — `shared/conventions/` is the binding source of truth.**
+    Restates AGENTS.md Hard Rules #2 + #4 so seed updates carry the
+    same expectation across all KB types.
+- New `kb-seeds/_kb-rules.md` — the shippable universal rules
+  template. Copied to `<kb_root>/KB_RULES.md` by `kb/init.lua`
+  alongside the per-type AGENTS.md seed.
+- New `KB_MIGRATION_V2.md` at the plugin root — playbook for
+  retrofitting a legacy KB to V2 conventions. Covers
+  `KB_RULES.md` install (force-schema re-init OR manual placement),
+  first-pass `log.md` rotation script, and the audit-and-backfill
+  approach to existing frontmatter gaps.
+
+### Changed
+
+- All 5 type seeds (`kb-seeds/{coding,wiki,research,ops,general}.md`)
+  now cite `KB_RULES.md` as a load-bearing companion to AGENTS.md.
+- `lua/auto-agents/kb/init.lua` `ensure_layout` writes `KB_RULES.md`
+  from the universal seed (parallel to the per-type AGENTS.md copy
+  flow; same absent-or-forced semantics).
+- `kb/init.lua` initial `log.md` template now includes the
+  rotation-pointer header per R1, so fresh KBs start in the rotated
+  shape from day one (no migration needed when log grows past the
+  first ISO week).
+- `lua/auto-agents/init.lua` `_bootstrap_refresh_picker` — the three
+  remaining `vim.notify` call sites (lines 1345/1355/1361 — the
+  `<leader>am` / `<leader>ai` error paths) now route through
+  `auto-agents.log.notify` per ADR 0021 §9 (no-direct-notify rule).
+  Levels preserved (WARN for no-targets, ERROR for prompt-build /
+  dispatch failures); log lines render
+  `[AutoCore] [auto-agents.send_slot] [<LEVEL>] ...`.
+  `grep -nE 'vim\.notify\(' lua/auto-agents/init.lua` returns 0.
+- `M.version` bumped `0.2.19` → `0.2.21` (resolves the drift where
+  v0.2.20's tagged commit left M.version unbumped).
+
+### Fixed
+
+- `tests/smoke.lua` section `[14] send_slot — opts.submit follows
+  body with deferred CR` — two assertions had been silently failing
+  since commit `e16ada9` added bracketed-paste wrap to `M.send_slot`
+  (production wrap shipped; fixture left asserting unwrapped body).
+  Assertions now expect `"\27[200~<body>\27[201~"`. Suite goes from
+  117/2 to **119/0**.
+
+### Rationale
+
+R1 motivated by the 2026-05-17 KB token-cost audit on the production
+auto-agents KB — `log.md` had grown to ~46k tokens (10% of the total
+KB by token weight), almost none of it usefully retrieved. R2
+codifies frontmatter practice already at 100% adoption in `shared/`
+across that KB, extending the requirement to `agents/` where coverage
+was patchy (8/22 files).
+
 ## [v0.2.20] — 2026-05-18 — grant KB root in spawn-time `--add-dir`
 
 Patch the spawn-time permission injection so the per-agent

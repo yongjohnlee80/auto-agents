@@ -12,6 +12,13 @@ synthesis happens once, not on every query.
 This file is the canonical schema. `CLAUDE.md` and `GEMINI.md` are
 pointers to this file.
 
+**Read alongside this file:** [`KB_RULES.md`](./KB_RULES.md) carries
+universal rules applying to every auto-agents KB (`log.md` weekly
+rotation, mandatory dual-surface frontmatter on new docs under
+`shared/` and `agents/`). `AGENTS.md` describes *what this KB type
+looks like*; `KB_RULES.md` describes *how every KB is operated*. Both
+are load-bearing.
+
 Inspired by [`raw/llm-wiki.md`](./raw/llm-wiki.md) (drop the original
 pattern doc into `raw/` if you want context).
 
