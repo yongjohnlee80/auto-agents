@@ -659,19 +659,23 @@ aa.state.slot_terminals[1] = {
 
 local ok_body = aa.send_slot(1, "please revise foo()", { submit = true, submit_delay_ms = 30 })
 ok("send_slot returns true with submit=true", ok_body == true)
-ok("body is sent immediately (1 send so far)", #sends == 1 and sends[1] == "please revise foo()")
+-- send_slot wraps the body in bracketed-paste (ESC[200~ … ESC[201~) per
+-- commit e16ada9. The wrap is the default; opts.bracketed_paste = false
+-- disables it. Assertions below reflect the wrapped payload.
+ok("body is sent immediately (1 send so far)",
+   #sends == 1 and sends[1] == "\27[200~please revise foo()\27[201~")
 
 vim.wait(80)  -- exceed submit_delay_ms so the deferred CR fires
 
 ok("CR is sent after the deferred delay (2 sends total)", #sends == 2)
 ok("second send is exactly \\r", sends[2] == "\r")
 
--- Without submit=true, no CR follows.
+-- Without submit=true, no CR follows. Body still wrapped in bracketed-paste.
 sends = {}
 aa.send_slot(1, "no-submit prompt")
 vim.wait(80)
 ok("send_slot without submit fires exactly one chan_send",
-   #sends == 1 and sends[1] == "no-submit prompt")
+   #sends == 1 and sends[1] == "\27[200~no-submit prompt\27[201~")
 
 aa.state.slot_terminals[1] = saved_term
 
