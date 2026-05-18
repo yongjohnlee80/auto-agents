@@ -1342,7 +1342,8 @@ end
 local function _bootstrap_refresh_picker(banner, build_body)
   local items = _refresh_picker_items()
   if #items == 0 then
-    vim.notify("auto-agents: no live agent slots to target", vim.log.levels.WARN)
+    require("auto-agents.log").notify("no live agent slots to target",
+      { level = "warn", component = "send_slot" })
     return
   end
   vim.ui.select(items, {
@@ -1352,14 +1353,14 @@ local function _bootstrap_refresh_picker(banner, build_body)
     if not choice then return end
     local body, err = build_body(choice.entry)
     if not body then
-      vim.notify("auto-agents: " .. (err or "failed to build prompt"),
-        vim.log.levels.ERROR)
+      require("auto-agents.log").notify(err or "failed to build prompt",
+        { level = "error", component = "send_slot" })
       return
     end
     local ok = M.send_slot(choice.slot, body, { submit = true })
     if not ok then
-      vim.notify("auto-agents: send_slot failed for slot " .. choice.slot,
-        vim.log.levels.ERROR)
+      require("auto-agents.log").notify("send_slot failed for slot " .. choice.slot,
+        { level = "error", component = "send_slot" })
     end
   end)
 end
