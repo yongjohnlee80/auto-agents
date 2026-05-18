@@ -14,6 +14,17 @@ local M = {}
 ---                         match a later close_tab call against this entry when the
 ---                         agent dismisses the diff by other means (e.g. user
 ---                         answered yes/no in the CLI terminal).
+--- @field originator_mailbox_id string? Full mailbox id (e.g. `agent:juliet:<instance>`)
+---                         of the agent that submitted this diff via the `diff_queue`
+---                         mailbox command. Nil for entries that came in over the MCP
+---                         websocket bridge (Claude / Codex via openDiff), where the
+---                         agent unblocks via the coroutine callback instead of via a
+---                         mailbox-routed verdict message. Stashed at enqueue time so
+---                         `resolve` / `reject` can emit a follow-up `kind="message"`
+---                         to the originator's inbox.
+--- @field correlation_id string? `correlation_id` from the originating `diff_queue`
+---                         mailbox command. Set on the verdict message so the agent
+---                         can match the verdict back to its original request.
 --- @field callback fun(result: table) Coroutine resume callback
 --- @field status "pending"|"resolved"|"rejected" State of the request
 --- @field created_at integer Timestamp of creation
@@ -41,6 +52,14 @@ function M.enqueue(req)
     old_contents = req.old_contents or "",
     new_contents = req.new_contents,
     tab_name = req.tab_name,
+    -- Mailbox-routed entries (auto-agents `diff_queue` command) stash
+    -- the originator's full mailbox id + the command's correlation_id
+    -- so resolve/reject can emit a verdict back via the standard
+    -- router. MCP openDiff entries (Claude/Codex via the websocket
+    -- bridge) leave both nil — the coroutine callback is their reply
+    -- channel.
+    originator_mailbox_id = req.originator_mailbox_id,
+    correlation_id        = req.correlation_id,
     callback = req.callback,
     status = "pending",
     created_at = os.time(),
@@ -115,15 +134,84 @@ function M.remove(id)
   end
 end
 
+--- Emit a verdict message back to the originating mailbox agent. No-op
+--- for entries without `originator_mailbox_id` (the MCP openDiff path
+--- replies via the coroutine callback). Best-effort: any send failure
+--- logs and returns false rather than throwing — the queue resolution
+--- itself must not depend on the mailbox round-trip succeeding.
+---
+--- Verdict shape (lands in originator's `inbox/`, wake fires via the
+--- standard router):
+---
+---   kind:           "message"
+---   from:           "nvim"
+---   to:             <req.originator_mailbox_id>
+---   correlation_id: <req.correlation_id> — matches the original
+---                   `diff_queue` command so the agent can correlate
+---   subject:        "diff verdict for <tab_name>"
+---   body:           human-readable summary
+---   args:           { verdict = "accepted"|"rejected", comment, file_path, tab_name }
+---
+--- @param req AutoAgentsDiffRequest
+--- @param verdict "accepted"|"rejected"
+--- @param comment string? Optional user-supplied reason (rejection comment, or "" on accept)
+--- @return boolean ok
+local function emit_verdict(req, verdict, comment)
+  if type(req.originator_mailbox_id) ~= "string"
+      or req.originator_mailbox_id == ""
+  then
+    return false
+  end
+
+  local ok_transport, transport = pcall(require, "auto-core.mailbox.transport")
+  if not ok_transport then return false end
+
+  local label = req.tab_name or req.file_path or "<diff>"
+  local body
+  if verdict == "accepted" then
+    body = "Diff accepted for " .. label
+        .. (comment ~= nil and comment ~= "" and (": " .. comment) or "")
+  else
+    body = "Diff rejected for " .. label
+        .. ((comment ~= nil and comment ~= "") and (": " .. comment) or "")
+  end
+
+  local _, send_err = transport.send({
+    from           = "nvim",
+    to             = req.originator_mailbox_id,
+    kind           = "message",
+    subject        = string.format("diff verdict (%s) for %s", verdict, label),
+    body           = body,
+    correlation_id = req.correlation_id,
+    args = {
+      verdict   = verdict,
+      comment   = comment or "",
+      file_path = req.file_path,
+      tab_name  = req.tab_name,
+    },
+  })
+  if send_err then
+    local ok_log, log = pcall(require, "auto-agents.log")
+    if ok_log then
+      log.warn("diff.queue",
+        "verdict emit failed: " .. tostring(send_err)
+          .. " (to=" .. tostring(req.originator_mailbox_id)
+          .. ", cor=" .. tostring(req.correlation_id) .. ")")
+    end
+    return false
+  end
+  return true
+end
+
 --- Resolve a diff request (called when user saves the split).
 --- @param id string
 --- @param final_contents string The accepted content
 function M.resolve(id, final_contents)
   local req = M.get(id)
   if not req or req.status ~= "pending" then return end
-  
+
   req.status = "resolved"
-  
+
   -- Create MCP-compliant result format
   local result = {
     content = {
@@ -131,9 +219,12 @@ function M.resolve(id, final_contents)
       { type = "text", text = final_contents },
     }
   }
-  
+
   -- Resume the blocked coroutine
   req.callback(result)
+  -- Mailbox-routed entries also get a verdict message via the router.
+  -- No-op for MCP openDiff entries (no originator_mailbox_id).
+  emit_verdict(req, "accepted", nil)
   M.remove(id)
 end
 
@@ -165,6 +256,10 @@ function M.reject(id, reason)
 
   -- Resume the blocked coroutine
   req.callback(result)
+  -- Mailbox-routed entries also get a verdict message via the router.
+  -- The user comment (M) or the rejection placeholder (D, no input)
+  -- is forwarded so the agent can iterate.
+  emit_verdict(req, "rejected", reason)
   M.remove(id)
 end
 

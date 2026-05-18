@@ -2,6 +2,82 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.19] — 2026-05-18 — diff_queue verdict routing back to mailbox originator
+
+Closes the response-path half of the diff-feedback-routing-to-
+gemini-juliet todo (ADR 0011 follow-up — the attribution half
+landed in v0.2.11 / v0.2.12 + v0.2.13). Pre-patch the `diff_queue`
+mailbox command was fire-and-forget: the originating agent
+received an enqueue ack but never learned whether the user
+accepted or rejected the diff. The only verdict channel for non-
+Claude agents (Gemini, Junie) was for the user to type the
+feedback into the agent's terminal by hand.
+
+Post-patch the panel's accept (A) and reject (D / M-with-comment)
+flows emit a follow-up `kind="message"` back to the originating
+agent's inbox via the standard router, keyed by the original
+`diff_queue` command's `correlation_id`. Wake fires automatically
+via `auto-core.mailbox.router.handle_inbox` → `dispatch_wake`.
+
+### Added
+
+- `AutoAgentsDiffRequest` carries two optional fields used only by
+  the mailbox-routed path:
+  - `originator_mailbox_id` — full mailbox id of the agent that
+    submitted via `diff_queue` (e.g. `agent:juliet:<instance>`).
+  - `correlation_id` — the original `diff_queue` command's
+    correlation_id, replayed on the verdict message so the agent
+    can match.
+  MCP openDiff (Claude / Codex via the websocket bridge) leaves
+  both nil — the coroutine callback remains the reply channel for
+  that path.
+
+- `diff/queue.lua` `emit_verdict(req, verdict, comment)` helper —
+  best-effort `auto-core.mailbox.transport.send` of a
+  `kind="message"` envelope from `nvim` to the originator. Lands in
+  inbox/, fires wake, the agent reads:
+
+  ```text
+  kind:            "message"
+  from:            "nvim"
+  correlation_id:  <original>
+  subject:         "diff verdict (accepted|rejected) for <tab>"
+  body:            human-readable summary
+  args:            { verdict, comment, file_path, tab_name }
+  ```
+
+  Failures log via `auto-agents.log.warn` and do NOT propagate —
+  panel resolution must not depend on the mailbox round-trip.
+
+### Changed
+
+- `mailbox/commands.lua` `handle_diff_queue` reads `ctx.sender`
+  (auto-core v0.1.12+) and `ctx.correlation_id` (auto-core
+  v0.1.23+); when both are present they propagate to the queue
+  entry so `emit_verdict` can fire on resolve/reject.
+- The handler's response now includes `verdict_follow_up: true`
+  and `correlation_id: <cor>` when the originator was captured,
+  so the caller knows a verdict message is en route. The `note`
+  field documents the protocol.
+
+### Compatibility
+
+- **Hard dependency: `auto-core` ≥ v0.1.23** for `ctx.correlation_id`.
+  Older auto-core leaves the field unset; the handler degrades to
+  the v0.2.18 fire-and-forget shape (no verdict emission, no
+  `verdict_follow_up` flag).
+- Existing MCP openDiff entries (Claude / Codex) are unaffected —
+  the new fields are nil for that path; `emit_verdict` no-ops.
+- Existing tests in `tests/diff_mailbox_sender_spec.lua` continue
+  to pass.
+
+### Versioning
+
+`M.version` jumps `0.2.17` → `0.2.19`. v0.2.18 was a tagged ship
+("kb/instruct — render per-cwd block agent-neutrally") but its
+ship did not update the in-source `M.version` constant — this
+patch resolves that drift forward.
+
 ## [v0.2.16] — 2026-05-17 — bootstrap revision audit uses tool-root state
 
 Corrects the auto-agents prompts that tell spawned agents how to

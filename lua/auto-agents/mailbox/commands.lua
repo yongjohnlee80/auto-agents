@@ -198,11 +198,18 @@ local function handle_addressbook(args, ctx)
 end
 
 ---`diff_queue` handler. Enqueue a diff into the unified diff
----queue UI. Fire-and-forget — auto-core's executor returns the
----response immediately; the user's accept/reject does NOT flow
----back through the mailbox transport. For a blocking verdict use
----the MCP openDiff handler at
----`lua/auto-agents/mcp/ws-server/tools/open_diff.lua`.
+---queue UI. The synchronous response (auto-core executor path) acks
+---the enqueue with `{ ok = true, value = { id, agent_name, ... } }`
+---and lands in the sender's `responses/<correlation_id>.json`. The
+---user's accept/reject verdict is delivered as a SECOND, follow-up
+---message (`kind="message"`, same `correlation_id`) into the
+---sender's `inbox/` when the panel resolves — the agent correlates
+---via `correlation_id` and reads the verdict from `args.verdict`
+---("accepted" / "rejected") plus `args.comment`. Wake fires for the
+---inbox arrival via auto-core's router.
+---
+---For the blocking-coroutine flow used by Claude / Codex (the MCP
+---websocket bridge) see `lua/auto-agents/mcp/ws-server/tools/open_diff.lua`.
 ---@param args table
 ---@param ctx  table
 ---@return table
@@ -262,18 +269,38 @@ local function handle_diff_queue(args, ctx)
     f:close()
   end
 
+  -- Stash the originator's full mailbox id + the command's
+  -- correlation_id so `queue.resolve` / `queue.reject` can emit a
+  -- follow-up `kind="message"` verdict back via the standard router
+  -- when the user accepts / rejects in the panel. ctx.sender lands
+  -- on the executor path via auto-core v0.1.12+; ctx.correlation_id
+  -- lands via v0.1.23+. Both are nil-tolerant — without them the
+  -- queue entry is fire-and-forget (legacy behavior).
+  local originator_mailbox_id
+  do
+    local s = ctx and ctx.sender or nil
+    if type(s) == "string" and s ~= "" then originator_mailbox_id = s end
+  end
+  local correlation_id
+  do
+    local c = ctx and ctx.correlation_id or nil
+    if type(c) == "string" and c ~= "" then correlation_id = c end
+  end
+
   local diff_queue = require("auto-agents.diff.queue")
   local id = diff_queue.enqueue({
-    agent_name   = agent_name,
-    file_path    = args.old_file_path,
-    old_contents = old_contents,
-    new_contents = args.new_file_contents,
-    tab_name     = args.tab_name,
-    -- Fire-and-forget: noop callback. The verdict event still
-    -- publishes on the auto-core bus (`auto-agents:diff_*`) so
-    -- the UI works normally; we just don't route it back through
-    -- the mailbox to the sender.
-    callback     = function(_) end,
+    agent_name            = agent_name,
+    file_path             = args.old_file_path,
+    old_contents          = old_contents,
+    new_contents          = args.new_file_contents,
+    tab_name              = args.tab_name,
+    originator_mailbox_id = originator_mailbox_id,
+    correlation_id        = correlation_id,
+    -- The mailbox-routed verdict goes through `emit_verdict` in
+    -- queue.lua (best-effort outbound message); the coroutine
+    -- callback here stays a no-op because no MCP coroutine is
+    -- blocked on this entry.
+    callback              = function(_) end,
   })
 
   -- Trigger UI popup.
@@ -282,15 +309,30 @@ local function handle_diff_queue(args, ctx)
     if ui_ok and type(diff_ui.open) == "function" then diff_ui.open() end
   end)
 
+  -- `blocking=false` is the executor-path contract — this command's
+  -- own response lands immediately. `verdict_follow_up` advertises
+  -- that a SECOND mailbox arrival (kind="message", same
+  -- correlation_id) will appear in the sender's inbox/ when the user
+  -- accepts/rejects, IF we captured the originator on enqueue.
+  -- Agents that want the verdict should keep listening for new
+  -- inbox arrivals carrying this correlation_id.
   return {
     ok = true,
     value = {
-      id           = id,
-      agent_name   = agent_name,
-      file_path    = args.old_file_path,
-      tab_name     = args.tab_name,
-      blocking     = false,
-      note         = "Fire-and-forget. Use the MCP openDiff transport to block for the user's accept/reject verdict.",
+      id                = id,
+      agent_name        = agent_name,
+      file_path         = args.old_file_path,
+      tab_name          = args.tab_name,
+      blocking          = false,
+      verdict_follow_up = originator_mailbox_id ~= nil
+                            and correlation_id ~= nil,
+      correlation_id    = correlation_id,
+      note              = "Initial response is the enqueue ack. When the user "
+                          .. "accepts/rejects in the panel, a kind=\"message\" "
+                          .. "with this correlation_id lands in your inbox/ "
+                          .. "carrying args.verdict (\"accepted\"|\"rejected\") "
+                          .. "+ args.comment. Use the MCP openDiff transport "
+                          .. "instead if you need a blocking coroutine.",
     },
   }
 end
