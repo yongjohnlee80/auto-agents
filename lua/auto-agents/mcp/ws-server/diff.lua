@@ -328,7 +328,18 @@ end
 ---@param tab_name string Name for the diff tab/view
 ---@return table Result with provider, tab_name, and success status
 function M.open_diff(old_file_path, new_file_path, new_file_contents, tab_name)
-  return M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  logger.info("diff.lifecycle", "diff opened — request received",
+    "tab_name=" .. tostring(tab_name),
+    "old=" .. tostring(old_file_path),
+    "new=" .. tostring(new_file_path),
+    "content_bytes=" .. tostring(#(new_file_contents or "")))
+  local result = M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  logger.info("diff.lifecycle",
+    "diff opened — native provider returned",
+    "tab_name=" .. tostring(tab_name),
+    "success=" .. tostring(result and result.success),
+    "error=" .. tostring(result and result.error or "nil"))
+  return result
 end
 
 ---Create a temporary file with content
@@ -646,13 +657,18 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
   local tmp_file, err = create_temp_file(new_file_contents, new_filename)
   if not tmp_file then
+    logger.warn("diff.lifecycle", "native diff aborted — temp file create failed",
+      "tab_name=" .. tostring(tab_name), "err=" .. tostring(err))
     return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
   end
 
+  local pre_winids = vim.api.nvim_tabpage_list_wins(0)
   local target_win = find_main_editor_window()
 
   if target_win then
     vim.api.nvim_set_current_win(target_win)
+    logger.info("diff.lifecycle", "native diff — using existing main editor window",
+      "tab_name=" .. tostring(tab_name), "target_win=" .. tostring(target_win))
   else
     vim.cmd("wincmd t")
     vim.cmd("wincmd l")
@@ -661,12 +677,24 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
 
     if buftype == "terminal" or buftype == "nofile" then
       create_split()
+      logger.info("diff.lifecycle",
+        "native diff — created split (no main editor; landed on " .. tostring(buftype) .. ")",
+        "tab_name=" .. tostring(tab_name),
+        "new_winid=" .. tostring(vim.api.nvim_get_current_win()))
+    else
+      logger.info("diff.lifecycle",
+        "native diff — adopted top-left window (" .. tostring(buftype) .. ")",
+        "tab_name=" .. tostring(tab_name),
+        "adopted_winid=" .. tostring(vim.api.nvim_get_current_win()))
     end
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
   vim.cmd("diffthis")
   create_split()
+  logger.info("diff.lifecycle", "native diff — second split created for proposed buffer",
+    "tab_name=" .. tostring(tab_name),
+    "proposed_winid=" .. tostring(vim.api.nvim_get_current_win()))
   vim.cmd("edit " .. vim.fn.fnameescape(tmp_file))
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
@@ -990,6 +1018,15 @@ function M._cleanup_diff_state(tab_name, reason)
     return
   end
 
+  local pre_winids = vim.api.nvim_tabpage_list_wins(0)
+  logger.info("diff.lifecycle", "diff cleanup — starting",
+    "tab_name=" .. tostring(tab_name),
+    "reason=" .. tostring(reason),
+    "created_new_tab=" .. tostring(diff_data.created_new_tab),
+    "original_tab=" .. tostring(diff_data.original_tab_number),
+    "new_tab=" .. tostring(diff_data.new_tab_number),
+    "live_winids_pre=[" .. table.concat(pre_winids, ",") .. "]")
+
   -- Clean up autocmds
   for _, autocmd_id in ipairs(diff_data.autocmd_ids or {}) do
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
@@ -1096,6 +1133,11 @@ function M._cleanup_diff_state(tab_name, reason)
   -- Remove from active diffs
   active_diffs[tab_name] = nil
 
+  local post_winids = vim.api.nvim_tabpage_list_wins(0)
+  logger.info("diff.lifecycle", "diff cleanup — done",
+    "tab_name=" .. tostring(tab_name),
+    "reason=" .. tostring(reason),
+    "live_winids_post=[" .. table.concat(post_winids, ",") .. "]")
   logger.debug("diff", "Cleaned up diff for", tab_name)
 end
 
@@ -1439,6 +1481,9 @@ end
 function M.accept_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
+  logger.info("diff.lifecycle", "user accepted diff",
+    "tab_name=" .. tostring(tab_name),
+    "bufnr=" .. tostring(current_buffer))
 
   if not tab_name then
     logger.warn("diff.user_cmd", "No active diff found in current buffer")
@@ -1453,6 +1498,9 @@ end
 function M.deny_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
+  logger.info("diff.lifecycle", "user rejected diff",
+    "tab_name=" .. tostring(tab_name),
+    "bufnr=" .. tostring(current_buffer))
 
   if not tab_name then
     logger.warn("diff.user_cmd", "No active diff found in current buffer")
