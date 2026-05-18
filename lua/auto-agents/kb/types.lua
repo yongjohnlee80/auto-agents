@@ -26,7 +26,7 @@ local M = {}
 
 ---Built-in types. Order matters — used as the default presentation
 ---order in the wizard picker.
-M.BUILTIN = { "coding", "wiki", "research", "ops", "general" }
+M.BUILTIN = { "coding", "wiki", "research", "ops", "library", "general" }
 
 ---Resolve the seeds directory shipped with the plugin.
 ---@return string
@@ -105,6 +105,25 @@ local LAYOUTS = {
       "incidents",
       "postmortems",
       "playbooks",
+    },
+  },
+  library = {
+    description = "Document library — content-addressed archive, convention-driven ingestion, draft → archive lifecycle (massive document storage + retrieval)",
+    -- raw/ is content-addressed flat per RULES.md §3 (sharded by hash
+    -- prefix at runtime: raw/<sha[:2]>/<sha[2:4]>/<sha>.<ext>); no
+    -- fixed subdirs declared here.
+    raw_subdirs = {},
+    shared_subdirs = {
+      "conventions",   -- expert dispatch rules (binding per KB_RULES.md §R3)
+      "glossary",      -- cross-expert terminology
+      "synthesis",     -- cross-archive analyses + migration notes
+    },
+    extra_dirs = {
+      "archive",       -- partitioned, immutable durable record (per RULES.md)
+      "draft",         -- mutable input zone (convention dispatcher reads from here)
+      "incidents",     -- dispatch failure records (review → new convention)
+      "redacted",      -- controlled deletion zone (stubs + restricted blobs)
+      "_templates",    -- frontmatter / manifest templates shipped by the seed
     },
   },
   general = {

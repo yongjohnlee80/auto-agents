@@ -1091,6 +1091,167 @@ do
   aa.state.config.kb = saved_kb
 end
 
+-- ─────────── 19. library KB type — seed + scaffold (v0.2.24+) ──────────
+-- The library type ships:
+--   - kb-seeds/library.md            → <kb_root>/AGENTS.md
+--   - kb-seeds/_library-rules.md     → <kb_root>/RULES.md (per-type, NEW)
+--   - kb-seeds/library-templates/*   → <kb_root>/_templates/ (per-type bundle, NEW)
+--   - LAYOUTS.library                → archive/ + draft/ + incidents/ + redacted/
+--                                      + shared/{conventions,glossary,synthesis}/
+-- Plus the universal KB_RULES.md and the existing per-kind layout
+-- machinery continue to apply.
+print("\n[19] library KB type — seed + scaffold (v0.2.24+)")
+do
+  local kb_types = require("auto-agents.kb.types")
+  local kb_init  = require("auto-agents.kb")
+
+  -- library is in BUILTIN and has a layout.
+  local function contains(t, v)
+    for _, x in ipairs(t) do if x == v then return true end end
+    return false
+  end
+  ok("library is registered in BUILTIN", contains(kb_types.BUILTIN, "library"))
+
+  local layout = kb_types.layout("library")
+  ok("library layout has description", type(layout.description) == "string"
+     and layout.description ~= "")
+
+  -- Layout shape — shared/ subdirs include conventions; extras include
+  -- archive/ + draft/ + incidents/ + redacted/ + _templates/.
+  local function layout_contains(field, value)
+    for _, x in ipairs(layout[field] or {}) do if x == value then return true end end
+    return false
+  end
+  ok("library shared_subdirs include 'conventions'",
+     layout_contains("shared_subdirs", "conventions"))
+  ok("library extra_dirs include 'archive'",
+     layout_contains("extra_dirs", "archive"))
+  ok("library extra_dirs include 'draft'",
+     layout_contains("extra_dirs", "draft"))
+  ok("library extra_dirs include 'incidents'",
+     layout_contains("extra_dirs", "incidents"))
+  ok("library extra_dirs include 'redacted'",
+     layout_contains("extra_dirs", "redacted"))
+  ok("library extra_dirs include '_templates'",
+     layout_contains("extra_dirs", "_templates"))
+
+  -- Seed files exist on disk.
+  local seeds_dir = kb_types.seeds_dir()
+  ok("kb-seeds/library.md exists",
+     vim.fn.filereadable(seeds_dir .. "/library.md") == 1)
+  ok("kb-seeds/_library-rules.md exists",
+     vim.fn.filereadable(seeds_dir .. "/_library-rules.md") == 1)
+  ok("kb-seeds/library-templates/ exists",
+     vim.fn.isdirectory(seeds_dir .. "/library-templates") == 1)
+  ok("kb-seeds/library-templates/archive-entry.md ships",
+     vim.fn.filereadable(seeds_dir .. "/library-templates/archive-entry.md") == 1)
+  ok("kb-seeds/library-templates/convention.md ships",
+     vim.fn.filereadable(seeds_dir .. "/library-templates/convention.md") == 1)
+  ok("kb-seeds/library-templates/convention-manifest.yaml ships",
+     vim.fn.filereadable(seeds_dir .. "/library-templates/convention-manifest.yaml") == 1)
+
+  -- ensure_layout scaffolds the full library tree end-to-end.
+  local tmp_root = vim.fn.tempname() .. "_library_kb"
+  vim.fn.mkdir(tmp_root, "p")
+
+  kb_init.ensure_layout(tmp_root, { type = "library" })
+
+  ok("ensure_layout creates archive/",
+     vim.fn.isdirectory(tmp_root .. "/archive") == 1)
+  ok("ensure_layout creates draft/",
+     vim.fn.isdirectory(tmp_root .. "/draft") == 1)
+  ok("ensure_layout creates incidents/",
+     vim.fn.isdirectory(tmp_root .. "/incidents") == 1)
+  ok("ensure_layout creates redacted/",
+     vim.fn.isdirectory(tmp_root .. "/redacted") == 1)
+  ok("ensure_layout creates shared/conventions/",
+     vim.fn.isdirectory(tmp_root .. "/shared/conventions") == 1)
+  ok("ensure_layout creates shared/glossary/",
+     vim.fn.isdirectory(tmp_root .. "/shared/glossary") == 1)
+  ok("ensure_layout creates shared/synthesis/",
+     vim.fn.isdirectory(tmp_root .. "/shared/synthesis") == 1)
+  ok("ensure_layout creates raw/",
+     vim.fn.isdirectory(tmp_root .. "/raw") == 1)
+  ok("ensure_layout creates agents/",
+     vim.fn.isdirectory(tmp_root .. "/agents") == 1)
+  ok("ensure_layout creates _templates/",
+     vim.fn.isdirectory(tmp_root .. "/_templates") == 1)
+
+  -- AGENTS.md content reflects the library seed.
+  ok("AGENTS.md is written from library seed",
+     vim.fn.filereadable(tmp_root .. "/AGENTS.md") == 1)
+  do
+    local f = io.open(tmp_root .. "/AGENTS.md", "r")
+    if f then
+      local content = f:read("*a"); f:close()
+      ok("AGENTS.md names the library KB type",
+         content:find("Document Library Contract", 1, true) ~= nil)
+      ok("AGENTS.md references KB_RULES.md",
+         content:find("KB_RULES.md", 1, true) ~= nil)
+      ok("AGENTS.md references RULES.md",
+         content:find("RULES.md", 1, true) ~= nil)
+    end
+  end
+
+  -- KB_RULES.md and RULES.md both shipped at the root.
+  ok("KB_RULES.md is written (universal rules)",
+     vim.fn.filereadable(tmp_root .. "/KB_RULES.md") == 1)
+  ok("RULES.md is written from _library-rules.md seed (per-type rules)",
+     vim.fn.filereadable(tmp_root .. "/RULES.md") == 1)
+  do
+    local f = io.open(tmp_root .. "/RULES.md", "r")
+    if f then
+      local content = f:read("*a"); f:close()
+      ok("RULES.md declares schema_version",
+         content:find("schema_version:", 1, true) ~= nil)
+      ok("RULES.md describes the partition scheme",
+         content:find("Partition scheme", 1, true) ~= nil)
+      ok("RULES.md describes the filename template",
+         content:find("Filename template", 1, true) ~= nil)
+      ok("RULES.md describes the hash spec",
+         content:find("Hash spec", 1, true) ~= nil)
+    end
+  end
+
+  -- _templates/ bundle is populated from library-templates/.
+  ok("_templates/archive-entry.md is shipped",
+     vim.fn.filereadable(tmp_root .. "/_templates/archive-entry.md") == 1)
+  ok("_templates/convention.md is shipped",
+     vim.fn.filereadable(tmp_root .. "/_templates/convention.md") == 1)
+  ok("_templates/convention-manifest.yaml is shipped",
+     vim.fn.filereadable(tmp_root .. "/_templates/convention-manifest.yaml") == 1)
+
+  -- log.md gets the rotation-pointer header (per KB_RULES.md R1)
+  -- even for library KBs.
+  do
+    local f = io.open(tmp_root .. "/log.md", "r")
+    if f then
+      local content = f:read("*a"); f:close()
+      ok("log.md carries the rotation-pointer header",
+         content:find("Current ISO week only", 1, true) ~= nil)
+    end
+  end
+
+  -- Idempotency: a second ensure_layout call without force_schema
+  -- doesn't clobber. Write a marker into AGENTS.md, re-run, verify
+  -- the marker survives.
+  do
+    local agents_md = tmp_root .. "/AGENTS.md"
+    local f = io.open(agents_md, "a")
+    if f then f:write("\n<!-- USER MARKER -->\n"); f:close() end
+    kb_init.ensure_layout(tmp_root, { type = "library" })
+    local g = io.open(agents_md, "r")
+    if g then
+      local content = g:read("*a"); g:close()
+      ok("ensure_layout is idempotent on AGENTS.md (user marker preserved)",
+         content:find("USER MARKER", 1, true) ~= nil)
+    end
+  end
+
+  -- Teardown: rm -rf the temp KB.
+  pcall(vim.fn.delete, tmp_root, "rf")
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

@@ -142,6 +142,56 @@ function M.ensure_layout(root, opts)
     end
   end
 
+  -- RULES.md: per-type rules file (optional). When the seed bundle
+  -- ships a `_<type>-rules.md` next to the per-type AGENTS.md seed,
+  -- copy it to <kb_root>/RULES.md so the per-library partition /
+  -- filename / hash spec lives in the KB tree itself. First-class
+  -- consumer: the `library` type (auto-agents v0.2.24+). Future
+  -- types can opt in by shipping their own `_<type>-rules.md`.
+  -- Generic mechanism — no per-type branching here.
+  local type_rules_seed = types.seeds_dir() .. "/_" .. type .. "-rules.md"
+  local rules_md = root .. "/RULES.md"
+  if vim.fn.filereadable(type_rules_seed) == 1
+      and (opts.force_schema or vim.fn.filereadable(rules_md) == 0) then
+    local f = io.open(type_rules_seed, "r")
+    if f then
+      local content = f:read("*a"); f:close()
+      local out = io.open(rules_md, "w")
+      if out then out:write(content); out:close() end
+    end
+  end
+
+  -- Per-type _templates/ bundle (optional). When the seed bundle
+  -- ships a `<type>-templates/` directory alongside the seed, copy
+  -- every file in it to <kb_root>/_templates/. Currently consumed
+  -- only by the `library` type (which ships archive-entry.md,
+  -- convention.md, and convention-manifest.yaml). Same
+  -- absent-or-forced semantics as the other seed copies.
+  local templates_seed_dir = types.seeds_dir() .. "/" .. type .. "-templates"
+  if vim.fn.isdirectory(templates_seed_dir) == 1 then
+    local templates_root = root .. "/_templates"
+    vim.fn.mkdir(templates_root, "p")
+    local sd = vim.uv.fs_scandir(templates_seed_dir)
+    if sd then
+      while true do
+        local name, ftype = vim.uv.fs_scandir_next(sd)
+        if not name then break end
+        if ftype == "file" then
+          local src = templates_seed_dir .. "/" .. name
+          local dst = templates_root .. "/" .. name
+          if opts.force_schema or vim.fn.filereadable(dst) == 0 then
+            local f = io.open(src, "r")
+            if f then
+              local content = f:read("*a"); f:close()
+              local out = io.open(dst, "w")
+              if out then out:write(content); out:close() end
+            end
+          end
+        end
+      end
+    end
+  end
+
   local pointer_body = table.concat({
     "# %s",
     "",

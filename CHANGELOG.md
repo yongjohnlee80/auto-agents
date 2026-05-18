@@ -2,6 +2,118 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.24] — 2026-05-18 — new KB type: `library` (content-addressed document archive)
+
+Adds a sixth built-in KB type alongside `coding` / `wiki` / `research`
+/ `ops` / `general`. Expected to be the second-most-used type after
+`coding` per Johno's framing.
+
+The `library` type is a content-addressed document archive optimized
+for hundreds of thousands of immutable records, convention-driven
+ingestion from a mutable draft zone, and a layout that pre-anticipates
+a future SQL/RAG retrieval layer without locking the design to one.
+
+### Added
+
+- **`kb-seeds/library.md`** — canonical schema (AGENTS.md) for the
+  library type. Describes the three-zone lifecycle (raw blobs / draft
+  / archive), eight hard rules including archive immutability and
+  content-addressed `raw/`, operations (ingest / version / addend /
+  redact / retrieve / audit), the archive-entry frontmatter contract,
+  schema versioning, the convention author guide, and the planned
+  SQL/RAG migration target.
+- **`kb-seeds/_library-rules.md`** — per-library `RULES.md` template
+  installed at `<kb_root>/RULES.md` on init. Declares:
+  - §1 Partition scheme (with 3 example schemes — tax by quarter,
+    export trade by country/vendor/date, doc-type-led)
+  - §2 Filename template (default `{date}-{doc_type}-{doc_subtype}-{title}.md`,
+    human-readable, Obsidian-friendly)
+  - §3 Hash spec (SHA-256 of raw blob for wrappers; SHA-256 of md
+    sans `id:` for pure-md)
+  - §4 Versioning + addenda rules
+  - §5 Index structure (per-partition `index.md` + top-level thin
+    manifest)
+  - §6 Retrieval surface (FS-only primitives today; SQL/RAG migration
+    target)
+  - §7 Redaction policy (move-not-delete; hash + index entry persist
+    as audit trail)
+  - §8 Schema versioning + migration rules
+- **`kb-seeds/library-templates/`** — three templates shipped at
+  `<kb_root>/_templates/` on init:
+  - `archive-entry.md` — frontmatter shape for archive docs
+  - `convention.md` — binding protocol doc shape
+  - `convention-manifest.yaml` — dispatch manifest shape (with
+    glob/mime/content-match/folder-context triggers + LLM-tiebreak
+    abstract + agent authorization + side-effect declarations)
+- **`lua/auto-agents/kb/types.lua`** — `library` registered in
+  `M.BUILTIN` and `LAYOUTS`. Layout: `shared/{conventions,glossary,synthesis}/`
+  + `extra_dirs = {archive, draft, incidents, redacted, _templates}`.
+  `raw/` is created as a flat dir (no subdirs — content-addressed at
+  runtime).
+- **`lua/auto-agents/kb/init.lua`** — generalized per-type rules
+  + templates copy. When the seed bundle ships `_<type>-rules.md`,
+  it's copied to `<kb_root>/RULES.md`. When it ships
+  `<type>-templates/`, every file is copied to `<kb_root>/_templates/`.
+  Generic mechanism with no per-type branching; library is the
+  first consumer.
+- **Smoke section [19]** — 39 assertions covering:
+  - BUILTIN includes library
+  - Layout contains all expected subdirs (archive/draft/incidents/
+    redacted/_templates + shared/{conventions,glossary,synthesis})
+  - All 6 seed files ship on disk (library.md, _library-rules.md,
+    library-templates/{archive-entry.md, convention.md,
+    convention-manifest.yaml})
+  - `ensure_layout` scaffolds the full tree end-to-end
+  - AGENTS.md, KB_RULES.md, RULES.md all written at the root
+  - AGENTS.md content references both companion docs
+  - RULES.md content declares schema_version + partition + filename
+    + hash spec
+  - `_templates/` is populated from the per-type bundle
+  - `log.md` carries the rotation-pointer header (KB_RULES.md §R1
+    applies)
+  - `ensure_layout` is idempotent (re-run preserves user edits)
+
+### Rationale
+
+`auto-agents` had no story for archival / records-style workflows.
+The library type fills that gap as a domain that's not coding, not
+wiki, not research, and not ops — it's about MASS PERSISTENT
+STORAGE with efficient retrieval. The motivating user story is an
+export trade automation: drop invoice/inventory/certificate folders
+into `draft/`; expert agents (accountant, warehouse-manager,
+counsellor) dispatch via convention manifest; produce archive
+entries with structured frontmatter + transactional outputs.
+
+Design decisions that distinguish library from prior types:
+
+1. **Content-addressed `raw/`** — like git's `.git/objects/`,
+   partition scheme NEVER touches raw blobs. Decouples physical
+   storage from logical address.
+2. **Partition scheme is declarative** (RULES.md §1) — agents read
+   it at runtime; changes don't rewrite history.
+3. **Per-partition `index.md`** — scales past the single-file limit
+   that R1 (`log.md` rotation) exists to address.
+4. **Manifest-based convention dispatch** — cheap pre-filter via
+   YAML triggers; LLM tiebreak for ambiguity; incidents drive new
+   convention authoring.
+5. **Migration-ready by design** — every on-disk decision (content-
+   addressing, frontmatter as structured metadata, hash as primary
+   key) makes the FS form a clean migration source for SQL/RAG.
+
+### Smoke
+
+179 passed / 0 failed across 2 consecutive isolated runs (39 new
+assertions in section [19]). Section [9] intermittent
+(`shared/synthesis/auto-agents-smoke-intermittent-section-9-max-slot.md`
+in the KB) continues to surface under chained IO load.
+
+### Consumer impact
+
+None for existing KBs — additive. Users can opt into the new type
+via `:AutoAgentsProject` wizard or by setting `[kb] type = "library"`
+in their project TOML. Autovim caret `^0.2.0` covers v0.2.24; no
+autovim retag needed.
+
 ## [v0.2.23] — 2026-05-18 — `agent add` KB-type default + smoke section [18]
 
 Two follow-ons to v0.2.22's KB-type conflict ACK.

@@ -1,0 +1,89 @@
+# Convention manifest — cheap pre-dispatch filter for the library
+# ingestion router.
+#
+# Drop this file next to a convention.md inside
+# shared/conventions/<expert>/manifest.yaml. The dispatcher reads it
+# at every draft arrival to decide whether THIS convention claims
+# the draft.
+#
+# Multiple conventions can match the same draft; the dispatcher
+# resolves ambiguity by:
+#   1. Cheap match: count satisfied triggers below; highest wins.
+#   2. Tiebreak: LLM reads the matching conventions' abstracts +
+#      the draft's contents and picks one. (See AGENTS.md
+#      § Operations → Ingest.)
+#
+# When NO conventions match a draft, the dispatcher writes an
+# incident to incidents/ and leaves the draft in place for human
+# review + convention authoring.
+
+# ─────────────────────────────────────────────────────────────────
+# REQUIRED — identifies which convention this manifest belongs to.
+# ─────────────────────────────────────────────────────────────────
+expert: <expert-name>                       # ← matches the parent directory name
+protocol: <protocol-filename-stem>          # ← matches the convention .md filename minus extension
+schema_version: 1                           # bump when triggers below change semantically
+
+# ─────────────────────────────────────────────────────────────────
+# REQUIRED — at least one trigger. Multiple triggers ALL apply
+# (AND semantics within a single trigger entry; OR semantics across
+# trigger entries).
+# ─────────────────────────────────────────────────────────────────
+triggers:
+
+  # Trigger entry 1 — pdf invoice in a folder named like *-shipment-*
+  - glob: "*invoice*.pdf"                   # filename glob (case-insensitive)
+    mime: "application/pdf"                 # exact mime (optional; redundant if glob is specific)
+    folder_glob: "*-shipment-*"             # parent folder name pattern (optional)
+    content_match:                          # optional content heuristics
+      - "INVOICE"                           # any of these substrings must appear in extracted text
+      - "Total:"
+    content_match_mode: "all"               # "all" (AND) | "any" (OR), default "any"
+
+  # Trigger entry 2 — csv inventory with specific header row
+  - glob: "*.csv"
+    mime: "text/csv"
+    content_match:
+      - "sku,description,qty"               # header row literal
+    content_match_mode: "all"
+    content_match_scope: "first_line"       # "first_line" | "any_line" | "anywhere", default "anywhere"
+
+# ─────────────────────────────────────────────────────────────────
+# OPTIONAL — disambiguation hints for the LLM tiebreaker.
+# When multiple conventions match the same draft with the same
+# trigger-count, the LLM reads `abstract:` from each candidate and
+# picks the best fit. Keep abstracts <= 2 sentences.
+# ─────────────────────────────────────────────────────────────────
+abstract: >-
+  One- or two-sentence description of what this convention claims to
+  ingest. Used by the LLM tiebreaker when multiple conventions match
+  the same draft. Be precise about the doc-class (e.g. "incoming
+  wholesale invoices from vendors", NOT "invoices").
+
+# ─────────────────────────────────────────────────────────────────
+# OPTIONAL — explicit exclusions. Drafts matching these patterns
+# are NEVER claimed by this convention even if `triggers:` would
+# otherwise match. Use sparingly; prefer making `triggers:` precise.
+# ─────────────────────────────────────────────────────────────────
+exclude:
+  - folder_glob: "*-outgoing-*"             # we handle incoming only
+  - glob: "*-draft-*.pdf"                   # we ingest finalized invoices, not drafts
+
+# ─────────────────────────────────────────────────────────────────
+# OPTIONAL — declare the agent slot(s) authorized to RUN this
+# convention. If absent, any agent can run it. Useful when an
+# expert is pinned to a specific agent identity for accountability.
+# ─────────────────────────────────────────────────────────────────
+authorized_agents:
+  - <agent-name>                            # e.g. "accountant"
+
+# ─────────────────────────────────────────────────────────────────
+# OPTIONAL — declare side-effect surfaces this convention touches.
+# Used by audit tooling + future RAG indexing to know which docs
+# carry "this convention ran".
+# ─────────────────────────────────────────────────────────────────
+side_effects:
+  - kind: "file_write"
+    path: "<output-path-glob>"              # e.g. "exports/transactions/<YYYY-MM>.csv"
+  - kind: "db_write"
+    target: "<connection-name>:<table>"     # opaque identifier the convention's domain logic understands
