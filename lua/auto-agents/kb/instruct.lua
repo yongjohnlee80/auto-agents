@@ -11,6 +11,15 @@
 ---having to send anything via stdin (which TUIs would treat as a
 ---prompt).
 ---
+---**The instruction file is shared by every agent of the same kind in
+---the project** (CLAUDE.md by all `claude` slots, AGENTS.md by all
+---`codex`/`copilot`/`aider`/`generic` slots, …). To avoid spawn-order
+---thrash where each agent's rewrite overwrites the previous agent's
+---personalized text, the block is rendered agent-neutrally: it lists
+---every peer of the same kind in a roster table and instructs each
+---reader to resolve its own identity from `$AUTO_AGENTS_MAILBOX_ID`.
+---That keeps the rendered content stable across same-kind spawns.
+---
 ---The block is bounded by `<!-- auto-agents:begin -->` /
 ---`<!-- auto-agents:end -->`. Re-running `ensure()` rewrites just the
 ---block — the user's surrounding content is preserved.
@@ -47,27 +56,93 @@ local INTERACTIVE_KINDS = {
   aider = true, goose = true, opencode = true,
 }
 
----Render the auto-agents block content for a slot.
+---Render the auto-agents block content for a kind. The block is
+---agent-neutral: it lists every configured peer of the same kind in a
+---roster table and tells each reader to resolve its own identity from
+---`$AUTO_AGENTS_MAILBOX_ID`. This keeps the rendered content stable
+---across same-kind spawns (otherwise every spawn would clobber the
+---previous one's personalized text).
 ---@param spec table  -- { kind, name, slot, kb_scope, model }
 ---@param kb_root string
 ---@return string
 local function render_block(spec, kb_root)
-  local scope = spec.kb_scope or "shared"
-  local agent_name = spec.name or ("agent" .. tostring(spec.slot or "?"))
-  local aa_state = (require("auto-agents").state or {}).config or {}
-  local kb_type = (aa_state.kb or {}).type or "general"
+  local aa_state  = (require("auto-agents").state or {}).config or {}
+  local kb_type   = (aa_state.kb or {}).type or "general"
+  local bootstrap = (aa_state.agents or {}).bootstrap or {}
+  local kind      = spec.kind or "?"
+  local filename  = M.filename_for(kind)
+
+  -- Collect every agent of this kind that shares this instruction file.
+  -- claude/gemini/junie/aider/goose/opencode each own a distinct
+  -- per-cwd filename (see filename_for); codex/copilot/generic share
+  -- AGENTS.md. The roster makes the multi-tenant nature of the file
+  -- explicit so each agent knows which row applies to it.
+  local peers = {}
+  for _, e in ipairs(bootstrap) do
+    if (e.kind or "?") == kind and e.name and e.name ~= ""
+       and e.configured ~= false then
+      peers[#peers + 1] = e
+    end
+  end
+  -- Defensive fallback: if the spawning agent isn't yet in bootstrap
+  -- for any reason, render its row alone rather than emit an empty
+  -- roster. Same-kind peers will be picked up on the next spawn.
+  if #peers == 0 and spec.name and spec.name ~= "" then
+    peers[#peers + 1] = spec
+  end
+  table.sort(peers, function(a, b) return (a.slot or 0) < (b.slot or 0) end)
+
   local lines = {
     BEGIN,
     "## auto-agents knowledge base",
     "",
     "This project uses [auto-agents.nvim](https://github.com/yongjohnlee80/auto-agents)",
-    "for multi-agent orchestration. The agent in slot " .. tostring(spec.slot or "?")
-      .. " (kind: " .. (spec.kind or "?") .. ", name: " .. agent_name .. ") has the",
-    "following knowledge-base configured:",
+    "for multi-agent orchestration.",
+    "",
+    "**This `" .. filename .. "` is shared by every `" .. kind .. "`-backed agent",
+    "in this project.** All agents of this kind auto-load the same file on",
+    "spawn, so the block below is rendered agent-neutrally. Resolve your",
+    "own identity at runtime from `$AUTO_AGENTS_MAILBOX_ID` (shape:",
+    "`agent:<your-name>:<instance>`) and look your row up in the roster.",
+    "",
+  }
+
+  local show_model = INTERACTIVE_KINDS[kind] and true or false
+  if #peers > 0 then
+    vim.list_extend(lines, {
+      "### Roster (agents sharing this file)",
+      "",
+    })
+    if show_model then
+      vim.list_extend(lines, {
+        "| Slot | Name | KB scope | Model |",
+        "|------|------|----------|-------|",
+      })
+      for _, p in ipairs(peers) do
+        local m = (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
+        local sc = p.kb_scope or "shared"
+        lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s |",
+          tostring(p.slot or "?"), p.name or "?", sc, m)
+      end
+    else
+      vim.list_extend(lines, {
+        "| Slot | Name | KB scope |",
+        "|------|------|----------|",
+      })
+      for _, p in ipairs(peers) do
+        local sc = p.kb_scope or "shared"
+        lines[#lines + 1] = string.format("| %s | `%s` | `%s` |",
+          tostring(p.slot or "?"), p.name or "?", sc)
+      end
+    end
+    lines[#lines + 1] = ""
+  end
+
+  vim.list_extend(lines, {
+    "### Project-level knowledge base",
     "",
     "- KB root:    `" .. kb_root .. "`  (`$AUTO_AGENTS_KB_ROOT`)",
     "- KB type:    `" .. kb_type .. "`",
-    "- KB scope:   `" .. scope .. "`",
     "- Read from:  `$AUTO_AGENTS_KB_READ`  (colon-separated)",
     "- Write to:   `$AUTO_AGENTS_KB_WRITE` (single directory)",
     "",
@@ -80,14 +155,15 @@ local function render_block(spec, kb_root)
     "",
     "Each KB type has its own contract — `coding`, `wiki`, `research`, `ops`,",
     "or `general`. The `AGENTS.md` at the KB root is authoritative for this",
-    "specific KB; this file (auto-injected at the agent's cwd) is a minimal",
+    "specific KB; this file (auto-injected at every agent's cwd) is a minimal",
     "pointer with the env vars and a one-line convention summary.",
     "",
     "### Quick conventions",
     "",
     "- **`raw/` is immutable.** Read it; never edit or delete its contents.",
     "- **Read before writing.** Consult `shared/` for durable conventions and",
-    "  your own `agents/" .. agent_name .. "/` for prior operational notes.",
+    "  your own `agents/<your-name>/` (resolved from `$AUTO_AGENTS_MAILBOX_ID`)",
+    "  for prior operational notes.",
     "- **Append, don't overwrite.** Use `[[wikilinks]]` to cross-reference.",
     "- **Audit trail.** Append a one-line entry to `log.md` after each",
     "  meaningful KB write (e.g. `## [2026-05-01 14:00] op | summary`).",
@@ -123,37 +199,33 @@ local function render_block(spec, kb_root)
     "  Both are live registries; results stay accurate as plugins and",
     "  agents come and go.",
     "",
-  }
+  })
 
-  if INTERACTIVE_KINDS[spec.kind] then
-    local current = (spec.model and spec.model ~= "") and ("`" .. spec.model .. "`")
-      or "(none — CLI default)"
-    local set_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel "
-      .. agent_name .. " <new-model>\")'"
-    local clear_cmd = "nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel "
-      .. agent_name .. " -\")'"
+  if show_model then
     vim.list_extend(lines, {
       "### Model preference",
       "",
-      "Your preferred model is " .. current .. ". This is persisted in",
-      "auto-agents' TOML config and passed to the CLI as `--model <id>` on",
-      "every spawn.",
+      "Each agent's persisted model is shown in the roster table above. The",
+      "CLI receives `--model <id>` on every spawn from the per-agent TOML",
+      "entry.",
       "",
-      "If the user asks you to switch models mid-session — switch first, then",
-      "ask: \"Should I persist this as your preferred model for me ("
-        .. agent_name .. ") going forward?\" If yes, write it to the config",
-      "yourself by running this in any shell tool you have:",
+      "If the user asks you to switch models mid-session — switch first,",
+      "then ask: \"Should I persist this as your preferred model for me",
+      "(<your-name>) going forward?\" Resolve `<your-name>` from",
+      "`$AUTO_AGENTS_MAILBOX_ID` (strip the `agent:` prefix and the",
+      "`:<instance>` suffix) and write it yourself via any shell tool",
+      "you have:",
       "",
-      "    " .. set_cmd,
+      "    nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel <your-name> <new-model>\")'",
       "",
       "Replace `<new-model>` with the model id (e.g. `claude-opus-4-7`).",
       "`$NVIM` is set automatically inside this terminal and points at the",
-      "parent nvim's socket — the command runs `:AutoAgentsModel " .. agent_name,
+      "parent nvim's socket — the command runs `:AutoAgentsModel <your-name>",
       "<new-model>` in that nvim, which updates the TOML and saves it.",
       "",
       "To clear the preference (back to CLI default):",
       "",
-      "    " .. clear_cmd,
+      "    nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel <your-name> -\")'",
       "",
       "The change takes effect on the **next** agent restart, not the current",
       "session. Tell the user to restart this slot when convenient.",
