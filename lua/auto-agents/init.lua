@@ -647,15 +647,30 @@ local function build_agent_env(spec, cwd)
       -- spawn rebuilds the argv from scratch — persistence isn't
       -- desirable here.
       local dirs = { rec.dir }
+      -- Grant the KB root (covers root-level files like AGENTS.md /
+      -- log.md / index.md and the conventional subdirs in one entry).
+      -- Per-scope read/write contracts remain encoded in
+      -- AUTO_AGENTS_KB_{READ,WRITE} env vars — agents self-restrain
+      -- via those (best-effort coordination; see kb/scope.lua).
+      -- --add-dir is purely about removing permission-prompt friction
+      -- for the surface the agent is expected to operate within.
+      local function covered(path)
+        for _, d in ipairs(dirs) do
+          if d == path then return true end
+          if path:sub(1, #d + 1) == d .. "/" then return true end
+        end
+        return false
+      end
+      if type(env.AUTO_AGENTS_KB_ROOT) == "string" and env.AUTO_AGENTS_KB_ROOT ~= "" then
+        dirs[#dirs + 1] = env.AUTO_AGENTS_KB_ROOT
+      end
       for path in tostring(env.AUTO_AGENTS_KB_READ or ""):gmatch("[^:]+") do
-        if path ~= "" then dirs[#dirs + 1] = path end
+        if path ~= "" and not covered(path) then dirs[#dirs + 1] = path end
       end
       if type(env.AUTO_AGENTS_KB_WRITE) == "string" and env.AUTO_AGENTS_KB_WRITE ~= "" then
-        local seen = false
-        for _, d in ipairs(dirs) do
-          if d == env.AUTO_AGENTS_KB_WRITE then seen = true; break end
+        if not covered(env.AUTO_AGENTS_KB_WRITE) then
+          dirs[#dirs + 1] = env.AUTO_AGENTS_KB_WRITE
         end
-        if not seen then dirs[#dirs + 1] = env.AUTO_AGENTS_KB_WRITE end
       end
 
       local perms = require("auto-agents.permissions")

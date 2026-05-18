@@ -2,6 +2,54 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.20] — 2026-05-18 — grant KB root in spawn-time `--add-dir`
+
+Patch the spawn-time permission injection so the per-agent
+`--add-dir` list includes `AUTO_AGENTS_KB_ROOT` in addition to the
+per-scope `KB_READ`/`KB_WRITE` sub-paths. Pre-patch only the
+subdirs were granted (`shared/` and `agents/` for the default
+`shared` scope), so every read of a root-level file —
+`AGENTS.md` (the canonical schema agents are explicitly told to
+read first), `log.md` (the audit trail every KB write appends
+to), `index.md`, or anything in `raw/` / `archive/` /
+`_templates/` — triggered a permission prompt and broke routine
+agent operation. Reported against `agent:juliet`, who couldn't
+perform basic reads without prompting.
+
+### Changed
+
+- `lua/auto-agents/init.lua` spawn pipeline (`spawn_agent_argv` /
+  the `dirs` assembly around the `permissions.argv_for_kind` call):
+  prepend `env.AUTO_AGENTS_KB_ROOT` to the `dirs` list before the
+  existing `KB_READ` / `KB_WRITE` enumeration. Added an ancestor-
+  aware `covered()` helper so sub-paths already contained by an
+  added directory are not re-listed — argv stays clean across all
+  three scopes (`shared`, `private`, `isolated`).
+
+### Rationale
+
+The per-scope KB contract was always best-effort agent self-
+restraint, not OS-level sandboxing — `kb/scope.lua:4-5` says so
+explicitly. The env vars `AUTO_AGENTS_KB_READ` /
+`AUTO_AGENTS_KB_WRITE` continue to tell each agent what it *should*
+touch (a `private` agent still won't write into `shared/` because
+its `KB_WRITE` points at `agents/<name>/`). `--add-dir` is purely
+a permission-prompt-noise mechanism — granting the root covers
+the canonical schema and audit-trail files every agent needs and
+removes friction without weakening any contract the env vars
+encode.
+
+### Behavior
+
+- Default `shared` scope agents (the dominant case on this
+  project): `--add-dir <kb-root>` replaces the redundant pair of
+  `--add-dir <kb-root>/shared` + `--add-dir <kb-root>/agents`,
+  since both are covered by the root.
+- `private` / `isolated` agents: `--add-dir <kb-root>` is added
+  alongside the existing per-agent sub-path entries that the
+  `covered()` helper now collapses where redundant.
+- Mailbox dir grant (`rec.dir`) is unchanged.
+
 ## [v0.2.19] — 2026-05-18 — diff_queue verdict routing back to mailbox originator
 
 Closes the response-path half of the diff-feedback-routing-to-
