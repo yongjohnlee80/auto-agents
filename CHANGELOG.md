@@ -2,6 +2,88 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.26] — 2026-05-18 — `diff_review`: direct per-agent gate via env var + sidecar field
+
+Closes a fragility gap in v0.2.25. The previous shape required each
+agent to look itself up in the per-kind instruction file's roster
+table by parsing its own `AUTO_AGENTS_MAILBOX_ID` — slow, error-
+prone, and a different shape from every other auto-agents per-agent
+signal (which all flow through env vars + the runtime-identity
+sidecar). Agents often skipped the row-lookup entirely and defaulted
+to "I'll just write to disk", silently breaking the diff-review UX.
+
+Now the gate is direct:
+
+    [ "$AUTO_AGENTS_DIFF_REVIEW" = "true" ] && follow_protocol
+
+Same shape as the rest of the auto-agents env contract (mailbox /
+KB / IDE integration). Stamped into the sidecar too so resumed
+agents (`claude --resume`, codex transcript restore, …) recover the
+live value via the same ADR 0023 path they already trust for
+identity.
+
+### Added
+
+- **Env var injection** in `lua/auto-agents/init.lua::build_agent_env`
+  — when `spec.diff_review == true`, the spawn env gets
+  `AUTO_AGENTS_DIFF_REVIEW = "true"`. Omitted entirely when off
+  (absent == false, matching the rest of the env contract). Layered
+  on top of the existing `AUTO_AGENTS_IDE_INTEGRATION` /
+  `AUTO_AGENTS_MCP_*` injection so today's claude bridge still works.
+- **Sidecar field** in `lua/auto-agents/runtime_identity.lua` —
+  `build_record` gains a 7th `diff_review` parameter and stamps a
+  top-level `diff_review` boolean into the JSON record. `false` when
+  unset / nil so the field is always present (downstream JSON
+  consumers don't have to special-case absence).
+- **Refresh-path threading** in
+  `lua/auto-agents/mailbox/commands.lua::handle_refresh_agent_id` —
+  the matched spec is resolved up front and its `diff_review` flag
+  passed through to `build_record`. The response value carries
+  `diff_review` so a resumed agent can re-acquire it from the
+  refresh response without re-reading the sidecar.
+
+### Changed
+
+- **Preamble in `lua/auto-agents/kb/instruct.lua`** — the
+  "Interactive diff review" section now opens with the env var
+  check (`[ "$AUTO_AGENTS_DIFF_REVIEW" = "true" ]`) and the sidecar
+  fallback for resumed sessions. The old "look up your row in the
+  roster" wording is gone. The roster `diff_review` column stays as
+  a project-wide visual summary.
+- **Shipped doc `instructions/diff-queue-workflow.md`** — same
+  reframe: authoritative gate is the env var (with sidecar fallback
+  for resumed sessions); roster is purely informational.
+- **`docs/help/agent.md`** — `diff_review` section gains a per-agent
+  gate table documenting the env var + sidecar channels.
+
+### Tests
+
+- **`tests/instruct_diff_review_spec.lua`** — extended:
+  - Existing [1]/[2]/[3] sections updated with three new assertions
+    each: preamble references `$AUTO_AGENTS_DIFF_REVIEW`, references
+    `$AUTO_AGENTS_RUNTIME_IDENTITY_PATH` for resume, and no longer
+    asks the agent to "look up your own row".
+  - New [4] section: `runtime_identity.build_record` round-trip.
+    Verifies `diff_review=true/false/nil` produces the right field
+    value, and that the field survives JSON encode/decode through
+    `ri.write` + `ri.read`.
+- All 24 assertions green. Pre-existing diff specs (queue, verdict
+  routing, mailbox sender, peer identity) still green — 78 total.
+
+### Upgrade
+
+Soft within `^0.2.0`. The new env var + sidecar field are additive;
+existing claude flow is unchanged. To validate end-to-end:
+
+1. Restart any non-claude slot with `diff_review = true`.
+2. Inside that slot's terminal: `echo $AUTO_AGENTS_DIFF_REVIEW`
+   should print `true`. `cat $AUTO_AGENTS_RUNTIME_IDENTITY_PATH |
+   jq .diff_review` should also print `true`.
+3. Ask the agent to propose a file edit. The reframed instruction
+   section in its `AGENTS.md` / `GEMINI.md` / etc. gates explicitly
+   on the env var, so the agent no longer has to parse the roster
+   to know the protocol applies.
+
 ## [v0.2.25] — 2026-05-18 — non-claude `diff_review`: mailbox `diff_queue` protocol injection
 
 Extends the per-agent `diff_review` flag to non-claude kinds. Until

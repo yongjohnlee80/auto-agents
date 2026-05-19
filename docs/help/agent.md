@@ -352,10 +352,10 @@ aider, goose, opencode, generic) routes through the mailbox
   `openDiff` tool routes diffs through the bridge directly — no
   protocol awareness needed on the agent side.
 
-- **non-claude + `diff_review = true`** *(v0.2.25)* — including
-  codex, gemini, junie, aider, goose, opencode, and generic. Host
-  inlines the **mailbox `diff_queue` protocol** into the per-kind
-  instruction file (`AGENTS.md` / `GEMINI.md` /
+- **non-claude + `diff_review = true`** *(v0.2.25, refined v0.2.26)*
+  — including codex, gemini, junie, aider, goose, opencode, and
+  generic. Host inlines the **mailbox `diff_queue` protocol** into
+  the per-kind instruction file (`AGENTS.md` / `GEMINI.md` /
   `.junie/guidelines.md` / `.goosehints`) via
   `lua/auto-agents/kb/instruct.lua`. Content is loaded verbatim from
   `instructions/diff-queue-workflow.md` shipped with the plugin. The
@@ -366,6 +366,21 @@ aider, goose, opencode, generic) routes through the mailbox
   agents stay current. The MCP env vars are still injected for
   forward compatibility (some kinds may gain native MCP `openDiff`
   later), but they are not currently relied upon.
+
+  **Per-agent gate (v0.2.26).** The shared per-kind instruction file
+  lists every same-kind peer in a roster table, so the gate cannot
+  be the markdown alone. Two direct, unambiguous signals carry the
+  per-agent value:
+
+  | Channel                                                    | When                                                                                                            |
+  | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+  | `$AUTO_AGENTS_DIFF_REVIEW` env var                         | Set to `"true"` at spawn when `spec.diff_review == true`; omitted otherwise. Frozen at fork.                    |
+  | `diff_review` field in `$AUTO_AGENTS_RUNTIME_IDENTITY_PATH` | Stamped into the sidecar JSON by `runtime_identity.build_record`. Refreshed on every `refresh_agent_id` call. |
+
+  Agents are instructed to check the env var first, fall back to the
+  sidecar field for resumed sessions where env is stale (ADR 0023).
+  Sidecar wins on disagreement. The roster `diff_review` column
+  becomes purely a project-wide visual summary for the user.
 
 - **`diff_review = false`** (any kind) — no env injection, no
   protocol inlining. Claude falls back to its built-in TUI confirm

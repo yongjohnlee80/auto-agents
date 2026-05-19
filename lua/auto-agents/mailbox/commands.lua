@@ -478,23 +478,25 @@ local function handle_refresh_agent_id(args, _ctx)
     return out
   end
 
-  -- Resolve the slot's agent record so we can build the sidecar.
-  local matched_agent_name
+  -- Resolve the slot's bootstrap spec so we can build the sidecar
+  -- (need the agent name + the per-agent diff_review flag, v0.2.26).
+  local matched_spec
   local agents_cfg = aa.state.config and aa.state.config.agents
                        and aa.state.config.agents.bootstrap or {}
   for _, a in ipairs(agents_cfg) do
     if tonumber(a.slot) == matched_slot then
-      matched_agent_name = a.name
+      matched_spec = a
       break
     end
   end
-  if not matched_agent_name then
+  if not matched_spec or not matched_spec.name then
     return err("slot_without_agent_name",
       "Found PID " .. actor_pid .. " on slot " .. matched_slot
         .. " but the slot has no registered agent name. "
         .. "This usually means the slot config was edited mid-session — "
         .. "re-run :AutoAgentsSetup or restart the slot.")
   end
+  local matched_agent_name = matched_spec.name
 
   -- Build + write the sidecar identity record.
   local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
@@ -510,7 +512,8 @@ local function handle_refresh_agent_id(args, _ctx)
   local tool_root = core.mailbox.host_fallback_root()  -- approximation; agent's tool root may differ
   local record = ri.build_record(
     matched_slot, matched_agent_name, tool_root, nil,
-    "auto-agents.refresh_agent_id", actor_pid)
+    "auto-agents.refresh_agent_id", actor_pid,
+    matched_spec.diff_review)
   local path = ri.path_for(matched_slot)
   local wok, werr = ri.write(path, record)
   if not wok then
@@ -525,26 +528,17 @@ local function handle_refresh_agent_id(args, _ctx)
   -- when nothing changed. Soft-fail; identity reconciliation itself
   -- already succeeded.
   do
-    local matched_spec
-    for _, a in ipairs(agents_cfg) do
-      if tonumber(a.slot) == matched_slot then
-        matched_spec = a
-        break
-      end
-    end
-    if matched_spec then
-      local kb_ok, kb = pcall(require, "auto-agents.kb")
-      local instr_ok, instr = pcall(require, "auto-agents.kb.instruct")
-      if kb_ok and instr_ok then
-        local kb_root = kb.root()
-        local cwd = matched_spec.cwd
-                    or (aa.state and (aa.state.session_project_root
-                                       or aa.state.session_cwd))
-        local ok_e, err_e = pcall(instr.ensure, matched_spec, kb_root, cwd)
-        if not ok_e then
-          require("auto-agents.log").warn("refresh_agent_id",
-            "kb.instruct.ensure failed on resume: " .. tostring(err_e))
-        end
+    local kb_ok, kb = pcall(require, "auto-agents.kb")
+    local instr_ok, instr = pcall(require, "auto-agents.kb.instruct")
+    if kb_ok and instr_ok then
+      local kb_root = kb.root()
+      local cwd = matched_spec.cwd
+                  or (aa.state and (aa.state.session_project_root
+                                     or aa.state.session_cwd))
+      local ok_e, err_e = pcall(instr.ensure, matched_spec, kb_root, cwd)
+      if not ok_e then
+        require("auto-agents.log").warn("refresh_agent_id",
+          "kb.instruct.ensure failed on resume: " .. tostring(err_e))
       end
     end
   end
@@ -565,6 +559,7 @@ local function handle_refresh_agent_id(args, _ctx)
       mailbox_bootstrap_doc = record.mailbox_bootstrap_doc,
       slot                  = record.slot,
       agent_name            = record.agent_name,
+      diff_review           = record.diff_review,
       stamped_at            = record.stamped_at,
       stamped_by            = record.stamped_by,
     },

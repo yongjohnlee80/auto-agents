@@ -48,9 +48,12 @@ end
 ---@param mailbox_dir string?     -- the agent's mailbox dir on disk; resolved if nil
 ---@param stamped_by string       -- "auto-agents.spawn" | "auto-agents.refresh_agent_id" | …
 ---@param agent_pid integer?
+---@param diff_review boolean?    -- v0.2.26: per-agent diff_review flag — direct
+---                                --   gate for the mailbox `diff_queue` protocol.
+---                                --   Survives env-clobber via the sidecar.
 ---@return table
 function M.build_record(slot, agent_name, tool_root, mailbox_dir,
-                        stamped_by, agent_pid)
+                        stamped_by, agent_pid, diff_review)
   local core = require("auto-core")
   local mb_path = require("auto-core.mailbox.path")
   local instance_id = core.mailbox.get_instance_id()
@@ -67,6 +70,7 @@ function M.build_record(slot, agent_name, tool_root, mailbox_dir,
     agent_pid             = agent_pid,
     slot                  = slot,
     agent_name            = agent_name,
+    diff_review           = diff_review == true,
     stamped_at            = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     stamped_by            = stamped_by,
   }

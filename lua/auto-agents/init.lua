@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.25"
+M.version = "0.2.26"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -560,18 +560,27 @@ local function build_agent_env(spec, cwd)
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
   for k, v in pairs(resources_env) do env[k] = v end
 
+  -- v0.2.26: per-agent diff_review gate. Direct, unambiguous signal
+  -- the agent can self-check via `[ "$AUTO_AGENTS_DIFF_REVIEW" = "true" ]`
+  -- without parsing the AGENTS.md/CLAUDE.md roster or its own mailbox
+  -- ID. Set to "true" when opted-in; omitted entirely when off (absent
+  -- == false, matching the rest of auto-agents' env contract).
+  if spec.diff_review then
+    env.AUTO_AGENTS_DIFF_REVIEW = "true"
+  end
+
   -- M6 diff-review bridge: opted-in agents get the env vars needed
   -- to find + authenticate to our internal MCP bridge.
   -- Finding 1: use agent-generic env vars + Claude compatibility.
   if spec.diff_review and M.state.diff_review_port then
     local port_str = tostring(M.state.diff_review_port)
     local url = "http://127.0.0.1:" .. port_str .. "/mcp"
-    
+
     -- Generic contract
     env.AUTO_AGENTS_IDE_INTEGRATION = "true"
     env.AUTO_AGENTS_MCP_PORT         = port_str
     env.AUTO_AGENTS_MCP_URL          = url
-    
+
     -- Claude compatibility layer (Legacy SSE)
     env.ENABLE_IDE_INTEGRATION  = "true"
     env.FORCE_CODE_TERMINAL     = "true"
@@ -626,7 +635,7 @@ local function build_agent_env(spec, cwd)
         if ri_ok then
           local record = ri.build_record(
             spec.slot, spec.name, rec.root, rec.dir,
-            "auto-agents.spawn", nil)
+            "auto-agents.spawn", nil, spec.diff_review)
           local sidecar_path = ri.path_for(spec.slot)
           local wok, werr = ri.write(sidecar_path, record)
           if wok then

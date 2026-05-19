@@ -21,13 +21,28 @@ your diffs through the bridge. The mailbox `diff_queue` lifecycle below
 is for non-claude kinds (codex / gemini / junie / aider / goose /
 opencode / generic) that have no equivalent native integration.
 
-**For non-claude kinds:** when your roster row in the per-kind
-instruction file shows `diff_review = ✓` (the column directly above
-this section), the user has opted your slot into in-editor diff
-review. That means you must NOT write proposed edits to disk
-directly. Instead, every file change goes through the mailbox
-`diff_queue` lifecycle below: enqueue a unified diff, wait for the
-user's verdict in the diff panel, then apply on `accepted`.
+**Authoritative gate for non-claude kinds (v0.2.26):** check your
+env. The protocol below applies to you if and only if:
+
+    [ "$AUTO_AGENTS_DIFF_REVIEW" = "true" ]
+
+If the variable is absent or has any other value, you have direct
+disk-write authority and may skip the rest of this section. If it is
+`true`, you MUST NOT write proposed edits to disk directly — every
+file change goes through the lifecycle below: enqueue a unified
+diff, wait for the user's verdict in the diff panel, then apply on
+`accepted`.
+
+**Resumed sessions** (env vars frozen at fork — `claude --resume`,
+codex transcript restore, …): read the live value from your sidecar
+at `$AUTO_AGENTS_RUNTIME_IDENTITY_PATH` instead. The JSON record has
+a top-level `diff_review` boolean refreshed on every
+`refresh_agent_id` call. Sidecar always wins over env when the two
+disagree.
+
+(The `diff_review` column in the roster above is a project-wide
+visual summary for the user — your own env / sidecar value is the
+authoritative gate for you.)
 
 #### "Safety-First" lifecycle
 
