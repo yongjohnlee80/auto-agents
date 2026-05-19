@@ -2,6 +2,90 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.25] — 2026-05-18 — non-claude `diff_review`: mailbox `diff_queue` protocol injection
+
+Extends the per-agent `diff_review` flag to non-claude kinds. Until
+now, `diff_review = true` only had teeth for claude — it provisioned
+a per-slot ws-mcp bridge so the native `openDiff` tool routed into
+the unified diff queue. For codex / gemini / junie / aider / goose /
+opencode / generic the flag was a no-op: those agents had no
+protocol awareness, so they'd write proposed edits straight to disk.
+
+This patch closes that gap by inlining a canonical, plugin-shipped
+protocol document into each non-claude agent's per-kind instruction
+file at spawn (and on every `refresh_agent_id` call). The agent
+reads the protocol once on startup and then, for every proposed
+edit, follows the Draft → Verify → Enqueue → Wait → Apply lifecycle
+— landing the diff in the same Unified Diff Queue
+(`:AutoAgentsDiffQueue`) that claude reaches via ws-mcp.
+
+### Added
+
+- **`instructions/diff-queue-workflow.md`** — canonical, plugin-owned
+  copy of the mailbox `diff_queue` protocol. Headings start at `####`
+  so the content inlines cleanly beneath the `### Interactive diff
+  review` section header rendered by `lua/auto-agents/kb/instruct.lua`.
+  Includes the "Safety-First" lifecycle, common pitfalls (writing
+  before enqueue, relative paths, missing `new_file_contents`), and
+  an example payload. Opens with an explicit "claude agents: skip
+  this section" preamble so the doc is robust even if it ever
+  surfaces to a claude reader.
+- **`lua/auto-agents/kb/instruct.lua`** — new `plugin_root()` and
+  `read_diff_queue_protocol()` helpers. When at least one peer in
+  the same-kind roster has `diff_review = true`, the roster table
+  gains a `diff_review` column (`✓` / `–`) so every agent can look
+  up its own setting. When the kind is non-claude AND any peer is
+  opted-in, an `### Interactive diff review` section is appended to
+  the auto-agents block, with framing that explicitly links the
+  protocol to the `diff_review = true` flag, then inlines the shipped
+  markdown verbatim.
+- **`lua/auto-agents/mailbox/commands.lua::handle_refresh_agent_id`**
+  — after a successful sidecar identity write, re-renders the
+  resumed agent's per-kind instruction file via `kb.instruct.ensure`
+  so the protocol section reflects current roster / flag state.
+  Soft-fails: identity reconciliation itself already succeeded,
+  this is a best-effort refresh.
+- **`lua/auto-agents/init.lua::_build_reassert_body`** — appends a
+  line to the ADR 0024 §2.2 picker prompt reminding the resumed
+  agent to re-read the *Interactive diff review* section when its
+  kind is non-claude and its row shows `diff_review = ✓`.
+
+### Changed
+
+- **`lua/auto-agents/panel/wizard_specs.lua`** — `diff_review`
+  wizard comment updated to document the kind-dispatched dispatch
+  (claude → ws-mcp bridge; non-claude → mailbox protocol injection).
+  The default-true set stays conservative (claude + codex only) —
+  opt in explicitly for other kinds via the wizard.
+- **`docs/help/agent.md`** — `diff_review` section rewritten with
+  both dispatch paths, explicit note that only Claude Code is proven
+  to honor ws-mcp `openDiff` end-to-end today, and a pointer to
+  `instructions/diff-queue-workflow.md` for the shipped protocol.
+
+### Tests
+
+- **`tests/instruct_diff_review_spec.lua`** — covers the three new
+  injection states: (a) `kind = codex` with a `diff_review = true`
+  peer → section + roster column rendered; (b) `kind = claude` with
+  a `diff_review = true` peer → roster column rendered but section
+  omitted (claude routes via ws-mcp); (c) all peers
+  `diff_review = false` → neither column nor section rendered.
+
+### Upgrade
+
+Soft. Within `^0.2.0`, autovim picks this up automatically. To put
+it through its paces:
+
+1. Pick a non-claude slot in `:AutoAgentsAdmin` and set
+   `diff_review = true` on it (or run `agent edit <slot>` via the
+   wizard).
+2. Restart that slot. On spawn, the agent's per-kind instruction
+   file (e.g. `AGENTS.md` for codex) will pick up the new
+   `### Interactive diff review` section.
+3. Ask the agent to propose a file change. It should send a
+   `diff_queue` command to `nvim` instead of writing the file
+   directly, then idle pending the `accepted` verdict.
+
 ## [v0.2.24] — 2026-05-18 — new KB type: `library` (content-addressed document archive)
 
 Adds a sixth built-in KB type alongside `coding` / `wiki` / `research`

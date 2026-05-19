@@ -518,6 +518,37 @@ local function handle_refresh_agent_id(args, _ctx)
       "Failed to atomic-write sidecar identity file at " .. path .. ": " .. tostring(werr))
   end
 
+  -- v0.2.25: re-render the per-kind instruction file (CLAUDE.md /
+  -- AGENTS.md / GEMINI.md / …) so the resumed agent sees the current
+  -- diff_review state and any other roster/protocol changes the
+  -- moment it re-reads its on-disk instructions. Idempotent — a no-op
+  -- when nothing changed. Soft-fail; identity reconciliation itself
+  -- already succeeded.
+  do
+    local matched_spec
+    for _, a in ipairs(agents_cfg) do
+      if tonumber(a.slot) == matched_slot then
+        matched_spec = a
+        break
+      end
+    end
+    if matched_spec then
+      local kb_ok, kb = pcall(require, "auto-agents.kb")
+      local instr_ok, instr = pcall(require, "auto-agents.kb.instruct")
+      if kb_ok and instr_ok then
+        local kb_root = kb.root()
+        local cwd = matched_spec.cwd
+                    or (aa.state and (aa.state.session_project_root
+                                       or aa.state.session_cwd))
+        local ok_e, err_e = pcall(instr.ensure, matched_spec, kb_root, cwd)
+        if not ok_e then
+          require("auto-agents.log").warn("refresh_agent_id",
+            "kb.instruct.ensure failed on resume: " .. tostring(err_e))
+        end
+      end
+    end
+  end
+
   return {
     ok = true,
     value = {

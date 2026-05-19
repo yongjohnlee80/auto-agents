@@ -335,27 +335,51 @@ durable, status pings are not.
 ## diff_review (in-editor diff splits for proposed edits)
 
 Per-agent boolean. The wizard asks **"Show diff views from this agent
-in your editor?"** on add/edit (default y for `kind = "claude"`,
-N for the rest).
+in your editor?"** on add/edit (default y for `kind ∈ { claude, codex }`,
+N for the rest — opt in explicitly for other kinds).
 
-- **`diff_review = true`** — when this agent proposes a file edit,
-  it lands in the **Unified Diff Queue** (`:AutoAgentsDiffQueue`).
-  Opening an item from the queue opens a native diff split in your
-  editor (left current, right proposed). You can edit the proposed
-  side manually before accepting; `:w` on the proposed buffer
-  accepts and writes the file, closing the diff rejects.
-  Implemented by injecting `AUTO_AGENTS_IDE_INTEGRATION=true`,
-  `AUTO_AGENTS_MCP_PORT=<port>`, and `AUTO_AGENTS_MCP_URL=<url>`
-  at spawn so the agent's `openDiff` tool routes to our internal MCP
-  bridge (SSE over HTTP). Claude Code agents also receive legacy
-  `CLAUDE_CODE_SSE_PORT` for compatibility.
+Behavior is **kind-dispatched** — both paths land in the same
+Unified Diff Queue (`:AutoAgentsDiffQueue`), but the wire differs.
+**Today only Claude Code is proven to honor the ws-mcp `openDiff`
+path end-to-end**; every other CLI surface (codex, gemini, junie,
+aider, goose, opencode, generic) routes through the mailbox
+`diff_queue` protocol instead.
 
-- **`diff_review = false`** — no MCP env injection. Claude Code CLI
-  falls back to its built-in TUI confirm prompt **inside that agent's
-  own terminal** — useful for sub-agents whose every edit you don't
+- **`claude` + `diff_review = true`** — host boots a per-slot ws-mcp
+  bridge (ADR 0011) and injects `AUTO_AGENTS_IDE_INTEGRATION=true`,
+  `AUTO_AGENTS_MCP_PORT=<port>`, `AUTO_AGENTS_MCP_URL=<url>` plus
+  legacy `CLAUDE_CODE_SSE_PORT` at spawn. The agent's native
+  `openDiff` tool routes diffs through the bridge directly — no
+  protocol awareness needed on the agent side.
+
+- **non-claude + `diff_review = true`** *(v0.2.25)* — including
+  codex, gemini, junie, aider, goose, opencode, and generic. Host
+  inlines the **mailbox `diff_queue` protocol** into the per-kind
+  instruction file (`AGENTS.md` / `GEMINI.md` /
+  `.junie/guidelines.md` / `.goosehints`) via
+  `lua/auto-agents/kb/instruct.lua`. Content is loaded verbatim from
+  `instructions/diff-queue-workflow.md` shipped with the plugin. The
+  agent reads the protocol on spawn, then for every proposed edit:
+  drafts internally → verifies disk state → enqueues via the
+  `diff_queue` mailbox command → waits for an `accepted` verdict →
+  applies. Re-rendered on every `refresh_agent_id` call so resumed
+  agents stay current. The MCP env vars are still injected for
+  forward compatibility (some kinds may gain native MCP `openDiff`
+  later), but they are not currently relied upon.
+
+- **`diff_review = false`** (any kind) — no env injection, no
+  protocol inlining. Claude falls back to its built-in TUI confirm
+  prompt inside that agent's terminal; non-claude kinds write to
+  disk directly. Useful for sub-agents whose every edit you don't
   want popping at you alongside your main coding agent's.
 
-Typical setup: one main coding agent (jarvis in slot 1) has
+Opt-in is **per-agent**: the per-kind instruction file is shared by
+every same-kind agent in the project, so when at least one peer has
+`diff_review = true`, a `diff_review` column appears in the roster
+table and each agent looks up its own row to decide whether the
+"Interactive diff review" section applies to it.
+
+Typical setup: one main coding agent in slot 1 has
 `diff_review = true`; workers in other slots have it `false` so their
 edits stay scoped to their own terminals. To watch a sub-agent's
 proposed edits, focus its slot.

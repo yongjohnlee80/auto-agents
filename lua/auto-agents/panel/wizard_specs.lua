@@ -228,12 +228,22 @@ function M.agent(mode, slot)
       end,
     },
     {
-      -- diff_review (internal MCP bridge). When y, the agent gets
-      -- CLAUDE_CODE_SSE_PORT at spawn so the agent's openDiff
-      -- tool routes to a diff split in your editor for review/edit/
-      -- accept. When N, the agent falls back to its TUI confirm
-      -- prompt — useful for sub-agents whose diffs you don't want
-      -- popping at you alongside your main coding agent's.
+      -- diff_review — opt this slot into in-editor review of every
+      -- proposed file edit. Behavior is kind-dispatched:
+      --   * claude  → boot a per-slot ws-mcp bridge and inject
+      --               AUTO_AGENTS_IDE_INTEGRATION + CLAUDE_CODE_SSE_PORT
+      --               so the native `openDiff` tool routes here.
+      --               Only claude has native MCP `openDiff` support.
+      --   * other   → (codex / gemini / junie / aider / goose /
+      --               opencode / generic) — inject the mailbox
+      --               `diff_queue` protocol into the per-kind
+      --               instruction file via kb/instruct.lua, so the
+      --               agent enqueues a unified diff and waits for the
+      --               user's verdict before writing to disk.
+      -- When N, the agent falls back to its TUI confirm prompt
+      -- (claude) or direct disk writes (non-claude) — useful for
+      -- sub-agents whose diffs you don't want popping at you
+      -- alongside your main coding agent's.
       field = "diff_review",
       prompt = "Show diff views from this agent in your editor?",
       choices = { "y", "N" },
@@ -241,7 +251,11 @@ function M.agent(mode, slot)
         if existing and existing.diff_review ~= nil then
           return existing.diff_review and "y" or "N"
         end
-        -- Default y for agents with a working MCP consumption path
+        -- Default y only for the original native-bridge consumers
+        -- (claude, codex). Non-claude kinds also support diff_review
+        -- now via the mailbox `diff_queue` protocol (kb/instruct.lua
+        -- injection), but we keep the default conservative — opt in
+        -- per-slot via the wizard rather than silently broadening.
         local coding_kinds = { claude = true, codex = true }
         return coding_kinds[values.kind] and "y" or "N"
       end,

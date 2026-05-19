@@ -31,6 +31,52 @@ local M = {}
 local BEGIN = "<!-- auto-agents:begin -->"
 local END   = "<!-- auto-agents:end -->"
 
+---Resolve the auto-agents.nvim install root (the directory containing
+---`lua/`, `instructions/`, `kb-seeds/`, etc.). Used to locate
+---plugin-shipped markdown assets such as the diff-queue protocol.
+---@return string|nil
+local function plugin_root()
+  local src = debug.getinfo(1, "S").source
+  if type(src) ~= "string" or src:sub(1, 1) ~= "@" then return nil end
+  local file = src:sub(2)
+  -- this file lives at <root>/lua/auto-agents/kb/instruct.lua → strip 4 segments
+  local root = file:match("^(.*)/lua/auto%-agents/kb/instruct%.lua$")
+  return root
+end
+
+---Read the plugin-shipped diff-queue protocol markdown verbatim.
+---Cached per Lua module load so repeated spawns are cheap.
+---@return string|nil
+local diff_queue_protocol_cache
+local function read_diff_queue_protocol()
+  if diff_queue_protocol_cache ~= nil then
+    return diff_queue_protocol_cache ~= "" and diff_queue_protocol_cache or nil
+  end
+  local root = plugin_root()
+  if not root then
+    diff_queue_protocol_cache = ""
+    return nil
+  end
+  local path = root .. "/instructions/diff-queue-workflow.md"
+  local f = io.open(path, "r")
+  if not f then
+    diff_queue_protocol_cache = ""
+    return nil
+  end
+  local content = f:read("*a") or ""
+  f:close()
+  -- Strip the leading HTML comment block (provenance / heading-level note).
+  -- The block is bounded by `<!--` … `-->` at the very start of the file.
+  if content:sub(1, 4) == "<!--" then
+    local close = content:find("-->", 5, true)
+    if close then
+      content = content:sub(close + 3):gsub("^%s+", "")
+    end
+  end
+  diff_queue_protocol_cache = content
+  return content ~= "" and content or nil
+end
+
 ---Map an agent kind to the filename it auto-loads at its cwd. Some
 ---kinds (junie) use a multi-segment path; the writer mkdirs the parent
 ---before writing.
@@ -107,13 +153,39 @@ local function render_block(spec, kb_root)
     "",
   }
 
+  -- Compute interactive-diff state across the same-kind roster:
+  --   * any_diff_review → at least one peer has `diff_review = true`
+  --       (adds the diff_review column to the roster table for clarity)
+  --   * inject_diff_protocol → kind is non-claude AND any peer is opted-in
+  --       (claude uses native ws-mcp openDiff; only non-claude kinds need
+  --       the mailbox `diff_queue` protocol inlined)
+  local any_diff_review = false
+  for _, p in ipairs(peers) do
+    if p.diff_review == true then any_diff_review = true; break end
+  end
+  local inject_diff_protocol = any_diff_review and kind ~= "claude"
+
   local show_model = INTERACTIVE_KINDS[kind] and true or false
   if #peers > 0 then
     vim.list_extend(lines, {
       "### Roster (agents sharing this file)",
       "",
     })
-    if show_model then
+    local function dr_cell(p)
+      return p.diff_review == true and "✓" or "–"
+    end
+    if show_model and any_diff_review then
+      vim.list_extend(lines, {
+        "| Slot | Name | KB scope | Model | diff_review |",
+        "|------|------|----------|-------|-------------|",
+      })
+      for _, p in ipairs(peers) do
+        local m = (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
+        local sc = p.kb_scope or "shared"
+        lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s | %s |",
+          tostring(p.slot or "?"), p.name or "?", sc, m, dr_cell(p))
+      end
+    elseif show_model then
       vim.list_extend(lines, {
         "| Slot | Name | KB scope | Model |",
         "|------|------|----------|-------|",
@@ -123,6 +195,16 @@ local function render_block(spec, kb_root)
         local sc = p.kb_scope or "shared"
         lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s |",
           tostring(p.slot or "?"), p.name or "?", sc, m)
+      end
+    elseif any_diff_review then
+      vim.list_extend(lines, {
+        "| Slot | Name | KB scope | diff_review |",
+        "|------|------|----------|-------------|",
+      })
+      for _, p in ipairs(peers) do
+        local sc = p.kb_scope or "shared"
+        lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s |",
+          tostring(p.slot or "?"), p.name or "?", sc, dr_cell(p))
       end
     else
       vim.list_extend(lines, {
@@ -200,6 +282,45 @@ local function render_block(spec, kb_root)
     "  agents come and go.",
     "",
   })
+
+  -- Interactive diff review (mailbox `diff_queue` protocol). Injected
+  -- only for non-claude kinds where at least one peer has
+  -- `diff_review = true`. Claude uses the native ws-mcp `openDiff`
+  -- path via its per-slot MCP bridge (ADR 0011); the protocol below
+  -- is the agent-generic fallback. Content is loaded verbatim from
+  -- the plugin-shipped `instructions/diff-queue-workflow.md`.
+  if inject_diff_protocol then
+    local body = read_diff_queue_protocol()
+    if body then
+      vim.list_extend(lines, {
+        "### Interactive diff review (`diff_review = true`)",
+        "",
+        "**When this applies to you:** look up your own row in the",
+        "roster above (resolve your name from `$AUTO_AGENTS_MAILBOX_ID`",
+        "— strip the `agent:` prefix and `:<instance>` suffix). If the",
+        "**`diff_review`** column for your row is `✓`, follow the",
+        "protocol below for EVERY proposed file edit. If it is `–`, you",
+        "have direct disk-write authority and may skip this section.",
+        "",
+        "**What it means:** `diff_review = true` is a per-agent TOML",
+        "flag that opts your slot into in-editor review of proposed",
+        "edits. Instead of writing to disk yourself, you submit each",
+        "change to the host's unified diff queue via the mailbox",
+        "`diff_queue` command; the user accepts or rejects in the diff",
+        "panel; only on `accepted` do you write to disk.",
+        "",
+      })
+      for line in (body .. "\n"):gmatch("([^\n]*)\n") do
+        lines[#lines + 1] = line
+      end
+      -- Trim any trailing empty rows from the inlined markdown so the
+      -- next section's spacing stays consistent.
+      while #lines > 0 and lines[#lines] == "" do
+        lines[#lines] = nil
+      end
+      lines[#lines + 1] = ""
+    end
+  end
 
   if show_model then
     vim.list_extend(lines, {

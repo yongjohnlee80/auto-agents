@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.24"
+M.version = "0.2.25"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -1329,6 +1329,14 @@ local function _build_reassert_body(entry)
     "call the `refresh_agent_id` mailbox command (ADR 0023 §3.2) with",
     "your current process PID as `actor_pid`. Adopt the returned",
     "sidecar identity as authoritative, then acknowledge here.",
+    "",
+    "If your kind is NOT `claude` AND your roster row in your per-kind",
+    "instruction file (AGENTS.md / GEMINI.md / .junie/guidelines.md /",
+    ".goosehints) shows `diff_review = ✓`, also re-read the",
+    "**Interactive diff review** section in that file before proposing",
+    "any further edits — the host re-renders the file on every",
+    "refresh_agent_id call, so the protocol you load now is the current",
+    "one.",
   })
   return table.concat(lines, "\n")
 end
