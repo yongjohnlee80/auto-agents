@@ -268,6 +268,19 @@ local admin = require("auto-agents.panel.admin")
 local _, top_cands = admin._complete_at("", 0)
 ok("complete_at empty prompt offers 'slot'",
   vim.tbl_contains(top_cands, "slot"))
+-- Regression: `project` and `term` are real dispatch verbs but were
+-- missing from the top-level completion list, so `pro<Tab>` / `te<Tab>`
+-- offered nothing from the empty prompt.
+ok("complete_at empty prompt offers 'project'",
+  vim.tbl_contains(top_cands, "project"))
+ok("complete_at empty prompt offers 'term'",
+  vim.tbl_contains(top_cands, "term"))
+local _, project_cands = admin._complete_at("project ", 8)
+ok("complete_at 'project ' offers 'init'", vim.tbl_contains(project_cands, "init"))
+ok("complete_at 'project ' offers 'import'", vim.tbl_contains(project_cands, "import"))
+ok("complete_at 'project ' offers 'remove'", vim.tbl_contains(project_cands, "remove"))
+ok("complete_at 'project ' offers 'list'", vim.tbl_contains(project_cands, "list"))
+ok("complete_at 'project ' offers 'show'", vim.tbl_contains(project_cands, "show"))
 local _, slot_cands = admin._complete_at("slot ", 5)
 ok("complete_at 'slot ' offers 'add'", vim.tbl_contains(slot_cands, "add"))
 ok("complete_at 'slot ' offers 'remove'", vim.tbl_contains(slot_cands, "remove"))

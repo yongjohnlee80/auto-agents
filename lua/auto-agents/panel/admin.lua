@@ -955,7 +955,7 @@ local function complete_at(prompt, cursor_col)
 
   local candidates
   if #prev_toks == 0 then
-    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "config", "panel", "slot", "clear", "quit" }
+    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "project", "config", "panel", "slot", "term", "clear", "quit" }
   elseif #prev_toks == 1 and prev_toks[1] == "panel" then
     candidates = { "resize", "reset", "show" }
   elseif #prev_toks == 2 and prev_toks[1] == "panel" and prev_toks[2] == "resize" then
