@@ -1146,6 +1146,25 @@ function M.send_slot(slot, text, opts)
   if slot < 1 or slot > M.MAX_SLOT then return false end
   local term = M.state.slot_terminals[slot]
   if not term or not term:is_alive() or not term.send then return false end
+
+  -- Codex composer treats a leading `[` as a bracketed/queued entry and
+  -- refuses to auto-submit until the user manually hits ESC + ENTER —
+  -- bracketed-paste wrapping doesn't suppress this. Force-prefix any
+  -- leading `[…]` body bound for a codex slot with `ATTENTION: ` so the
+  -- composer accepts it as normal input. claude/gemini composers don't
+  -- share this behavior — leave their text untouched.
+  if text:sub(1, 1) == "[" then
+    local cfg = M.state.config
+    if cfg and cfg.agents and cfg.agents.bootstrap then
+      for _, e in ipairs(cfg.agents.bootstrap) do
+        if e.slot == slot and e.kind == "codex" then
+          text = "ATTENTION: " .. text
+          break
+        end
+      end
+    end
+  end
+
   local payload = text
   if not (opts and opts.bracketed_paste == false) then
     payload = "\27[200~" .. text .. "\27[201~"

@@ -179,8 +179,11 @@ args = { slot: string, text: string?, submit: boolean? }
 - `slot` — agent name (e.g. `"jarvis"`). Resolved → integer slot
   via `auto_agents.slot_for_name`.
 - `text` — terminal nudge. When omitted, auto-agents synthesizes
-  a default: `[auto-agents] new <kind> from <mailbox> — check
-  $AUTO_AGENTS_MAILBOX_DIR/<kind>/`.
+  a default: `ATTENTION: [auto-agents] new <kind> from <mailbox> —
+  check $AUTO_AGENTS_MAILBOX_DIR/<kind>/`. The leading `ATTENTION:`
+  is load-bearing — codex-backed peers treat a wake message starting
+  with `[…]` as a bracketed composer entry and refuse to submit it
+  until the user manually hits ESC + ENTER.
 - `submit` — whether to follow the text with a CR (default
   `true`).
 

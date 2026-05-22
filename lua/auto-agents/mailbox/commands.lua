@@ -89,9 +89,12 @@ local function handle_wake(args, ctx)
   if type(text) ~= "string" or text == "" then
     -- Default nudge: short directive that fits in one terminal line.
     -- The agent's bootstrap-mailbox.md is the protocol — we just point.
+    -- Must NOT start with `[`: codex-backed peers treat a leading `[...]`
+    -- as a bracketed/queued composer entry and silently refuse to submit
+    -- until the user hits ESC + ENTER. Leading "ATTENTION:" sidesteps it.
     local origin = ctx and ctx.mailbox or "?"
     local kind   = ctx and ctx.arrival_kind or "inbox"
-    text = string.format("[auto-agents] new %s from %s — check $AUTO_AGENTS_MAILBOX_DIR/%s/",
+    text = string.format("ATTENTION: [auto-agents] new %s from %s — check $AUTO_AGENTS_MAILBOX_DIR/%s/",
       kind, origin, kind)
   end
 

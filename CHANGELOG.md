@@ -2,6 +2,59 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.28] — 2026-05-22 — codex wake stall: sidestep leading-`[` composer queueing
+
+Closes a long-standing friction with codex-backed peers (e.g.
+`agent:lector`). Wake nudges arrived in the codex terminal but the
+composer refused to auto-submit them — the user had to manually press
+ESC + ENTER for every wake. Originally read as a deliberate codex
+security feature against programmatic input injection (and recorded
+that way in operational memory). Identified 2026-05-22 as something
+more specific: **codex's composer treats a message starting with `[…]`
+as a bracketed/queued entry and holds it for explicit submission**.
+Our default wake nudge happened to start with `[auto-agents] …`, which
+tripped the queue rule. Bracketed-paste wrapping doesn't suppress this
+codex behavior. Claude and gemini composers don't share it, which is
+why only codex peers stalled.
+
+Two layers of fix.
+
+### Changed
+
+- **Default wake nudge** in `lua/auto-agents/mailbox/commands.lua::handle_wake`
+  — synthesized text now reads `ATTENTION: [auto-agents] new <kind>
+  from <mailbox> — check $AUTO_AGENTS_MAILBOX_DIR/<kind>/`. The leading
+  `ATTENTION:` moves the `[` off position 0 while preserving the
+  `[auto-agents]` visual tag for the agent. Applies to all backends —
+  reads as a wake nudge for claude/gemini too.
+- **Chokepoint guard** in `lua/auto-agents/init.lua::M.send_slot` —
+  any `text` whose first character is `[`, bound for a slot whose
+  bootstrap `kind == "codex"`, is auto-prefixed with `ATTENTION: `
+  before the bracketed-paste envelope is built. Resolved via inline
+  `cfg.agents.bootstrap` lookup; claude/gemini slots are untouched.
+  Protects all six `send_slot` callers (wake handler, admin-panel
+  `agent send`, diff UI `REQUEST CHANGE`, kb-worklist attach,
+  `attach_slot`, bootstrap-refresh picker) against future leading-`[`
+  payloads without per-call-site changes.
+- **`MAILBOX.md`** — `wake` args section notes the `ATTENTION:` prefix
+  is load-bearing for codex, with a one-line explanation of the
+  composer behavior it sidesteps.
+
+### Known gap
+
+The T-slot playground sends (`auto-agents.term.send`, exposed via the
+admin panel's `term send <slot> <text>` verb) are **not** guarded.
+T-slots have no bootstrap entry → no known backend kind, and the text
+comes from explicit user typing. Mutating leading-`[` input without
+consent would be surprising. If a user starts codex in a T-slot and
+`term send`s a `[…]` body, manual ESC + ENTER is still required.
+
+### Upgrade
+
+Soft within `^0.2.0`. No config or env changes. Restart codex-backed
+slots to pick up the chokepoint guard; the wake-text change takes
+effect immediately on the host nvim once the plugin reloads.
+
 ## [v0.2.26] — 2026-05-18 — `diff_review`: direct per-agent gate via env var + sidecar field
 
 Closes a fragility gap in v0.2.25. The previous shape required each
