@@ -170,8 +170,15 @@ end
 ---@param win_id number Window ID to apply options to
 ---@param options WindowOptions Window options to apply
 local function apply_window_options(win_id, options)
+  -- ADR 0028: `scope = "local"` is REQUIRED here. The `options`
+  -- table commonly carries `number` / `relativenumber` / `signcolumn`
+  -- / `foldcolumn` / `cursorline` / `cursorcolumn` / `wrap` / `list`
+  -- / `spell` etc — all global-local. Bare `{ win = ... }` writes
+  -- would mutate the global-local DEFAULT for every one of those
+  -- options on every diff-window setup, polluting future editor
+  -- windows materialized after the diff session.
   for opt_name, opt_value in pairs(options) do
-    pcall(vim.api.nvim_set_option_value, opt_name, opt_value, { win = win_id })
+    pcall(vim.api.nvim_set_option_value, opt_name, opt_value, { win = win_id, scope = "local" })
   end
 end
 

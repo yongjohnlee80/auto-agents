@@ -221,10 +221,14 @@ function M.open()
     zindex = 200,
   })
   vim.api.nvim_win_set_cursor(winid, { focused_idx, 0 })
-  vim.api.nvim_set_option_value("cursorline", true, { win = winid })
-  vim.api.nvim_set_option_value("number", false, { win = winid })
-  vim.api.nvim_set_option_value("relativenumber", false, { win = winid })
-  vim.api.nvim_set_option_value("signcolumn", "no", { win = winid })
+  -- ADR 0028: `scope = "local"` is required so this write does NOT
+  -- mutate the global-local default for `cursorline`. The other
+  -- appearance options (`number`, `relativenumber`, `signcolumn`)
+  -- previously written here are already set to the right values by
+  -- `style = "minimal"` above — repeating them was both redundant
+  -- AND the mechanism by which the dock leaked panel defaults into
+  -- subsequent editor windows. They have been removed.
+  vim.api.nvim_set_option_value("cursorline", true, { win = winid, scope = "local" })
 
   -- Force normal mode on entry. The F6/F12 keymaps that open the dock
   -- are bound on `n`+`t` modes; when invoked from a terminal-insert

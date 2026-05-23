@@ -136,8 +136,12 @@ function M.materialize_editor_scratch()
   vim.o.eventignore = saved_eventignore
 
   local winid = vim.api.nvim_get_current_win()
-  pcall(vim.api.nvim_set_option_value, "winfixwidth", false, { win = winid })
-  pcall(vim.api.nvim_set_option_value, "winfixbuf", false, { win = winid })
+  -- ADR 0028: `scope = "local"` for consistency. Even though
+  -- `winfixwidth` / `winfixbuf` are practically window-local only,
+  -- the explicit scope documents intent and prevents future refactors
+  -- from copying this pattern to a global-local option without it.
+  pcall(vim.api.nvim_set_option_value, "winfixwidth", false, { win = winid, scope = "local" })
+  pcall(vim.api.nvim_set_option_value, "winfixbuf", false, { win = winid, scope = "local" })
 
   -- Re-clamp the AutoAgents panel back to its configured width.
   -- Issue: after `:q` on the last editor window, both side panels

@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.26"
+M.version = "0.2.29"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -1654,9 +1654,11 @@ function M.refresh_winbar()
   local w = vim.api.nvim_win_get_width(M.state.panel_winid)
   local focused = state_mod.get_focused_slot()
                   or M.state.focused_slot or 1
+  -- ADR 0028: `scope = "local"` so this write does NOT mutate the
+  -- global-local default for `winbar`.
   pcall(vim.api.nvim_set_option_value, "winbar",
     winbar.render(focused, w),
-    { win = M.state.panel_winid })
+    { win = M.state.panel_winid, scope = "local" })
 end
 
 ---Re-render the navigator dock, if it's currently open. Cheap no-op
@@ -1938,7 +1940,9 @@ function M.focus_slot(slot)
     local winbar = require("auto-agents.panel.winbar")
     winbar.ensure_highlights()
     local w = vim.api.nvim_win_get_width(winid)
-    pcall(vim.api.nvim_set_option_value, "winbar", winbar.render(slot, w), { win = winid })
+    -- ADR 0028: `scope = "local"` so this write does NOT mutate the
+    -- global-local default for `winbar`.
+    pcall(vim.api.nvim_set_option_value, "winbar", winbar.render(slot, w), { win = winid, scope = "local" })
   end
   if slot >= 1 then
     -- Defensive resize: send SIGWINCH to the TUI so it redraws at the
