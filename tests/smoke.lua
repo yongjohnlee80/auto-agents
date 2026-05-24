@@ -1601,6 +1601,39 @@ do
   pcall(core.mailbox.unregister, "agent:phase6-live")
 end
 
+-- ────────── 22. v0.2.32: antigravity adapter + permissions ──────────
+print("\n[22] v0.2.32: antigravity --model dropped, --add-dir wired")
+do
+  local agent = require("auto-agents.agent")
+  local perms = require("auto-agents.permissions")
+
+  -- 22a. agy spawns without --model even when spec.model is set —
+  -- agy --help has no -model flag and spawn would error.
+  local argv_no_model = agent.cmd_for("antigravity", { name = "any" })
+  ok("antigravity: spawn argv is bare `agy` when no override",
+    type(argv_no_model) == "table" and argv_no_model[1] == "agy" and #argv_no_model == 1,
+    vim.inspect(argv_no_model))
+  local argv_with_model = agent.cmd_for("antigravity", { name = "any", model = "gemini-2.5-pro" })
+  ok("antigravity: spawn argv ignores spec.model (agy has no --model flag)",
+    type(argv_with_model) == "table" and argv_with_model[1] == "agy" and #argv_with_model == 1,
+    vim.inspect(argv_with_model))
+
+  -- 22b. antigravity now ships a permissions strategy. --add-dir
+  -- is the same flag claude/codex use (confirmed in `agy --help`).
+  local grants = perms.argv_for_kind("antigravity",
+    { "/tmp/mb", "/tmp/kb" })
+  ok("antigravity: permissions strategy emits --add-dir per dir",
+    type(grants) == "table" and #grants == 4
+      and grants[1] == "--add-dir" and grants[2] == "/tmp/mb"
+      and grants[3] == "--add-dir" and grants[4] == "/tmp/kb",
+    vim.inspect(grants))
+  local claude_grants = perms.argv_for_kind("claude", { "/tmp/mb" })
+  ok("v0.2.32: antigravity grants match claude/codex shape",
+    type(claude_grants) == "table" and claude_grants[1] == "--add-dir"
+      and claude_grants[2] == "/tmp/mb",
+    vim.inspect(claude_grants))
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

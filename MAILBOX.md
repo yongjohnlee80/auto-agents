@@ -359,7 +359,7 @@ appropriate per-kind CLI flag at spawn time:
 |-------------|------------------------------------------------------------|
 | claude      | `--add-dir <path>` (repeatable)                            |
 | codex       | `--add-dir <path>` (repeatable; same flag name as Claude)  |
-| antigravity | _(no documented per-session grant flag yet — agent runs unchanged at v0.2.30; track in [[auto-agents-v0-2-30-update]])_ |
+| antigravity | `--add-dir <path>` (repeatable; v0.2.32+, confirmed in `agy --help`) |
 
 Paths granted at spawn:
 

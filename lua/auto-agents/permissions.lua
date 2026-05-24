@@ -11,22 +11,25 @@
 ---restart, so persistence isn't desirable: the next spawn rebuilds
 ---the argv from scratch.
 ---
----Supported kinds (v0.2.30):
+---Supported kinds (v0.2.32):
 ---
----  * `claude` — `--add-dir <path>` (repeatable). Adds the path
----    to Claude Code's allowed-directories list for the session.
----  * `codex`  — `--add-dir <path>` (repeatable). Same flag name
----    as Claude; adds the path to codex's writable workspace
+---  * `claude`      — `--add-dir <path>` (repeatable). Adds the
+---    path to Claude Code's allowed-directories list for the
+---    session.
+---  * `codex`       — `--add-dir <path>` (repeatable). Same flag
+---    name as Claude; adds the path to codex's writable workspace
 ---    roots for the session. (Note: `sandbox_workspace_write
 ---    .writable_roots` in `~/.codex/config.toml` is the TOML
 ---    config field — NOT a CLI flag. The CLI flag is `--add-dir`,
 ---    same as Claude's.)
+---  * `antigravity` — `--add-dir <path>` (repeatable). Confirmed
+---    in `agy --help` end-of-cycle 2026-05-24; antigravity uses
+---    the same flag name as claude/codex.
 ---
----Kinds without a strategy (`antigravity`, `junie`, `goose`,
----`opencode`, `copilot`, `generic`) get an empty result — the
----agent runs unchanged. Antigravity's per-session directory-grant
----surface is undocumented at v0.2.30; add a strategy entry once
----the equivalent of `--add-dir` is confirmed.
+---Kinds without a strategy (`junie`, `goose`, `opencode`,
+---`copilot`, `generic`) get an empty result — the agent runs
+---unchanged. Add a strategy entry once the equivalent of
+---`--add-dir` is confirmed for those CLIs.
 ---
 ---@module 'auto-agents.permissions'
 
@@ -51,8 +54,9 @@ end
 
 ---@type table<string, AutoAgentsPermissionStrategy>
 local STRATEGY = {
-  claude = repeatable_flag("--add-dir"),
-  codex  = repeatable_flag("--add-dir"),
+  claude      = repeatable_flag("--add-dir"),
+  codex       = repeatable_flag("--add-dir"),
+  antigravity = repeatable_flag("--add-dir"),
 }
 
 ---Return the additional argv args to append to the spawn command
