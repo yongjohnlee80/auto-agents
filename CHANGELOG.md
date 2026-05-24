@@ -839,7 +839,7 @@ pending. Then close the panel and assert close_tab still drains
 ### Round-2 review fixes (agent:lector — 2026-05-16)
 
 Folded in two corrections from Lector's round-2 review (review doc at
-`docs/code-review/2026-05-16-lector-fix-diff-panel-round2-review.md`):
+`$AUTO_AGENTS_KB_ROOT/agents/lector/reviews/2026-05-16-auto-agents-fix-diff-panel-round2-review.md`):
 
 **HIGH — peer_identity matched the wrong inode direction.** The pre-fix
 `find_inode_for_peer(listen_port, peer_port)` matched
@@ -1001,9 +1001,11 @@ agent name attached. Two independent bugs in the
   the upstream attribution gaps so the `agent_for` fallback to
   `unattributed` becomes a defense-in-depth rather than the
   primary failure mode.
-- ADR 0011 lives at
-  `docs/adr/0011-diff-panel-label-resolution-bug.md` and
-  documents the spike + per-slot bridge proposal for Patch 2.
+- ADR 0011 was renumbered to ADR 0030 when relocated into the KB
+  (the in-repo `docs/adr/` tree was retired on 2026-05-24 in favor
+  of the KB as the single home for ADRs). The ADR now lives at
+  `$AUTO_AGENTS_KB_ROOT/shared/adrs/0030-diff-panel-label-resolution-bug.md`
+  and documents the spike + per-slot bridge proposal for Patch 2.
 
 ## [v0.2.11] — 2026-05-16 — ADR 0021 Phase 2 wrapper + diff-queue / send_slot / mailbox improvements
 
