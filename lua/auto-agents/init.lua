@@ -7,15 +7,15 @@ local M = {}
 
 M.version = "0.2.30"
 
--- Per-kind mailbox tool roots live in
+-- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
 -- spawn, refresh_agent_id, and adopt-resumed-agent share one source
--- of truth. v0.2.30 roster: claude → `~/.claude/mailbox`, codex →
--- `~/.codex/mailbox`, antigravity (agy) → `~/.gemini/antigravity/
--- mailbox`. Each CLI's sandbox already grants the agent read/write
--- on its own config dir, so the mailbox tree is reachable without
--- extra grants. Tests override per-kind roots via
--- `AUTO_AGENTS_MAILBOX_ROOT_<KIND>` env.
+-- of truth. v0.1.33 (auto-core) workspace-scoped layout — the
+-- resolver consults `auto-core.git.worktree.get_workspace_root()`
+-- / `get_active()` per [[auto-family-state-ownership]]; agents
+-- land at `<workspace>/.auto-agents/mailbox/<instance>/<name>/`.
+-- Tests override the resolved root via the single
+-- `AUTO_AGENTS_MAILBOX_ROOT` env.
 
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
 -- admin; slots 1..MAX_SLOT are main agents in the right panel. There

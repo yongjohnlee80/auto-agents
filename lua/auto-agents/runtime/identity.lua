@@ -10,29 +10,32 @@
 ---  3. adopt-resumed-agent — `plugin/auto-agents.lua :AutoAgentsAdoptResumedAgent`
 ---
 ---Pre-extraction, these three call paths each rebuilt the identity
----independently; the adopt path lost `diff_review` and used the
----host-fallback mailbox root instead of the per-kind root (lector
----audit, 2026-05-24). This module collapses them into one
----`reconcile` entry point so the bug class is no longer possible.
+---independently; the adopt path lost `diff_review` and rooted under
+---the host fallback rather than the spawn workspace (lector audit,
+---2026-05-24). This module collapses them into one `reconcile`
+---entry point so the bug class is no longer possible.
 ---
----### Mailbox-location policy (v0.2.30)
+---### Mailbox-location policy (v0.2.30 + auto-core v0.1.33)
 ---
 ---All agent mailboxes live under the **workspace** rather than
----per-CLI config dirs (`~/.claude/mailbox`, `~/.codex/mailbox`, etc).
----The new layout, owned by `auto-core.mailbox.path` v0.1.33+:
+---per-CLI config dirs. The layout, owned by
+---`auto-core.mailbox.path`:
 ---
 ---  <workspace_root>/.auto-agents/mailbox/<instance>/<agent_name>/...
 ---
 ---Rationale: visibility (the user sees mailbox files next to their
----code), prunability (one tree per workspace; nuke when done),
----accessibility (agents whose cwd is at or under the workspace root
----get native filesystem access without per-kind sandbox grants).
+---code), prunability (one tree per workspace), accessibility
+---(agents whose cwd is at or under the workspace root get native
+---filesystem access without per-CLI sandbox grants).
 ---
----`mailbox_root()` resolves the workspace mailbox root via
----`auto-core.mailbox.path.workspace_mailbox_root`, which walks up
----via `auto-core.fs.path.workspace_root` (bare-repo-aware) and
----appends `.auto-agents/mailbox`. The single
----`AUTO_AGENTS_MAILBOX_ROOT` env var override remains for tests.
+---`mailbox_root({cwd?})` is a thin passthrough to
+---`auto-core.mailbox.path.workspace_mailbox_root`, which per
+---[[auto-family-state-ownership]] consults
+---`auto-core.git.worktree.get_workspace_root()` /
+---`get_active()` (auto-core is the single owner of location
+---semantics) before falling back to `opts.cwd` / `getcwd()`. The
+---single `AUTO_AGENTS_MAILBOX_ROOT` env var override remains for
+---tests.
 ---
 ---Sidecar I/O primitives (build_record / path_for / read / write)
 ---live one layer down in `auto-agents.runtime_identity`. This
