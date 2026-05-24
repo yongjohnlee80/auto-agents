@@ -50,7 +50,7 @@ sender-outbox → recipient-inbox.
 ~/.codex/mailbox/                               ← codex agents land here
 └── agent:lector:1778824643-683526/
 
-~/.gemini/mailbox/                              ← gemini agents land here
+~/.gemini/antigravity/mailbox/                  ← antigravity (agy) agents land here
 
 ~/.local/state/nvim/auto-core/mailbox/          ← host-side fallback root
 └── nvim/                                       ← executioner mailbox (auto-agents v0.2.7+)
@@ -340,25 +340,26 @@ Inside `setup()`:
 For each `configured` agent:
 
 - Calls `mailbox.register("agent:" .. spec.name, { root, wake })`
-  with `root` resolved by `MAILBOX_ROOT_BY_KIND` (claude →
-  `~/.claude/mailbox`, codex → `~/.codex/mailbox`, gemini →
-  `~/.gemini/mailbox`; other kinds → `host_fallback_root()`).
+  with `root` resolved by `MAILBOX_ROOT_BY_KIND` in
+  `lua/auto-agents/runtime/identity.lua` (claude → `~/.claude/mailbox`,
+  codex → `~/.codex/mailbox`, antigravity → `~/.gemini/antigravity/mailbox`;
+  other kinds → `host_fallback_root()`).
 - Merges the four `AUTO_AGENTS_*` env vars into the spawn env so
   the spawned CLI can locate its mailbox via env, not socket.
 
 ### 4. The agent CLI process has read/write access to its mailbox dir
 
-The user's `~/.claude/`, `~/.codex/`, `~/.gemini/` are inside
+The user's `~/.claude/`, `~/.codex/`, `~/.gemini/antigravity/` are inside
 each tool's sandbox by default — the agent can read and write
 without extra grants. To skip the per-op permission prompt for
 the mailbox dir + KB paths, auto-agents v0.2.9 appends the
 appropriate per-kind CLI flag at spawn time:
 
-| Kind   | Flag                                       |
-|--------|--------------------------------------------|
-| claude | `--add-dir <path>` (repeatable)            |
-| codex  | `--add-dir <path>` (repeatable; same flag name as Claude) |
-| gemini | `--include-directories <path>` (repeatable) |
+| Kind        | Flag                                                       |
+|-------------|------------------------------------------------------------|
+| claude      | `--add-dir <path>` (repeatable)                            |
+| codex       | `--add-dir <path>` (repeatable; same flag name as Claude)  |
+| antigravity | _(no documented per-session grant flag yet — agent runs unchanged at v0.2.30; track in [[auto-agents-v0-2-30-update]])_ |
 
 Paths granted at spawn:
 

@@ -234,7 +234,7 @@ auto-agents: new agent
   <C-c> to cancel.
   slot  [1..9]:
 > 1
-  kind (claude|codex|gemini|junie|aider|goose|opencode|copilot|generic)  [claude]:
+  kind (claude|codex|antigravity|junie|goose|opencode|copilot|generic)  [claude]:
 > 
   name (handle, used for KB dir + grants)  [(blank to auto-generate)]:
 > main
@@ -277,7 +277,7 @@ root = "/abs/path/.auto-agents/kb"   # absolute; can be shared across projects
 
 [[agents]]
 slot          = 1
-kind          = "claude"             # claude|codex|gemini|junie|aider|goose|opencode|copilot|generic
+kind          = "claude"             # claude|codex|antigravity|junie|goose|opencode|copilot|generic
 name          = "main"
 title         = "Claude"
 role          = "primary engineering pair"   # optional
@@ -460,9 +460,8 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 |-----------|------------------------|----------------------------------------------------------------------------------|
 | `claude`  | `claude`               | Anthropic Claude Code CLI                                                        |
 | `codex`   | `codex`                | OpenAI Codex CLI; pads its own footer                                            |
-| `gemini`  | `gemini`               | Google Gemini CLI                                                                |
+| `antigravity` | `agy`              | Google Antigravity CLI (replaces deprecated `gemini`; v0.2.30+). Config nests at `~/.gemini/antigravity/`; mailbox tool root is `~/.gemini/antigravity/mailbox`. |
 | `junie`   | `junie`                | JetBrains [Junie CLI](https://junie.jetbrains.com/docs/junie-cli.html); install via `npm i -g @jetbrains/junie-cli` |
-| `aider`   | `aider --read AGENTS.md` | [aider.chat](https://aider.chat/docs/usage.html); also takes `model` + `api_base` in TOML for ollama/openrouter/lm-studio (`aider --model ollama_chat/llama3 --api-base http://host:11434`) |
 | `goose`   | `goose session`        | [goose-docs.ai](https://goose-docs.ai/); env-var-driven (`GOOSE_MODEL`, `GOOSE_PROVIDER`, `GOOSE_PROVIDER__HOST` for ollama). Wizard prompts for `model` / `provider` / `api_base`. |
 | `opencode`| `opencode`             | [opencode.ai](https://opencode.ai/docs); takes `--model <provider>/<id>`. Local LLMs configured in `~/.config/opencode/opencode.json` (no CLI flag for base URL). |
 | `copilot` | `gh copilot`           | GitHub CLI extension                                                             |
@@ -567,7 +566,7 @@ delivery and per-kind redraw nudges (`Ctrl+L`, `F5`, FocusIn) all
 verified insufficient; only window/buffer rebind clears the artifact,
 and we don't yet have a non-disruptive way to trigger that rebind
 automatically without flickering the panel. Not present on
-`claude` / `codex` / `gemini` (which full-clear on SIGWINCH and self-correct).
+`claude` / `codex` / `antigravity` (which full-clear on SIGWINCH and self-correct).
 
 Goose has a known upstream cause:
 [block/goose#8177](https://github.com/block/goose/issues/8177) —

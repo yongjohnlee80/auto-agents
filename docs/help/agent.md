@@ -191,7 +191,7 @@ bottom.
 
 Optional `[[agents]].model` field. Per-kind handling at spawn:
 
-- claude/codex/gemini/junie/aider/opencode → appended as `--model <id>`
+- claude/codex/antigravity/junie/opencode → appended as `--model <id>`
 - goose → exported as `GOOSE_MODEL` env var (env vars override
   `goose configure`). `goose` also reads `GOOSE_PROVIDER` (from
   `[[agents]].provider`) and `GOOSE_PROVIDER__HOST` (from
@@ -210,31 +210,17 @@ the error in the agent's terminal.
 
 ### Local-LLM connection settings: `model`, `provider`, `api_base`
 
-Aider, goose, and opencode all take per-spawn connection settings.
-The wizard prompts for them only when relevant (other kinds skip
-these steps and use whatever `:AutoAgentsModel` set instead).
+Goose and opencode take per-spawn connection settings. The wizard
+prompts for them only when relevant (other kinds skip these steps
+and use whatever `:AutoAgentsModel` set instead).
 
-| field | aider | goose | opencode |
-|-------|-------|-------|----------|
-| `model` | ✓ `--model` | ✓ `GOOSE_MODEL` env | ✓ `--model` |
-| `provider` | — | ✓ `GOOSE_PROVIDER` env | — (encoded in model id) |
-| `api_base` | ✓ `--api-base` | ✓ `GOOSE_PROVIDER__HOST` env | — (configure in `opencode.json`) |
+| field | goose | opencode |
+|-------|-------|----------|
+| `model` | ✓ `GOOSE_MODEL` env | ✓ `--model` |
+| `provider` | ✓ `GOOSE_PROVIDER` env | — (encoded in model id) |
+| `api_base` | ✓ `GOOSE_PROVIDER__HOST` env | — (configure in `opencode.json`) |
 
-Example aider slot pointing at ollama on the LAN:
-
-```toml
-[[agents]]
-slot     = 4
-kind     = "aider"
-name     = "lentil"
-model    = "ollama_chat/llama3.1"
-api_base = "http://192.168.1.10:11434"
-```
-
-Renders to `aider --model ollama_chat/llama3.1 --api-base
-http://192.168.1.10:11434 --read AGENTS.md` at spawn.
-
-Equivalent goose slot:
+Example goose slot pointing at ollama on the LAN:
 
 ```toml
 [[agents]]
@@ -314,7 +300,7 @@ transitions (see below).
 ### Agents self-report their own status
 
 The auto-injected instruction file tells each interactive agent
-(claude/codex/gemini/junie/aider) the three transitions and the exact shell
+(claude/codex/antigravity/junie) the three transitions and the exact shell
 commands to run for each. Inside the agent's terminal, `$NVIM` is
 set to the parent nvim's socket, so a one-liner like
 
@@ -341,8 +327,8 @@ N for the rest — opt in explicitly for other kinds).
 Behavior is **kind-dispatched** — both paths land in the same
 Unified Diff Queue (`:AutoAgentsDiffQueue`), but the wire differs.
 **Today only Claude Code is proven to honor the ws-mcp `openDiff`
-path end-to-end**; every other CLI surface (codex, gemini, junie,
-aider, goose, opencode, generic) routes through the mailbox
+path end-to-end**; every other CLI surface (codex, antigravity,
+junie, goose, opencode, generic) routes through the mailbox
 `diff_queue` protocol instead.
 
 - **`claude` + `diff_review = true`** — host boots a per-slot ws-mcp
@@ -353,7 +339,7 @@ aider, goose, opencode, generic) routes through the mailbox
   protocol awareness needed on the agent side.
 
 - **non-claude + `diff_review = true`** *(v0.2.25, refined v0.2.26)*
-  — including codex, gemini, junie, aider, goose, opencode, and
+  — including codex, antigravity, junie, goose, opencode, and
   generic. Host inlines the **mailbox `diff_queue` protocol** into
   the per-kind instruction file (`AGENTS.md` / `GEMINI.md` /
   `.junie/guidelines.md` / `.goosehints`) via

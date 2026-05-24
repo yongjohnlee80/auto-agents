@@ -36,9 +36,12 @@ local M = {}
 ---takes precedence over the table when set. Mirrors the existing
 ---`AUTO_AGENTS_RUNTIME_IDENTITY_PATH` override pattern.
 M.MAILBOX_ROOT_BY_KIND = {
-  claude = vim.fn.expand("~/.claude/mailbox"),
-  codex  = vim.fn.expand("~/.codex/mailbox"),
-  gemini = vim.fn.expand("~/.gemini/mailbox"),
+  claude      = vim.fn.expand("~/.claude/mailbox"),
+  codex       = vim.fn.expand("~/.codex/mailbox"),
+  -- v0.2.30: antigravity (Google `agy` CLI) replaces deprecated
+  -- gemini. Per-user config nests under ~/.gemini/antigravity/,
+  -- so the mailbox tool root is a sibling of that subtree.
+  antigravity = vim.fn.expand("~/.gemini/antigravity/mailbox"),
 }
 
 ---Resolve the mailbox tool root for an agent kind.

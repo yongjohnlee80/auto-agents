@@ -58,16 +58,6 @@ M.by_kind = {
       "Approve[^\n]*%?",
     },
   },
-  gemini = {
-    working = {
-      "esc to interrupt",
-      "Thinking[%.…]*",
-    },
-    waiting = {
-      "%(y/n%)",
-      "%[y/N%]",
-    },
-  },
 }
 
 ---Match the bottom-of-buffer lines against a pattern list.

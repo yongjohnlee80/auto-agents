@@ -110,7 +110,7 @@ local function help_lines()
     "  <verb> <sub> ?                 contextual help for that subcommand",
     "  help open <verb> [<sub>]       open the help md in the editor",
     "",
-    "Kinds: claude | codex | gemini | junie | aider | goose | opencode | copilot | generic",
+    "Kinds: claude | codex | antigravity | junie | goose | opencode | copilot | generic",
     "Config: project file at <stdpath('config')>/.auto-agents-config/<key>.toml,",
     "        falls back to global.toml in that dir, else empty.",
     "        :cd does not move the project — boundary is cached at startup.",

@@ -3,7 +3,7 @@
 ---@module 'auto-agents.types'
 
 ---@alias AutoAgentsLogLevel "error"|"warn"|"info"|"debug"|"trace"
----@alias AutoAgentsAgentKind "claude"|"codex"|"gemini"|"junie"|"aider"|"goose"|"opencode"|"copilot"|"generic"
+---@alias AutoAgentsAgentKind "claude"|"codex"|"antigravity"|"junie"|"goose"|"opencode"|"copilot"|"generic"
 ---@alias AutoAgentsKbScope "shared"|"private"|"isolated"
 ---@alias AutoAgentsSlotRail "winbar"|"vertical"|"off"
 ---@alias AutoAgentsSplitSide "left"|"right"

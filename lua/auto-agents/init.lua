@@ -7,18 +7,14 @@ local M = {}
 
 M.version = "0.2.30"
 
--- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
--- root passed to `auto-core.mailbox.register` at spawn time so
--- claude-backed agents land under `~/.claude/mailbox/`, codex-
--- backed under `~/.codex/mailbox/`, gemini-backed under
--- `~/.gemini/mailbox/`. Each tool's sandbox already grants the
--- agent read/write on its own config dir, so the mailbox tree
--- is reachable without extra sandbox grants.
---
 -- Per-kind mailbox tool roots live in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
 -- spawn, refresh_agent_id, and adopt-resumed-agent share one source
--- of truth. Tests override per-kind roots via
+-- of truth. v0.2.30 roster: claude → `~/.claude/mailbox`, codex →
+-- `~/.codex/mailbox`, antigravity (agy) → `~/.gemini/antigravity/
+-- mailbox`. Each CLI's sandbox already grants the agent read/write
+-- on its own config dir, so the mailbox tree is reachable without
+-- extra grants. Tests override per-kind roots via
 -- `AUTO_AGENTS_MAILBOX_ROOT_<KIND>` env.
 
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
@@ -490,7 +486,7 @@ end
 ---@field kind string             -- agent kind or "shell" for fallback
 ---@field name string|nil
 ---@field title string|nil
----@field model string|nil        -- preferred model id (--model for claude/codex/gemini/junie/aider/opencode; GOOSE_MODEL env for goose)
+---@field model string|nil        -- preferred model id (--model for claude/codex/antigravity/junie/opencode; GOOSE_MODEL env for goose)
 ---@field cmd string[]
 ---@field configured boolean      -- false → empty-slot shell fallback
 
@@ -1155,8 +1151,8 @@ function M.send_slot(slot, text, opts)
   -- refuses to auto-submit until the user manually hits ESC + ENTER —
   -- bracketed-paste wrapping doesn't suppress this. Force-prefix any
   -- leading `[…]` body bound for a codex slot with `ATTENTION: ` so the
-  -- composer accepts it as normal input. claude/gemini composers don't
-  -- share this behavior — leave their text untouched.
+  -- composer accepts it as normal input. claude/antigravity composers
+  -- don't share this behavior — leave their text untouched.
   if text:sub(1, 1) == "[" then
     local cfg = M.state.config
     if cfg and cfg.agents and cfg.agents.bootstrap then

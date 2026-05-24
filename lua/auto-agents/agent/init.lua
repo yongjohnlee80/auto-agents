@@ -8,9 +8,8 @@ local M = {}
 local KIND_MODULE = {
   claude = "auto-agents.agent.adapters.claude",
   codex = "auto-agents.agent.adapters.codex",
-  gemini = "auto-agents.agent.adapters.gemini",
+  antigravity = "auto-agents.agent.adapters.antigravity",
   junie = "auto-agents.agent.adapters.junie",
-  aider = "auto-agents.agent.adapters.aider",
   goose = "auto-agents.agent.adapters.goose",
   opencode = "auto-agents.agent.adapters.opencode",
   copilot = "auto-agents.agent.adapters.copilot",
@@ -20,7 +19,7 @@ local KIND_MODULE = {
 ---List of supported agent kinds (used by validators and tab completion).
 ---@return string[]
 function M.kinds()
-  return { "claude", "codex", "gemini", "junie", "aider", "goose", "opencode", "copilot", "generic" }
+  return { "claude", "codex", "antigravity", "junie", "goose", "opencode", "copilot", "generic" }
 end
 
 ---@param kind string|nil

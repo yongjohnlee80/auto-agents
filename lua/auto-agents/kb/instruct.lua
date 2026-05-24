@@ -1,8 +1,8 @@
 ---KB-aware spawn (M6, "double-down" approach).
 ---
 ---Each agent kind auto-loads a per-project instruction file from its
----cwd: claude reads `CLAUDE.md`, gemini reads `GEMINI.md`, junie reads
----`.junie/guidelines.md`, and codex/copilot/generic/aider/goose/opencode
+---cwd: claude reads `CLAUDE.md`, junie reads
+---`.junie/guidelines.md`, and codex/antigravity/copilot/generic/goose/opencode
 ---all converge on `AGENTS.md` (the de-facto multi-vendor standard).
 ---(Aider doesn't auto-load AGENTS.md by default — its adapter passes
 ---`--read AGENTS.md` explicitly so the same file works there too.)
@@ -13,7 +13,7 @@
 ---
 ---**The instruction file is shared by every agent of the same kind in
 ---the project** (CLAUDE.md by all `claude` slots, AGENTS.md by all
----`codex`/`copilot`/`aider`/`generic` slots, …). To avoid spawn-order
+---`codex`/`copilot`/`generic` slots, …). To avoid spawn-order
 ---thrash where each agent's rewrite overwrites the previous agent's
 ---personalized text, the block is rendered agent-neutrally: it lists
 ---every peer of the same kind in a roster table and instructs each
@@ -84,22 +84,22 @@ end
 ---@return string filename
 function M.filename_for(kind)
   if kind == "claude"  then return "CLAUDE.md"  end
-  if kind == "gemini"  then return "GEMINI.md"  end
   if kind == "junie"   then return ".junie/guidelines.md"  end
-  return "AGENTS.md"  -- codex, copilot, generic, anything else
+  -- codex, antigravity (agy), copilot, generic, anything else
+  -- all read AGENTS.md at cwd.
+  return "AGENTS.md"
 end
 
 ---Kinds the auto-injected sections (Model preference, Status reporting)
----apply to. claude/codex/gemini/junie/aider/goose/opencode all accept a
+---apply to. claude/codex/antigravity/junie/goose/opencode all accept a
 ---per-spawn model selector (CLI flag for most, env var for goose) *and*
----can run shell tools (or, in aider's case, the `/run` slash command)
----to invoke `nvim --server "$NVIM" --remote-expr ...` themselves.
----copilot is a recommender, not a runner; generic is a plain shell —
----neither has the same self-instrumentation surface, so the sections
----are skipped for them.
+---can run shell tools to invoke `nvim --server "$NVIM" --remote-expr ...`
+---themselves. copilot is a recommender, not a runner; generic is a plain
+---shell — neither has the same self-instrumentation surface, so the
+---sections are skipped for them.
 local INTERACTIVE_KINDS = {
-  claude = true, codex = true, gemini = true, junie = true,
-  aider = true, goose = true, opencode = true,
+  claude = true, codex = true, antigravity = true, junie = true,
+  goose = true, opencode = true,
 }
 
 ---Render the auto-agents block content for a kind. The block is
@@ -119,7 +119,7 @@ local function render_block(spec, kb_root)
   local filename  = M.filename_for(kind)
 
   -- Collect every agent of this kind that shares this instruction file.
-  -- claude/gemini/junie/aider/goose/opencode each own a distinct
+  -- claude/junie each own a distinct
   -- per-cwd filename (see filename_for); codex/copilot/generic share
   -- AGENTS.md. The roster makes the multi-tenant nature of the file
   -- explicit so each agent knows which row applies to it.

@@ -18,13 +18,13 @@
 ---
 ---    [[agents]]
 ---    slot          = 1
----    kind          = "claude"          # claude|codex|gemini|junie|aider|
+---    kind          = "claude"          # claude|codex|antigravity|junie|
 ---                                      #   goose|opencode|copilot|generic
 ---    name          = "main"
 ---    title         = "Claude"
 ---    role          = "..."             # optional
 ---    model         = "..."             # optional, per-kind handling:
----                                      #   claude/codex/gemini/junie/aider →
+---                                      #   claude/codex/antigravity/junie →
 ---                                      #     passed as --model <id>
 ---                                      #   goose → exported as GOOSE_MODEL env
 ---                                      #   opencode → passed as --model <id>
@@ -34,8 +34,7 @@
 ---    provider      = "..."             # optional, goose-only: exported as
 ---                                      #   GOOSE_PROVIDER (ollama/anthropic/
 ---                                      #   openai/openrouter/...).
----    api_base      = "..."             # optional: aider → --api-base;
----                                      #   goose → GOOSE_PROVIDER__HOST.
+---    api_base      = "..."             # optional: goose → GOOSE_PROVIDER__HOST.
 ---                                      #   Required for ollama / openrouter /
 ---                                      #   lm-studio / OpenAI-compatible local.
 ---    cwd           = "..."             # optional override

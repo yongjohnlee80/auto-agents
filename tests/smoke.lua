@@ -889,6 +889,19 @@ do
       and record.agent_pid  == fake_pid)
   ok("ADR 0023 §3.3: sidecar record.stamped_by reflects the adopt path",
     record and record.stamped_by == "auto-agents:AutoAgentsAdoptResumedAgent")
+  ok("ADR 0029 #3 (lector audit must-fix): adopt sidecar carries the "
+     .. "bootstrap spec's diff_review flag (pre-fix: dropped, sidecar "
+     .. "always recorded false even when bootstrap had diff_review=true)",
+    record and record.diff_review == true,
+    record and ("diff_review=" .. tostring(record.diff_review)) or "(no record)")
+  ok("ADR 0029 #3 (lector audit must-fix): adopt sidecar's tool_root + "
+     .. "mailbox_dir resolve under the per-kind mailbox root, not "
+     .. "host_fallback_root (pre-fix: adopt called host_fallback_root)",
+    record and type(record.tool_root) == "string"
+      and record.tool_root == tmp_claude_root
+      and type(record.mailbox_dir) == "string"
+      and record.mailbox_dir:sub(1, #tmp_claude_root) == tmp_claude_root,
+    record and ("tool_root=" .. tostring(record.tool_root)) or "(no record)")
 
   -- Wake message injected into the live inbox. The live inbox path
   -- is `<tool_root>/<full-id>/inbox/`. host_fallback_root resolves
@@ -1008,7 +1021,9 @@ do
 
   -- Teardown.
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = nil
   pcall(vim.fn.delete, tmp_sidecar)
+  pcall(vim.fn.delete, tmp_claude_root, "rf")
   aa.state.config.agents.bootstrap = {}
   aa.state.slot_terminals[5] = nil
 end

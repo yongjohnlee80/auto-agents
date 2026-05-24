@@ -9,12 +9,12 @@
 
 local M = {}
 
-local VALID_KINDS  = { claude = true, codex = true, gemini = true, junie = true, aider = true, goose = true, opencode = true, copilot = true, generic = true }
+local VALID_KINDS  = { claude = true, codex = true, antigravity = true, junie = true, goose = true, opencode = true, copilot = true, generic = true }
 -- Kinds that take model + (sometimes provider/api_base) at spawn time.
 -- The wizard prompts for these only when kind matches.
-local MODEL_KINDS    = { aider = true, goose = true, opencode = true }
+local MODEL_KINDS    = { goose = true, opencode = true }
 local PROVIDER_KINDS = { goose = true }
-local API_BASE_KINDS = { aider = true, goose = true }
+local API_BASE_KINDS = { goose = true }
 local VALID_SCOPES = { shared = true, private = true, isolated = true }
 
 local function find_entry(slot)
@@ -111,11 +111,11 @@ function M.agent(mode, slot)
     {
       field = "kind",
       prompt = "kind",
-      choices = { "claude", "codex", "gemini", "junie", "aider", "goose", "opencode", "copilot", "generic" },
+      choices = { "claude", "codex", "antigravity", "junie", "goose", "opencode", "copilot", "generic" },
       default = default("kind", "claude"),
       validate = function(v)
         if not VALID_KINDS[v] then
-          return false, "kind must be one of claude|codex|gemini|junie|aider|goose|opencode|copilot|generic"
+          return false, "kind must be one of claude|codex|antigravity|junie|goose|opencode|copilot|generic"
         end
         return true
       end,
@@ -182,20 +182,20 @@ function M.agent(mode, slot)
       end,
     },
     {
-      -- aider/goose/opencode take the model id at spawn (CLI flag for
-      -- aider+opencode, GOOSE_MODEL env for goose). Other kinds use
+      -- goose/opencode take the model id at spawn (GOOSE_MODEL env for
+      -- goose, --model CLI flag for opencode). Other kinds use
       -- :AutoAgentsModel after the fact and infer api endpoints from
       -- their own auth flow, so the wizard doesn't ask them here.
       field = "model",
-      prompt = "model (e.g. ollama_chat/llama3 for aider, llama3.1 for goose, ollama/llama3.1 for opencode)",
+      prompt = "model (e.g. llama3.1 for goose, ollama/llama3.1 for opencode)",
       default = default("model", ""),
       placeholder = (existing and existing.model) or "(blank → CLI default)",
       skip = function(values) return not MODEL_KINDS[values.kind] end,
       parse = blank_to_nil,
     },
     {
-      -- goose-only: goose separates provider from model id (unlike aider/
-      -- opencode which embed it). GOOSE_PROVIDER env var.
+      -- goose-only: goose separates provider from model id (unlike
+      -- opencode which embeds it). GOOSE_PROVIDER env var.
       field = "provider",
       prompt = "provider (ollama / anthropic / openai / openrouter / ...)",
       default = default("provider", ""),
@@ -204,8 +204,8 @@ function M.agent(mode, slot)
       parse = blank_to_nil,
     },
     {
-      -- aider: --api-base flag. goose: GOOSE_PROVIDER__HOST env var.
-      -- opencode has no CLI surface for this — users edit opencode.json.
+      -- goose: GOOSE_PROVIDER__HOST env var. opencode has no CLI
+      -- surface for this — users edit opencode.json.
       field = "api_base",
       prompt = "api_base URL (e.g. http://192.168.1.10:11434 for ollama)",
       default = default("api_base", ""),
@@ -234,7 +234,7 @@ function M.agent(mode, slot)
       --               AUTO_AGENTS_IDE_INTEGRATION + CLAUDE_CODE_SSE_PORT
       --               so the native `openDiff` tool routes here.
       --               Only claude has native MCP `openDiff` support.
-      --   * other   → (codex / gemini / junie / aider / goose /
+      --   * other   → (codex / antigravity / junie / goose /
       --               opencode / generic) — inject the mailbox
       --               `diff_queue` protocol into the per-kind
       --               instruction file via kb/instruct.lua, so the

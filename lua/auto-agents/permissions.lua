@@ -11,7 +11,7 @@
 ---restart, so persistence isn't desirable: the next spawn rebuilds
 ---the argv from scratch.
 ---
----Supported kinds (v0.2.10):
+---Supported kinds (v0.2.30):
 ---
 ---  * `claude` — `--add-dir <path>` (repeatable). Adds the path
 ---    to Claude Code's allowed-directories list for the session.
@@ -21,15 +21,12 @@
 ---    .writable_roots` in `~/.codex/config.toml` is the TOML
 ---    config field — NOT a CLI flag. The CLI flag is `--add-dir`,
 ---    same as Claude's.)
----  * `gemini` — `--include-directories <path>` (repeatable).
----    Adds the path to Gemini CLI's workspace include list for
----    the session.
 ---
----Kinds without a strategy (`junie`, `aider`, `goose`,
+---Kinds without a strategy (`antigravity`, `junie`, `goose`,
 ---`opencode`, `copilot`, `generic`) get an empty result — the
----agent runs unchanged. Add strategies here as flags are
----confirmed; track in
----`docs/todo-lists/mailbox-wake-and-permissions.md`.
+---agent runs unchanged. Antigravity's per-session directory-grant
+---surface is undocumented at v0.2.30; add a strategy entry once
+---the equivalent of `--add-dir` is confirmed.
 ---
 ---@module 'auto-agents.permissions'
 
@@ -56,7 +53,6 @@ end
 local STRATEGY = {
   claude = repeatable_flag("--add-dir"),
   codex  = repeatable_flag("--add-dir"),
-  gemini = repeatable_flag("--include-directories"),
 }
 
 ---Return the additional argv args to append to the spawn command

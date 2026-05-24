@@ -5,8 +5,11 @@
 ---per-kind regex, then normalise the display name to an API model ID
 ---so it can be compared against (and written back to) the TOML spec.
 ---
----Supported kinds: claude, codex, gemini.
----Others return nil — callers should treat nil as "cannot read".
+---Supported kinds: claude, codex.
+---Others (antigravity, junie, goose, opencode, copilot, generic)
+---return nil — callers should treat nil as "cannot read". An
+---antigravity (`agy`) reader will land when its status-line format
+---stabilizes.
 ---
 ---@module 'auto-agents.status.model_reader'
 
@@ -103,22 +106,6 @@ local function read_codex(lines)
   return nil
 end
 
----Extract model info from a Gemini CLI terminal buffer.
----Gemini CLI typically shows the model in the status area as
----"gemini-2.5-pro" or "gemini-2.5-flash".
----@param lines string[]
----@return AutoAgentsModelInfo|nil
-local function read_gemini(lines)
-  for i = #lines, 1, -1 do
-    local line = lines[i]
-    local model = line:match("(gemini%-[%d%.%-a-z]+)")
-    if model and model ~= "" then
-      return { display = model, api_id = model }
-    end
-  end
-  return nil
-end
-
 -- ── public API ────────────────────────────────────────────────────────────
 
 ---Read the currently-active model from an agent's terminal buffer.
@@ -135,7 +122,6 @@ function M.read(bufnr, kind)
 
   if kind == "claude"  then return read_claude(lines)  end
   if kind == "codex"   then return read_codex(lines)   end
-  if kind == "gemini"  then return read_gemini(lines)  end
   return nil
 end
 
