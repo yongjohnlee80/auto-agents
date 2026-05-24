@@ -11,15 +11,11 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
--- Sibling auto-core.nvim worktree. Prefer `comms-2` if present
--- (where ADR 0023's Phase 1 wire-format additions live, and where
--- the matching bootstrap doc with `schema_version: 5` lives). Fall
--- back to `main`, then the plain repo, so the suite runs on any
--- developer machine.
-local core_root = plugins_root .. "/auto-core.nvim/comms-2"
-if vim.fn.isdirectory(core_root) == 0 then
-  core_root = plugins_root .. "/auto-core.nvim/main"
-end
+-- Sibling auto-core.nvim worktree. Prefer `main` (the integration
+-- line; v0.2.30 cycle retired the comms-2 feature branch since its
+-- ADR 0023 Phase 1 work has long since merged). Fall back to the
+-- plain repo for developer machines without a worktree tree.
+local core_root = plugins_root .. "/auto-core.nvim/main"
 if vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
