@@ -1,8 +1,8 @@
 ---auto-agents.runtime.identity — single source of truth for agent
----identity reconciliation: per-kind mailbox root resolution, mailbox
+---identity reconciliation: mailbox root resolution, mailbox
 ---registration, and sidecar identity record write. ADR 0029 Decision #3.
 ---
----Three call paths need the same facts (slot, agent name, kind, per-kind
+---Three call paths share the same facts (slot, agent name, kind,
 ---mailbox root, mailbox record, sidecar path, diff_review):
 ---
 ---  1. spawn               — `auto-agents.init.build_agent_env`
@@ -11,73 +11,60 @@
 ---
 ---Pre-extraction, these three call paths each rebuilt the identity
 ---independently; the adopt path lost `diff_review` and used the
----host-fallback mailbox root instead of the per-kind root (lector audit,
----2026-05-24). This module collapses them into one `reconcile` entry
----point so the bug class is no longer possible.
+---host-fallback mailbox root instead of the per-kind root (lector
+---audit, 2026-05-24). This module collapses them into one
+---`reconcile` entry point so the bug class is no longer possible.
 ---
----Sidecar I/O primitives (build_record / path_for / read / write) live
----one layer down in `auto-agents.runtime_identity`. This module
----composes them.
+---### Mailbox-location policy (v0.2.30)
+---
+---All agent mailboxes live under the **workspace** rather than
+---per-CLI config dirs (`~/.claude/mailbox`, `~/.codex/mailbox`, etc).
+---The new layout, owned by `auto-core.mailbox.path` v0.1.33+:
+---
+---  <workspace_root>/.auto-agents/mailbox/<instance>/<agent_name>/...
+---
+---Rationale: visibility (the user sees mailbox files next to their
+---code), prunability (one tree per workspace; nuke when done),
+---accessibility (agents whose cwd is at or under the workspace root
+---get native filesystem access without per-kind sandbox grants).
+---
+---`mailbox_root()` resolves the workspace mailbox root via
+---`auto-core.mailbox.path.workspace_mailbox_root`, which walks up
+---via `auto-core.fs.path.workspace_root` (bare-repo-aware) and
+---appends `.auto-agents/mailbox`. The single
+---`AUTO_AGENTS_MAILBOX_ROOT` env var override remains for tests.
+---
+---Sidecar I/O primitives (build_record / path_for / read / write)
+---live one layer down in `auto-agents.runtime_identity`. This
+---module composes them.
 ---
 ---@module 'auto-agents.runtime.identity'
 
 local M = {}
 
----Per-CLI mailbox tool root. The per-kind path mirrors the upstream
----CLI's own scoped config dir so that running the CLI under its
----default profile already has read/write on the mailbox tree without
----extra sandbox grants.
----
----Kinds not listed here fall back to
----`auto-core.mailbox.host_fallback_root()` — the nvim-side default
----(`~/.local/state/nvim/auto-core/mailbox`).
----
----Test override: `AUTO_AGENTS_MAILBOX_ROOT_<KIND_UPPER>` env var
----takes precedence over the table when set. Mirrors the existing
----`AUTO_AGENTS_RUNTIME_IDENTITY_PATH` override pattern.
-M.MAILBOX_ROOT_BY_KIND = {
-  claude      = vim.fn.expand("~/.claude/mailbox"),
-  codex       = vim.fn.expand("~/.codex/mailbox"),
-  -- v0.2.30: antigravity (Google `agy` CLI) replaces deprecated
-  -- gemini. Per-user config nests under ~/.gemini/antigravity/,
-  -- so the mailbox tool root is a sibling of that subtree.
-  antigravity = vim.fn.expand("~/.gemini/antigravity/mailbox"),
-}
-
----Resolve the mailbox tool root for an agent kind.
----
----Resolution order:
----  1. `AUTO_AGENTS_MAILBOX_ROOT_<KIND_UPPER>` env (test override)
----  2. `M.MAILBOX_ROOT_BY_KIND[kind]`
----  3. `auto-core.mailbox.host_fallback_root()` (kind unknown / nil)
----
----@param kind string?
+---Resolve the workspace mailbox root. Delegates to auto-core's
+---`mailbox.path.workspace_mailbox_root` so the layout knowledge
+---stays in exactly one place. `opts.cwd` defaults to
+---`vim.fn.getcwd()`; pass an explicit cwd when reconciling for an
+---agent whose effective workspace differs from the host's.
+---@param opts { cwd: string? }?
 ---@return string
-function M.mailbox_root_for_kind(kind)
-  if type(kind) == "string" and kind ~= "" then
-    local env_key = "AUTO_AGENTS_MAILBOX_ROOT_" .. kind:upper()
-    local override = vim.env[env_key]
-    if type(override) == "string" and override ~= "" then
-      return override
-    end
-    if M.MAILBOX_ROOT_BY_KIND[kind] then
-      return M.MAILBOX_ROOT_BY_KIND[kind]
-    end
-  end
-  return require("auto-core").mailbox.host_fallback_root()
+function M.mailbox_root(opts)
+  local mb_path = require("auto-core.mailbox.path")
+  return mb_path.workspace_mailbox_root(opts)
 end
 
 ---Reconcile a slot's identity. Registers the agent's mailbox under
----its per-kind root (idempotent re-registration is safe per ADR 0013
----§1), builds and atomic-writes the sidecar identity record, and
----returns the resolved facts so callers can wire env vars / wake
----messages / responses without re-deriving them.
+---the workspace mailbox root (idempotent re-registration is safe
+---per ADR 0013 §1), builds and atomic-writes the sidecar identity
+---record, and returns the resolved facts so callers can wire env
+---vars / wake messages / responses without re-deriving them.
 ---
 ---On any step failure returns `{ ok = false, error, detail }`; the
 ---caller decides UX (notify / response / log). This module never
 ---surfaces to the user directly.
 ---
----@param opts { slot: integer, agent_name: string, kind: string?, diff_review: boolean?, agent_pid: integer?, stamped_by: string, wake: table? }
+---@param opts { slot: integer, agent_name: string, kind: string?, diff_review: boolean?, agent_pid: integer?, stamped_by: string, wake: table?, cwd: string? }
 ---@return { ok: boolean, mailbox_root: string?, mailbox_record: table?, sidecar_path: string?, sidecar_record: table?, error: string?, detail: string? }
 function M.reconcile(opts)
   opts = opts or {}
@@ -106,7 +93,7 @@ function M.reconcile(opts)
              detail = "require('auto-agents.runtime_identity') failed" }
   end
 
-  local mailbox_root = M.mailbox_root_for_kind(opts.kind)
+  local mailbox_root = M.mailbox_root({ cwd = opts.cwd })
 
   local register_opts = { root = mailbox_root }
   if type(opts.wake) == "table" then register_opts.wake = opts.wake end

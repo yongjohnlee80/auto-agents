@@ -43,6 +43,17 @@ vim.o.lines = 60
 vim.o.swapfile = false
 vim.o.hidden = true
 
+-- Isolate auto-core's persisted state to a fresh tempdir for the
+-- duration of this smoke run. Without this, the `auto-agents`
+-- namespace can leak `panel.slot_count` (and other values) from a
+-- prior run into the assertions about post-setup defaults
+-- (lector audit must-fix #2, 2026-05-24). Done before `aa.setup`
+-- below so the namespace loads from the isolated path on first
+-- materialization.
+require("auto-core.state").configure({
+  persist_dir = vim.fn.tempname() .. "_auto-core-state",
+})
+
 local fail_count = 0
 local pass_count = 0
 local function ok(name, cond, detail)
@@ -718,13 +729,13 @@ do
   local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-1.json"
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
 
-  -- ADR 0029 Decision #3 — the reconcile path now registers the
-  -- mailbox under the per-kind root. Redirect kind=claude to a
-  -- tempdir so the test doesn't write into the user's real
-  -- `~/.claude/mailbox` tree.
-  local tmp_claude_root = vim.fn.tempname() .. "_claude-mailbox"
-  vim.fn.mkdir(tmp_claude_root, "p")
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = tmp_claude_root
+  -- v0.2.30 / auto-core v0.1.33: mailboxes live under the workspace
+  -- mailbox root resolved by `auto-core.mailbox.path.workspace_mailbox_root`.
+  -- Override via the single AUTO_AGENTS_MAILBOX_ROOT env var so the
+  -- test doesn't write into the live workspace mailbox tree.
+  local tmp_mb_root = vim.fn.tempname() .. "_workspace-mailbox"
+  vim.fn.mkdir(tmp_mb_root, "p")
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = tmp_mb_root
 
   ok("ADR 0023 §3.1: path_for honors AUTO_AGENTS_RUNTIME_IDENTITY_PATH env",
     ri.path_for(1) == tmp_sidecar)
@@ -826,9 +837,9 @@ do
 
   -- Teardown.
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = nil
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = nil
   pcall(vim.fn.delete, tmp_sidecar)
-  pcall(vim.fn.delete, tmp_claude_root, "rf")
+  pcall(vim.fn.delete, tmp_mb_root, "rf")
   aa.state.config.agents.bootstrap = {}
   aa.state.slot_terminals[1] = nil
 end
@@ -843,13 +854,12 @@ do
   local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-5.json"
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
 
-  -- ADR 0029 Decision #3 / lector audit must-fix — adopt now writes
-  -- the wake message under the per-kind mailbox root, not
-  -- host_fallback_root(). Redirect kind=claude to a tempdir so the
-  -- test reads from the same place the fixed adopt writes to.
-  local tmp_claude_root = vim.fn.tempname() .. "_claude-mailbox-adopt"
-  vim.fn.mkdir(tmp_claude_root, "p")
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = tmp_claude_root
+  -- v0.2.30 / auto-core v0.1.33: adopt writes the wake message under
+  -- the workspace mailbox root resolved by auto-core. Override via
+  -- the single AUTO_AGENTS_MAILBOX_ROOT env var.
+  local tmp_mb_root = vim.fn.tempname() .. "_workspace-mailbox-adopt"
+  vim.fn.mkdir(tmp_mb_root, "p")
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = tmp_mb_root
 
   -- Plant a fake slot 5 (ultron-prime, kind=claude, diff_review=true).
   -- diff_review=true exercises lector's "adopt loses diff_review" bug
@@ -895,23 +905,22 @@ do
     record and record.diff_review == true,
     record and ("diff_review=" .. tostring(record.diff_review)) or "(no record)")
   ok("ADR 0029 #3 (lector audit must-fix): adopt sidecar's tool_root + "
-     .. "mailbox_dir resolve under the per-kind mailbox root, not "
+     .. "mailbox_dir resolve under the workspace mailbox root, not "
      .. "host_fallback_root (pre-fix: adopt called host_fallback_root)",
     record and type(record.tool_root) == "string"
-      and record.tool_root == tmp_claude_root
+      and record.tool_root == tmp_mb_root
       and type(record.mailbox_dir) == "string"
-      and record.mailbox_dir:sub(1, #tmp_claude_root) == tmp_claude_root,
+      and record.mailbox_dir:sub(1, #tmp_mb_root) == tmp_mb_root,
     record and ("tool_root=" .. tostring(record.tool_root)) or "(no record)")
 
-  -- Wake message injected into the live inbox. The live inbox path
-  -- is `<tool_root>/<full-id>/inbox/`. host_fallback_root resolves
-  -- to wherever auto-core is configured; check both candidate
-  -- locations.
-  local core = require("auto-core")
+  -- Wake message injected into the live inbox. The inbox path is
+  -- composed by the auto-core path resolver (v0.1.33 new layout:
+  -- <root>/<instance>/<name>/inbox/) so we use the same helper here.
   local mb_path = require("auto-core.mailbox.path")
-  local tool_root = record and record.tool_root or core.mailbox.host_fallback_root()
+  local tool_root = record and record.tool_root
+                       or require("auto-core").mailbox.host_fallback_root()
   local full = mb_path.full_id("agent:ultron-prime")
-  local inbox = tool_root .. "/" .. full .. "/inbox"
+  local inbox = mb_path.subdir(full, "inbox", tool_root)
   local listing = vim.fn.readdir(inbox)
   ok("ADR 0023 §3.3: wake message landed in the live inbox",
     type(listing) == "table" and #listing >= 1,
@@ -969,6 +978,7 @@ do
   -- outbox after adopt. Acceptance is that the router picks it up
   -- and renames into the peer's inbox.
   do
+    local core = require("auto-core")
     -- Plant a peer mailbox to deliver to under the same tool root
     -- used by the adopted Claude-backed agent.
     pcall(function() core.mailbox.register("agent:test-peer", { root = tool_root }) end)
@@ -979,9 +989,11 @@ do
     vim.wait(50)
 
     -- The adopt above registered agent:ultron-prime; now write a
-    -- message in its outbox addressed to test-peer.
+    -- message in its outbox addressed to test-peer. Path composed via
+    -- the auto-core path resolver so the new v0.1.33 layout
+    -- (<root>/<instance>/<name>/) is honored without hardcoding it.
     local from_full = mb_path.full_id("agent:ultron-prime")
-    local from_outbox = tool_root .. "/" .. from_full .. "/outbox"
+    local from_outbox = mb_path.subdir(from_full, "outbox", tool_root)
     vim.fn.mkdir(from_outbox, "p")
     local mid = "adopt-rt-trip-" .. tostring(os.time())
     local payload = {
@@ -1000,7 +1012,7 @@ do
     core.mailbox.scan_now()
     vim.wait(200, function()
       local peer_full = mb_path.full_id("agent:test-peer")
-      local peer_inbox = tool_root .. "/" .. peer_full .. "/inbox"
+      local peer_inbox = mb_path.subdir(peer_full, "inbox", tool_root)
       local entries = vim.fn.readdir(peer_inbox) or {}
       for _, e in ipairs(entries) do
         if e:find(mid, 1, true) then return true end
@@ -1009,7 +1021,7 @@ do
     end, 20)
 
     local peer_full = mb_path.full_id("agent:test-peer")
-    local peer_inbox = tool_root .. "/" .. peer_full .. "/inbox"
+    local peer_inbox = mb_path.subdir(peer_full, "inbox", tool_root)
     local entries = vim.fn.readdir(peer_inbox) or {}
     local delivered = false
     for _, e in ipairs(entries) do
@@ -1021,9 +1033,9 @@ do
 
   -- Teardown.
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = nil
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = nil
   pcall(vim.fn.delete, tmp_sidecar)
-  pcall(vim.fn.delete, tmp_claude_root, "rf")
+  pcall(vim.fn.delete, tmp_mb_root, "rf")
   aa.state.config.agents.bootstrap = {}
   aa.state.slot_terminals[5] = nil
 end

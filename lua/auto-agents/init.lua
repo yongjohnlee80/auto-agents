@@ -323,6 +323,71 @@ function M.setup(opts)
   M.state.config = config
   M.state.initialized = true
 
+  -- v0.2.30: workspace-scoped mailbox housekeeping. (1) Append
+  -- `.auto-agents/` to the workspace `.gitignore` if missing so the
+  -- mailbox tree never ends up tracked. (2) Surface a one-line
+  -- migration warning if any legacy per-CLI mailbox dirs are
+  -- detected, so the user knows running agents may need re-spawn.
+  pcall(function()
+    local identity = require("auto-agents.runtime.identity")
+    local logger = require("auto-agents.log")
+    local mailbox_root = identity.mailbox_root()
+    -- workspace_root is the parent of `.auto-agents/mailbox`.
+    local workspace_root = mailbox_root:gsub("/%.auto%-agents/mailbox$", "")
+    local gitignore_path = workspace_root .. "/.gitignore"
+    local needs_append = true
+    local f = io.open(gitignore_path, "r")
+    if f then
+      for line in f:lines() do
+        local s = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if s == ".auto-agents/" or s == ".auto-agents"
+           or s == "/.auto-agents/" or s == "/.auto-agents" then
+          needs_append = false
+          break
+        end
+      end
+      f:close()
+    end
+    if needs_append then
+      local append = io.open(gitignore_path, "a")
+      if append then
+        append:write("\n# auto-agents workspace mailbox (v0.2.30+)\n.auto-agents/\n")
+        append:close()
+        logger.info("setup", ("appended `.auto-agents/` to %s"):format(gitignore_path))
+      end
+    end
+    -- Legacy-layout detection. The old per-CLI mailbox roots are
+    -- `~/.claude/mailbox`, `~/.codex/mailbox`, `~/.gemini/mailbox`.
+    -- If any has agent:* subdirs left over from a prior auto-agents
+    -- version, warn once so the user can re-spawn slots (the new
+    -- workspace-scoped routing won't see the old dirs).
+    local legacy = { "~/.claude/mailbox", "~/.codex/mailbox", "~/.gemini/mailbox" }
+    local stale = {}
+    for _, p in ipairs(legacy) do
+      local expanded = vim.fn.expand(p)
+      if vim.fn.isdirectory(expanded) == 1 then
+        local sd = vim.uv.fs_scandir(expanded)
+        if sd then
+          while true do
+            local name, type_ = vim.uv.fs_scandir_next(sd)
+            if not name then break end
+            if type_ == "directory" and name:match("^agent:") then
+              stale[#stale + 1] = expanded .. "/" .. name
+              break  -- one example per root is enough
+            end
+          end
+        end
+      end
+    end
+    if #stale > 0 then
+      logger.warn("setup",
+        ("v0.2.30 layout: %d legacy mailbox dir(s) detected (e.g. %s). "
+         .. "Live slots writing there won't see the new workspace mailbox "
+         .. "at %s — restart affected slots or run mailbox.prune on the legacy roots."):format(
+          #stale, stale[1], mailbox_root))
+    end
+  end)
+
   -- M6 diff-review bridge: agents opted in via `diff_review =
   -- true` in TOML will route their openDiff requests to our native
   -- unified queue via a first-party MCP bridge (SSE over HTTP).
@@ -640,9 +705,8 @@ local function build_agent_env(spec, cwd)
       else
         -- Preview / unconfigured spawn — register without a sidecar
         -- (no slot to key it to).
-        local root = identity.mailbox_root_for_kind(spec.kind)
         rec = mailbox.register("agent:" .. spec.name, {
-          root = root,
+          root = identity.mailbox_root(),
           wake = wake_spec,
         })
       end
