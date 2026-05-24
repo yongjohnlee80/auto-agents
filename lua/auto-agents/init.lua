@@ -1292,20 +1292,84 @@ function M.send_slot(slot, text, opts)
   if not term:send(payload) then return false end
   if opts and opts.submit then
     local delay = opts.submit_delay_ms or 60
-    -- v0.2.30 Phase 7: codex TUI sometimes retains the wake text in
-    -- its composer when the deferred CR races an open picker /
-    -- autocomplete state. User's documented manual workaround is
-    -- Esc + Enter (close popup, then commit). Replicate it for codex
-    -- slots by sending ESC immediately before the CR. claude /
-    -- antigravity composers don't share this — keep their submit as
-    -- a bare CR.
-    local submit_keys = is_codex and "\27\r" or "\r"
-    vim.defer_fn(function()
-      if term and term.is_alive and term:is_alive() and term.send then
-        term:send(submit_keys)
+    -- Per-kind submit keystroke sequence. claude / antigravity:
+    -- bare Enter. codex: Esc + Enter, sent as TWO discrete
+    -- keypresses with an inter-key delay — sending them as one
+    -- byte chunk (`\27\r`) was being interpreted by codex's TUI as
+    -- Alt+Enter (newline in composer), which is the v0.2.33 user
+    -- report. Splitting them mimics actual keyboard timing so the
+    -- TUI sees Esc (close picker) followed by a fresh bare Enter
+    -- (submit). Override via `opts.submit_keys = { ... }`.
+    local default_keys = is_codex and { "<Esc>", "<CR>" } or { "<CR>" }
+    local submit_keys = opts.submit_keys or default_keys
+    local inter_delay = opts.inter_key_delay_ms or 30
+    local function press_seq(i)
+      if i > #submit_keys then return end
+      if not (term and term.is_alive and term:is_alive() and term.send) then return end
+      M.send_keypress(slot, submit_keys[i])
+      if i < #submit_keys then
+        vim.defer_fn(function() press_seq(i + 1) end, inter_delay)
       end
-    end, delay)
+    end
+    vim.defer_fn(function() press_seq(1) end, delay)
   end
+  return true
+end
+
+---Map of symbolic key names to the byte sequences a terminal sends
+---for those keypresses. Exposed on M so callers and tests can
+---inspect / extend it. Add a binding by mutating
+---`M.KEY_BYTES[name] = "<bytes>"`.
+M.KEY_BYTES = {
+  ["<CR>"]    = "\r",
+  ["<Enter>"] = "\r",
+  ["<Esc>"]   = "\27",
+  ["<Tab>"]   = "\t",
+  ["<BS>"]    = "\b",
+  ["<Space>"] = " ",
+  ["<C-a>"]   = "\1",
+  ["<C-b>"]   = "\2",
+  ["<C-c>"]   = "\3",
+  ["<C-d>"]   = "\4",
+  ["<C-e>"]   = "\5",
+  ["<C-k>"]   = "\11",
+  ["<C-l>"]   = "\12",
+  ["<C-n>"]   = "\14",
+  ["<C-p>"]   = "\16",
+  ["<C-u>"]   = "\21",
+  ["<C-w>"]   = "\23",
+  -- Arrow keys (CSI sequences). Most TUIs accept either CSI or
+  -- application-mode forms; CSI is more portable.
+  ["<Up>"]    = "\27[A",
+  ["<Down>"]  = "\27[B",
+  ["<Right>"] = "\27[C",
+  ["<Left>"]  = "\27[D",
+  ["<Home>"]  = "\27[H",
+  ["<End>"]   = "\27[F",
+}
+
+---Send a single symbolic keypress to a slot's TUI. Unlike
+---`send_slot` (which wraps body text in bracketed-paste markers
+---and is meant for delivering chunks of input text), this sends
+---the raw byte sequence the terminal would generate for the named
+---key — discrete keypress, not pasted content. Use it when you
+---need the agent's TUI to see a real keyboard event (e.g. Enter to
+---submit, Esc to dismiss a picker, Ctrl+C to interrupt).
+---
+---`key` is a vim-style key name (`<CR>`, `<Esc>`, `<C-c>`, ...) —
+---see `M.KEY_BYTES` for the recognized set. If `key` isn't in the
+---table, it's sent as-is (so callers can pass literal byte
+---sequences like `"\27[13;1u"` for kitty-keyboard-protocol Enter
+---without needing to extend the table).
+---@param slot integer
+---@param key  string
+---@return boolean ok
+function M.send_keypress(slot, key)
+  if slot < 1 or slot > M.MAX_SLOT then return false end
+  local term = M.state.slot_terminals[slot]
+  if not term or not term:is_alive() or not term.send then return false end
+  local bytes = M.KEY_BYTES[key] or key
+  if not term:send(bytes) then return false end
   return true
 end
 

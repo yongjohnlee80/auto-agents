@@ -765,22 +765,68 @@ aa.state.slot_terminals[2] = {
   is_alive = function() return true end,
   send = function(_, text) table.insert(codex_sends, text); return true end,
 }
-aa.send_slot(2, "review the diff please", { submit = true, submit_delay_ms = 30 })
-vim.wait(80)
-ok("Phase 7: codex submit fires Esc + CR (not bare CR)",
-  #codex_sends == 2 and codex_sends[2] == "\27\r",
+aa.send_slot(2, "review the diff please",
+  { submit = true, submit_delay_ms = 30, inter_key_delay_ms = 10 })
+vim.wait(120)
+-- v0.2.34: codex Esc + CR are now sent as DISCRETE keypresses (two
+-- separate term:send calls with an inter-key delay) so codex's TUI
+-- doesn't interpret the combo as Alt+Enter (newline-in-composer).
+-- 3 sends total: body + Esc + CR.
+ok("Phase 7 / v0.2.34: codex submit splits Esc + CR into discrete keypresses",
+  #codex_sends == 3 and codex_sends[2] == "\27" and codex_sends[3] == "\r",
   "got: " .. vim.inspect(codex_sends))
-ok("Phase 7: claude submit still fires bare CR (no Esc prepended)",
+ok("v0.2.34: claude submit still fires bare CR (no Esc, no split)",
   (function()
     local claude_sends = {}
     aa.state.slot_terminals[1] = {
       is_alive = function() return true end,
       send = function(_, t) table.insert(claude_sends, t); return true end,
     }
-    aa.send_slot(1, "claude-side body", { submit = true, submit_delay_ms = 30 })
+    aa.send_slot(1, "claude-side body",
+      { submit = true, submit_delay_ms = 30 })
     vim.wait(80)
     return #claude_sends == 2 and claude_sends[2] == "\r"
   end)())
+
+-- v0.2.34: send_keypress symbolic helper + override hook.
+local kp_sends = {}
+aa.state.slot_terminals[2] = {
+  is_alive = function() return true end,
+  send = function(_, t) table.insert(kp_sends, t); return true end,
+}
+aa.send_keypress(2, "<CR>")
+aa.send_keypress(2, "<Esc>")
+aa.send_keypress(2, "<C-c>")
+aa.send_keypress(2, "<Tab>")
+aa.send_keypress(2, "<Up>")
+aa.send_keypress(2, "literal-bytes")
+ok("v0.2.34: send_keypress translates symbolic key names to bytes",
+  #kp_sends == 6
+    and kp_sends[1] == "\r"
+    and kp_sends[2] == "\27"
+    and kp_sends[3] == "\3"
+    and kp_sends[4] == "\t"
+    and kp_sends[5] == "\27[A"
+    and kp_sends[6] == "literal-bytes",
+  vim.inspect(kp_sends))
+ok("v0.2.34: M.KEY_BYTES table is exposed for extension",
+  type(aa.KEY_BYTES) == "table"
+    and aa.KEY_BYTES["<CR>"] == "\r"
+    and aa.KEY_BYTES["<Esc>"] == "\27")
+
+-- v0.2.34: send_slot honors opts.submit_keys override.
+local override_sends = {}
+aa.state.slot_terminals[2] = {
+  is_alive = function() return true end,
+  send = function(_, t) table.insert(override_sends, t); return true end,
+}
+aa.send_slot(2, "body",
+  { submit = true, submit_delay_ms = 20, inter_key_delay_ms = 10,
+    submit_keys = { "<C-d>" } })
+vim.wait(80)
+ok("v0.2.34: send_slot honors opts.submit_keys override",
+  #override_sends == 2 and override_sends[2] == "\4",
+  vim.inspect(override_sends))
 aa.state.slot_terminals[2] = saved_term2
 aa.state.slot_terminals[1] = saved_term
 
