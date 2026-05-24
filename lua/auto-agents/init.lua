@@ -682,7 +682,9 @@ local function build_agent_env(spec, cwd)
         -- per-kind mailbox root resolution, mailbox registration,
         -- and sidecar identity write. One call replaces the three
         -- previously duplicated paths (spawn / refresh_agent_id /
-        -- adopt-resumed-agent).
+        -- adopt-resumed-agent). `cwd` flows through so the mailbox
+        -- root anchors at the spawn cwd's workspace when auto-core
+        -- worktree state is unset (Lector audit must-fix #1, 2026-05-24).
         local result = identity.reconcile({
           slot        = spec.slot,
           agent_name  = spec.name,
@@ -690,6 +692,7 @@ local function build_agent_env(spec, cwd)
           diff_review = spec.diff_review,
           stamped_by  = "auto-agents.spawn",
           wake        = wake_spec,
+          cwd         = cwd,
         })
         if not result.ok then
           require("auto-agents.log").warn("spawn",
@@ -704,9 +707,10 @@ local function build_agent_env(spec, cwd)
         end
       else
         -- Preview / unconfigured spawn — register without a sidecar
-        -- (no slot to key it to).
+        -- (no slot to key it to). Same cwd-through pattern as the
+        -- reconcile branch above.
         rec = mailbox.register("agent:" .. spec.name, {
-          root = identity.mailbox_root(),
+          root = identity.mailbox_root({ cwd = cwd }),
           wake = wake_spec,
         })
       end

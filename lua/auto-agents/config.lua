@@ -178,6 +178,20 @@ function M.validate(cfg)
   if type(a.bootstrap) ~= "table" then
     return "agents.bootstrap must be a list of slot specs"
   end
+  -- v0.2.30 / auto-core v0.1.33 workspace-mailbox layout: agent
+  -- names `nvim` and `user` collide on disk with the host/user
+  -- mailbox after the type prefix is stripped. Reject at config
+  -- boundary so the conflict surfaces at setup, not silently in
+  -- the filesystem. Mirrors the auto-core path.validate_id
+  -- enforcement (lector audit must-fix #2, 2026-05-24).
+  for _, entry in ipairs(a.bootstrap) do
+    if type(entry) == "table" and type(entry.name) == "string" then
+      if entry.name == "nvim" or entry.name == "user" then
+        return "agents.bootstrap entry name '" .. entry.name
+          .. "' is reserved (collides with host/user mailbox)"
+      end
+    end
+  end
   if not SCOPES[cfg.kb.default_scope] then
     return "kb.default_scope must be one of shared|private|isolated"
   end

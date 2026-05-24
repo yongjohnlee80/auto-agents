@@ -274,6 +274,60 @@ aa.sync_slot_count()
 ok("sync_slot_count moves MAX_SLOT back to 5",
   aa.MAX_SLOT == 5)
 
+-- v0.2.30 / auto-core v0.1.33 — Lector audit must-fix #1: spawn cwd
+-- flows through identity.reconcile / mailbox_root so the agent's
+-- mailbox anchors at the spawn-cwd's workspace, not the host's.
+do
+  local identity = require("auto-agents.runtime.identity")
+  -- Clear any auto-core worktree state for a deterministic resolver
+  -- behavior. With state unset and no AUTO_AGENTS_MAILBOX_ROOT env,
+  -- the resolver falls through to opts.cwd → exactly the path we
+  -- want to anchor the mailbox under.
+  local worktree_ok, worktree_mod = pcall(require, "auto-core.git.worktree")
+  if worktree_ok then
+    pcall(worktree_mod.set_active, nil)
+    pcall(worktree_mod.set_workspace_root, nil)
+  end
+  local saved_env = vim.env.AUTO_AGENTS_MAILBOX_ROOT
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = nil
+
+  local spawn_cwd = vim.fn.tempname() .. "_spawn-cwd-fixture"
+  vim.fn.mkdir(spawn_cwd, "p")
+  -- Defensive: clear any leftover _override_root from earlier
+  -- sections that may have called mailbox.configure({ root = X }).
+  require("auto-core.mailbox.path").configure(nil)
+  local resolved = identity.mailbox_root({ cwd = spawn_cwd })
+  ok("Lector audit must-fix #1: mailbox_root({cwd}) anchors under the spawn cwd",
+    resolved:sub(1, #spawn_cwd) == spawn_cwd
+      and resolved:find("%.auto%-agents/mailbox$") ~= nil,
+    "got: " .. resolved .. " (expected under " .. spawn_cwd .. ")")
+
+  -- Restore env + cleanup.
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = saved_env
+  pcall(vim.fn.delete, spawn_cwd, "rf")
+end
+
+-- v0.2.30 / auto-core v0.1.33 — Lector audit must-fix #2: reserved
+-- agent names rejected at the auto-agents config boundary too
+-- (mirrors the path.validate_id check).
+do
+  local cfg_mod = require("auto-agents.config")
+  local _, err_nvim = pcall(cfg_mod.apply, {
+    agents = { bootstrap = { { slot = 1, name = "nvim", kind = "claude" } } },
+  })
+  ok("Lector audit must-fix #2: config rejects bootstrap name 'nvim'",
+    type(err_nvim) == "string"
+      and err_nvim:find("reserved", 1, true) ~= nil,
+    "got: " .. tostring(err_nvim))
+  local _, err_user = pcall(cfg_mod.apply, {
+    agents = { bootstrap = { { slot = 1, name = "user", kind = "claude" } } },
+  })
+  ok("Lector audit must-fix #2: config rejects bootstrap name 'user'",
+    type(err_user) == "string"
+      and err_user:find("reserved", 1, true) ~= nil,
+    "got: " .. tostring(err_user))
+end
+
 -- Admin REPL tab-complete: `slot` registers + `slot add` offers integers.
 local admin = require("auto-agents.panel.admin")
 local _, top_cands = admin._complete_at("", 0)
