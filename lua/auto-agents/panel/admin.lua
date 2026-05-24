@@ -166,6 +166,78 @@ local function is_help_token(tok)
   return tok == "help" or tok == "?" or tok == ":h"
 end
 
+---Parse positional / k=v args for a `run <verb>` invocation. Pure
+---function — no side effects — exposed as `M._parse_run_args` for
+---tests. Per-verb positional shortcuts:
+---  * `peep <slot> [lines]`   → { slot, lines? }
+---  * `say  <slot> <text...>` → { slot, text }
+---  * `wake <slot-num-or-name> [text...]` → { slot=name, text? }
+---      (resolves a numeric slot to the bootstrap entry's name)
+---  * `send_user <body...>`   → { body }
+---  * any other verb          → generic `k=v` parsing with
+---      auto-coercion (number / true / false / string)
+---@param cmd_name string
+---@param toks string[]   tokens of the full input ("run", cmd, args...)
+---@return table args
+local function _parse_run_args(cmd_name, toks)
+  local args = {}
+  if cmd_name == "peep" then
+    args.slot = tonumber(toks[3])
+    if toks[4] then args.lines = tonumber(toks[4]) end
+  elseif cmd_name == "say" then
+    args.slot = tonumber(toks[3])
+    if #toks >= 4 then
+      local rest = {}
+      for i = 4, #toks do rest[#rest + 1] = toks[i] end
+      args.text = table.concat(rest, " ")
+    end
+  elseif cmd_name == "wake" then
+    -- wake's `slot` arg is the agent NAME (string). Admin UX
+    -- accepts either a slot NUMBER (resolved to the bootstrap
+    -- entry's name) or a literal agent name string. Trailing
+    -- tokens become the optional `text`.
+    local first = toks[3]
+    if first then
+      local as_num = tonumber(first)
+      if as_num then
+        local cfg = (require("auto-agents").state or {}).config or {}
+        local bs = (cfg.agents and cfg.agents.bootstrap) or {}
+        for _, e in ipairs(bs) do
+          if tonumber(e.slot) == as_num then
+            args.slot = e.name; break
+          end
+        end
+        if not args.slot then args.slot = tostring(first) end
+      else
+        args.slot = first
+      end
+    end
+    if #toks >= 4 then
+      local rest = {}
+      for i = 4, #toks do rest[#rest + 1] = toks[i] end
+      args.text = table.concat(rest, " ")
+    end
+  elseif cmd_name == "send_user" then
+    if #toks >= 3 then
+      local rest = {}
+      for i = 3, #toks do rest[#rest + 1] = toks[i] end
+      args.body = table.concat(rest, " ")
+    end
+  else
+    for i = 3, #toks do
+      local k, v = toks[i]:match("^([^=]+)=(.*)$")
+      if k and v then
+        local n = tonumber(v)
+        if n ~= nil then args[k] = n
+        elseif v == "true" then args[k] = true
+        elseif v == "false" then args[k] = false
+        else args[k] = v end
+      end
+    end
+  end
+  return args
+end
+
 local function dispatch(input)
   input = (input or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if input == "" then return end
@@ -293,33 +365,7 @@ local function dispatch(input)
       return
     end
 
-    -- Build args. Positional shortcuts for peep/say; generic
-    -- key=value for everything else. Numeric strings auto-coerce
-    -- so `run peep 2` produces { slot = 2 } (the registered schema
-    -- expects a number).
-    local args = {}
-    if cmd_name == "peep" then
-      args.slot = tonumber(toks[3])
-      if toks[4] then args.lines = tonumber(toks[4]) end
-    elseif cmd_name == "say" then
-      args.slot = tonumber(toks[3])
-      if #toks >= 4 then
-        local rest = {}
-        for i = 4, #toks do rest[#rest + 1] = toks[i] end
-        args.text = table.concat(rest, " ")
-      end
-    else
-      for i = 3, #toks do
-        local k, v = toks[i]:match("^([^=]+)=(.*)$")
-        if k and v then
-          local n = tonumber(v)
-          if n ~= nil then args[k] = n
-          elseif v == "true" then args[k] = true
-          elseif v == "false" then args[k] = false
-          else args[k] = v end
-        end
-      end
-    end
+    local args = _parse_run_args(cmd_name, toks)
 
     local ok_call, result = pcall(spec.handler, args, { admin = true })
     if not ok_call then
@@ -351,8 +397,19 @@ local function dispatch(input)
       end
       emit(lines)
     else
-      emit({ string.format("run %s: OK", cmd_name),
-             "  " .. vim.inspect(result.value or {}):gsub("\n", "\n  ") })
+      -- vim.inspect returns a multi-line string for nested tables;
+      -- nvim_buf_set_lines (in emit) rejects any element containing
+      -- `\n`. Split into separate lines AND scrub any stray CRs the
+      -- handler may have stuffed into a value field.
+      local out = { string.format("run %s: OK", cmd_name) }
+      for line in (vim.inspect(result.value or {})):gmatch("([^\n]*)\n?") do
+        if line ~= "" or #out == 1 then
+          out[#out + 1] = "  " .. line
+        end
+      end
+      -- Drop trailing empty line if gmatch produced one.
+      if out[#out] == "  " then out[#out] = nil end
+      emit(out)
     end
 
   elseif verb == "quit" then
@@ -1072,7 +1129,8 @@ local function complete_at(prompt, cursor_col)
       candidates = {}
     end
   elseif #prev_toks == 2 and prev_toks[1] == "run"
-    and (prev_toks[2] == "peep" or prev_toks[2] == "say") then
+    and (prev_toks[2] == "peep" or prev_toks[2] == "say"
+         or prev_toks[2] == "wake") then
     -- Offer live slot numbers for peep/say.
     local aa_ok, aa = pcall(require, "auto-agents")
     candidates = {}
@@ -1200,6 +1258,7 @@ end
 
 -- Exposed for tests; not part of the public surface.
 M._complete_at = complete_at
+M._parse_run_args = _parse_run_args
 
 ---Apply a `panel.width_override` mutation: update live cfg, persist to
 ---the active TOML, and trigger a live width refresh on the open panel

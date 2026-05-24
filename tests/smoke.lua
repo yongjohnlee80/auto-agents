@@ -1634,6 +1634,55 @@ do
     vim.inspect(claude_grants))
 end
 
+-- ────────── 23. v0.2.33: admin run arg parser + emit safety ──────────
+print("\n[23] v0.2.33: admin _parse_run_args positional shortcuts")
+do
+  local admin = require("auto-agents.panel.admin")
+  local parse = admin._parse_run_args
+
+  -- 23a. peep / say shortcuts (regression net for Phase 4 surface).
+  local p = parse("peep", { "run", "peep", "3" })
+  ok("parse_run_args: peep slot coerced to number",
+    type(p.slot) == "number" and p.slot == 3, vim.inspect(p))
+  p = parse("peep", { "run", "peep", "3", "50" })
+  ok("parse_run_args: peep `lines` second positional",
+    p.slot == 3 and p.lines == 50, vim.inspect(p))
+  p = parse("say", { "run", "say", "2", "hello", "world" })
+  ok("parse_run_args: say slot + text-concat",
+    p.slot == 2 and p.text == "hello world", vim.inspect(p))
+
+  -- 23b. v0.2.33 wake shortcut: numeric slot resolves to agent name.
+  aa.state.config.agents.bootstrap = {
+    { slot = 1, name = "jarvis", kind = "claude" },
+    { slot = 2, name = "rosie",  kind = "codex"  },
+  }
+  p = parse("wake", { "run", "wake", "2" })
+  ok("parse_run_args: wake `<number>` resolves to bootstrap agent name",
+    type(p.slot) == "string" and p.slot == "rosie", vim.inspect(p))
+  p = parse("wake", { "run", "wake", "jarvis", "check", "in" })
+  ok("parse_run_args: wake `<name>` passes through, trailing text concat",
+    p.slot == "jarvis" and p.text == "check in", vim.inspect(p))
+  p = parse("wake", { "run", "wake", "9" })
+  ok("parse_run_args: wake `<unknown-number>` falls through to literal string",
+    p.slot == "9", vim.inspect(p))
+
+  -- 23c. v0.2.33 send_user shortcut: all positional tokens → body.
+  p = parse("send_user", { "run", "send_user", "build", "done" })
+  ok("parse_run_args: send_user concatenates positional into body",
+    p.body == "build done", vim.inspect(p))
+  p = parse("send_user", { "run", "send_user" })
+  ok("parse_run_args: send_user with no args returns empty table",
+    next(p) == nil, vim.inspect(p))
+
+  -- 23d. generic k=v fallback for non-shortcut verbs (e.g. addressbook).
+  p = parse("addressbook", { "run", "addressbook", "include_self=false" })
+  ok("parse_run_args: generic k=v with `false` coerced to boolean",
+    p.include_self == false, vim.inspect(p))
+  p = parse("addressbook", { "run", "addressbook", "limit=10" })
+  ok("parse_run_args: generic k=v with numeric coerced to number",
+    p.limit == 10, vim.inspect(p))
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
