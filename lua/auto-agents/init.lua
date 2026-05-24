@@ -1247,22 +1247,28 @@ function M.send_slot(slot, text, opts)
   local term = M.state.slot_terminals[slot]
   if not term or not term:is_alive() or not term.send then return false end
 
+  -- Per-kind composer quirks. Resolve once: same lookup powers both
+  -- the leading-`[` dodge AND v0.2.30 Phase 7's codex Esc-CR submit
+  -- (see below).
+  local slot_kind
+  do
+    local cfg = M.state.config
+    if cfg and cfg.agents and cfg.agents.bootstrap then
+      for _, e in ipairs(cfg.agents.bootstrap) do
+        if e.slot == slot then slot_kind = e.kind; break end
+      end
+    end
+  end
+  local is_codex = slot_kind == "codex"
+
   -- Codex composer treats a leading `[` as a bracketed/queued entry and
   -- refuses to auto-submit until the user manually hits ESC + ENTER —
   -- bracketed-paste wrapping doesn't suppress this. Force-prefix any
   -- leading `[…]` body bound for a codex slot with `ATTENTION: ` so the
   -- composer accepts it as normal input. claude/antigravity composers
   -- don't share this behavior — leave their text untouched.
-  if text:sub(1, 1) == "[" then
-    local cfg = M.state.config
-    if cfg and cfg.agents and cfg.agents.bootstrap then
-      for _, e in ipairs(cfg.agents.bootstrap) do
-        if e.slot == slot and e.kind == "codex" then
-          text = "ATTENTION: " .. text
-          break
-        end
-      end
-    end
+  if is_codex and text:sub(1, 1) == "[" then
+    text = "ATTENTION: " .. text
   end
 
   local payload = text
@@ -1272,9 +1278,17 @@ function M.send_slot(slot, text, opts)
   if not term:send(payload) then return false end
   if opts and opts.submit then
     local delay = opts.submit_delay_ms or 60
+    -- v0.2.30 Phase 7: codex TUI sometimes retains the wake text in
+    -- its composer when the deferred CR races an open picker /
+    -- autocomplete state. User's documented manual workaround is
+    -- Esc + Enter (close popup, then commit). Replicate it for codex
+    -- slots by sending ESC immediately before the CR. claude /
+    -- antigravity composers don't share this — keep their submit as
+    -- a bare CR.
+    local submit_keys = is_codex and "\27\r" or "\r"
     vim.defer_fn(function()
       if term and term.is_alive and term:is_alive() and term.send then
-        term:send("\r")
+        term:send(submit_keys)
       end
     end, delay)
   end

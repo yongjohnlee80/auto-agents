@@ -751,6 +751,37 @@ vim.wait(80)
 ok("send_slot without submit fires exactly one chan_send",
    #sends == 1 and sends[1] == "\27[200~no-submit prompt\27[201~")
 
+-- v0.2.30 Phase 7: codex slots submit with ESC + CR (Esc closes
+-- any open picker/autocomplete; CR commits the freshly-pasted
+-- chat input). The user's manual workaround for the wake-text-
+-- retention bug, now baked in.
+aa.state.config.agents.bootstrap = {
+  { slot = 1, name = "jarvis", kind = "claude" },
+  { slot = 2, name = "rosie",  kind = "codex"  },
+}
+local codex_sends = {}
+local saved_term2 = aa.state.slot_terminals[2]
+aa.state.slot_terminals[2] = {
+  is_alive = function() return true end,
+  send = function(_, text) table.insert(codex_sends, text); return true end,
+}
+aa.send_slot(2, "review the diff please", { submit = true, submit_delay_ms = 30 })
+vim.wait(80)
+ok("Phase 7: codex submit fires Esc + CR (not bare CR)",
+  #codex_sends == 2 and codex_sends[2] == "\27\r",
+  "got: " .. vim.inspect(codex_sends))
+ok("Phase 7: claude submit still fires bare CR (no Esc prepended)",
+  (function()
+    local claude_sends = {}
+    aa.state.slot_terminals[1] = {
+      is_alive = function() return true end,
+      send = function(_, t) table.insert(claude_sends, t); return true end,
+    }
+    aa.send_slot(1, "claude-side body", { submit = true, submit_delay_ms = 30 })
+    vim.wait(80)
+    return #claude_sends == 2 and claude_sends[2] == "\r"
+  end)())
+aa.state.slot_terminals[2] = saved_term2
 aa.state.slot_terminals[1] = saved_term
 
 -- ──────── 15. slot_for_name — resolves bootstrap name to slot ────────
