@@ -90,6 +90,25 @@ M.defaults = {
   diff = {
     editor_floor_strategy = "warn",
   },
+
+  -- v0.2.30 / Phase 6: workspace mailbox-dir lifecycle.
+  --
+  -- `prune.enabled = true` (default) runs `auto-core.mailbox.prune`
+  --   against the workspace mailbox root at setup time, removing
+  --   stale `<instance>/<name>/` subtrees that aren't in this
+  --   nvim's live registry and whose mtime is older than
+  --   `max_age_seconds`. Live registrations are kept regardless of
+  --   age.
+  -- `prune.max_age_seconds` defaults to 7 days. Lower it to be more
+  --   aggressive (1 day for dev machines that churn through many
+  --   sessions); raise it for shared workspaces where one user's
+  --   long-running session shouldn't be pruned by another's setup.
+  mailbox = {
+    prune = {
+      enabled         = true,
+      max_age_seconds = 7 * 24 * 60 * 60,  -- 7 days
+    },
+  },
 }
 
 local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace = true }

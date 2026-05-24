@@ -386,6 +386,35 @@ function M.setup(opts)
          .. "at %s — restart affected slots or run mailbox.prune on the legacy roots."):format(
           #stale, stale[1], mailbox_root))
     end
+
+    -- v0.2.30 / Phase 6: prune stale per-instance mailbox dirs at
+    -- setup. `auto-core.mailbox.prune` walks <root>/<instance>/<name>/,
+    -- matches against the live registry by `rec.dir`, and removes
+    -- subtrees older than `max_age_seconds` (default 7 days). Live
+    -- registrations are kept regardless of age; nothing in the
+    -- current nvim's working tree is at risk. Default ON to keep
+    -- the per-instance dir count bounded; cfg.mailbox.prune.enabled
+    -- = false opts out, cfg.mailbox.prune.max_age_seconds adjusts.
+    local prune_cfg = (config.mailbox and config.mailbox.prune) or {}
+    local prune_enabled = prune_cfg.enabled
+    if prune_enabled == nil then prune_enabled = true end
+    if prune_enabled then
+      local max_age = tonumber(prune_cfg.max_age_seconds) or (7 * 24 * 60 * 60)
+      local ok_core, core = pcall(require, "auto-core")
+      if ok_core then
+        local res = core.mailbox.prune({
+          root            = mailbox_root,
+          max_age_seconds = max_age,
+        })
+        if res and (#res.removed > 0 or #(res.failed or {}) > 0) then
+          logger.info("setup", string.format(
+            "mailbox.prune: removed=%d kept_alive=%d kept_recent=%d failed=%d "
+            .. "(root=%s, max_age=%ds)",
+            #res.removed, #res.kept_alive, #res.kept_recent, #(res.failed or {}),
+            mailbox_root, max_age))
+        end
+      end
+    end
   end)
 
   -- M6 diff-review bridge: agents opted in via `diff_review =

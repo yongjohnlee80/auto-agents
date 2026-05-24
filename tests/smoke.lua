@@ -1499,6 +1499,77 @@ do
   aa.state.slot_terminals[2] = nil
 end
 
+-- ────────── 21. Phase 6: workspace mailbox-dir prune at setup ──────────
+print("\n[21] Phase 6: workspace mailbox-dir prune")
+do
+  local core = require("auto-core")
+  local mb_path = require("auto-core.mailbox.path")
+
+  -- Isolate the workspace mailbox root so prune doesn't touch the
+  -- user's real workspace tree.
+  local tmp_mb_root = vim.fn.tempname() .. "_phase6-prune-root"
+  vim.fn.mkdir(tmp_mb_root, "p")
+  local saved_env = vim.env.AUTO_AGENTS_MAILBOX_ROOT
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = tmp_mb_root
+
+  -- Plant three subtrees: one stale (older than threshold), one
+  -- fresh (younger), one corresponding to a live registration.
+  local stale_dir = mb_path.mailbox_dir("agent:zombie:1111111111-1111", tmp_mb_root)
+  local fresh_dir = mb_path.mailbox_dir("agent:newborn:2222222222-2222", tmp_mb_root)
+  vim.fn.mkdir(stale_dir .. "/inbox", "p")
+  vim.fn.mkdir(fresh_dir .. "/inbox", "p")
+  os.execute("touch -d '8 days ago' " .. vim.fn.shellescape(stale_dir))
+
+  -- Register a live mailbox so its dir is in the registry; prune
+  -- should keep it regardless of mtime.
+  pcall(core.mailbox.register, "agent:phase6-live", { root = tmp_mb_root })
+  local live_rec = core.mailbox.registry.get("agent:phase6-live")
+  ok("Phase 6: live mailbox registered for prune test",
+    live_rec ~= nil and type(live_rec.dir) == "string")
+
+  -- Drive auto-agents setup with prune ENABLED (default) and a
+  -- 1-second max_age so the "stale" 8-day-old dir counts as old.
+  -- Disable diff_review_enabled side effects by clearing bootstrap.
+  aa.state.config.agents.bootstrap = {}
+  pcall(aa.setup, {
+    panel    = { side = "right", min_width = 50, max_width = 120, editor_floor = 30, percentage = 0.30 },
+    agents   = { bootstrap = {} },
+    kb       = {},
+    term     = { enabled = false },
+    mailbox  = { prune = { enabled = true, max_age_seconds = 1 } },
+  })
+
+  ok("Phase 6: prune removed the stale instance dir",
+    vim.fn.isdirectory(stale_dir) == 0,
+    "stale_dir still present: " .. stale_dir)
+  ok("Phase 6: prune kept the fresh instance dir",
+    vim.fn.isdirectory(fresh_dir) == 1,
+    "fresh_dir missing: " .. fresh_dir)
+  ok("Phase 6: prune kept the live-registered dir",
+    vim.fn.isdirectory(live_rec.dir) == 1,
+    "live_rec.dir missing: " .. live_rec.dir)
+
+  -- Opt-out path: cfg.mailbox.prune.enabled = false skips the call.
+  local opt_out_stale = mb_path.mailbox_dir("agent:opt-out:3333333333-3333", tmp_mb_root)
+  vim.fn.mkdir(opt_out_stale .. "/inbox", "p")
+  os.execute("touch -d '8 days ago' " .. vim.fn.shellescape(opt_out_stale))
+  pcall(aa.setup, {
+    panel    = { side = "right", min_width = 50, max_width = 120, editor_floor = 30, percentage = 0.30 },
+    agents   = { bootstrap = {} },
+    kb       = {},
+    term     = { enabled = false },
+    mailbox  = { prune = { enabled = false } },
+  })
+  ok("Phase 6: cfg.mailbox.prune.enabled=false opts out (stale dir retained)",
+    vim.fn.isdirectory(opt_out_stale) == 1,
+    "opt_out_stale missing: " .. opt_out_stale)
+
+  -- Teardown.
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT = saved_env
+  pcall(vim.fn.delete, tmp_mb_root, "rf")
+  pcall(core.mailbox.unregister, "agent:phase6-live")
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
