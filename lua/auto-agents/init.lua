@@ -402,16 +402,30 @@ function M.setup(opts)
       local max_age = tonumber(prune_cfg.max_age_seconds) or (7 * 24 * 60 * 60)
       local ok_core, core = pcall(require, "auto-core")
       if ok_core then
+        -- `force = true` because this setup-time prune fires BEFORE
+        -- auto-agents registers the `nvim` host mailbox, so the
+        -- workspace root has zero live registrations at this moment
+        -- — auto-core's safety rail (Phase 8) would otherwise refuse.
+        -- We know we're pruning auto-agents' own workspace tree; the
+        -- rail exists for ad-hoc callers who might typo a path.
         local res = core.mailbox.prune({
           root            = mailbox_root,
           max_age_seconds = max_age,
+          force           = true,
         })
-        if res and (#res.removed > 0 or #(res.failed or {}) > 0) then
-          logger.info("setup", string.format(
-            "mailbox.prune: removed=%d kept_alive=%d kept_recent=%d failed=%d "
-            .. "(root=%s, max_age=%ds)",
-            #res.removed, #res.kept_alive, #res.kept_recent, #(res.failed or {}),
-            mailbox_root, max_age))
+        if res and (res.refused or #(res.removed or {}) > 0
+           or #(res.failed or {}) > 0) then
+          if res.refused then
+            logger.warn("setup", string.format(
+              "mailbox.prune refused: %s (root=%s)",
+              tostring(res.reason), mailbox_root))
+          else
+            logger.info("setup", string.format(
+              "mailbox.prune: removed=%d kept_alive=%d kept_recent=%d failed=%d "
+              .. "(root=%s, max_age=%ds)",
+              #res.removed, #res.kept_alive, #res.kept_recent, #(res.failed or {}),
+              mailbox_root, max_age))
+          end
         end
       end
     end
