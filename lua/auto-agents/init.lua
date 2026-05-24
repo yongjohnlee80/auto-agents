@@ -661,14 +661,17 @@ local function build_agent_env(spec, cwd)
         instr_path and (" instr=" .. instr_path) or ""))
   end
 
-  -- v0.2.7: per-instance mailbox registration. Uses auto-core
-  -- v0.1.8's per-instance isolation — `register` auto-suffixes
-  -- the bare `agent:<name>` id with this nvim's instance_id
-  -- (`<unix-seconds>-<pid>`) so two nvims sharing a tool root
-  -- (e.g. `~/.claude/mailbox/`) get non-overlapping subtrees.
-  -- The agent finds its mailbox via the four env vars below;
-  -- the bootstrap doc at `<tool_root>/bootstrap-mailbox.md` is
-  -- upserted on every register (cheap content-hash short-circuit
+  -- Per-instance mailbox registration. auto-core's `register`
+  -- auto-suffixes the bare `agent:<name>` id with this nvim's
+  -- instance_id (`<unix-seconds>-<pid>`); under the v0.1.33
+  -- workspace layout that instance becomes a directory level so
+  -- two nvims sharing one workspace get non-overlapping subtrees:
+  -- `<workspace>/.auto-agents/mailbox/<instance>/<name>/`. The
+  -- workspace root resolves via auto-core's worktree state per
+  -- the auto-family state-ownership convention. The agent finds
+  -- its mailbox via the four env vars below; the bootstrap doc
+  -- at `<workspace_root>/.auto-agents/mailbox/bootstrap-mailbox.md`
+  -- is upserted on every register (cheap content-hash short-circuit
   -- when unchanged — see auto-core v0.1.7).
   if spec.configured ~= false and spec.name and spec.kind then
     local ok, err = pcall(function()
