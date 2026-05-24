@@ -24,13 +24,13 @@
 ---    title         = "Claude"
 ---    role          = "..."             # optional
 ---    model         = "..."             # optional, per-kind handling:
----                                      #   claude/codex/antigravity/junie →
+---                                      #   claude/codex/junie →
 ---                                      #     passed as --model <id>
 ---                                      #   goose → exported as GOOSE_MODEL env
 ---                                      #   opencode → passed as --model <id>
 ---                                      #     (format: "<provider>/<model>")
----                                      #   ignored for copilot/generic and
----                                      #   when `cmd` is overridden
+---                                      #   ignored for antigravity/copilot/
+---                                      #   generic and when `cmd` is overridden
 ---    provider      = "..."             # optional, goose-only: exported as
 ---                                      #   GOOSE_PROVIDER (ollama/anthropic/
 ---                                      #   openai/openrouter/...).

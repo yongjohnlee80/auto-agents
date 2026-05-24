@@ -8,6 +8,13 @@
 ---no per-kind override needed; falls through to the AGENTS.md default
 ---in `auto-agents.kb.instruct.filename_for`.
 ---
+---Model selection: v0.2.32 removes the spawn-time `--model <id>`
+---injection — `agy --help` confirms no such flag exists. Agents
+---pick their model interactively or via per-user config. A `model`
+---field in the TOML spec is silently ignored for antigravity slots;
+---spawn `cmd = ["agy", "-i", "...", ...]` if you need to pass
+---specific flags manually.
+---
 ---Diff review: antigravity has no built-in WebSocket diff bridge
 ---(unlike claude). Antigravity slots therefore can't currently opt
 ---into native MCP `openDiff` review. If/when antigravity grows that
@@ -19,16 +26,13 @@
 
 local M = {}
 
----@param spec table  -- bootstrap entry: { slot, kind, name, title, ..., cmd?, model? }
+---@param spec table  -- bootstrap entry: { slot, kind, name, title, ..., cmd? }
 ---@return string[]
 function M.cmd(spec)
   if spec and spec.cmd then return spec.cmd end
-  local argv = { "agy" }
-  if spec and spec.model and spec.model ~= "" then
-    argv[#argv + 1] = "--model"
-    argv[#argv + 1] = spec.model
-  end
-  return argv
+  -- agy has no --model flag (see `agy --help`); spec.model is
+  -- silently ignored for antigravity slots.
+  return { "agy" }
 end
 
 ---@param _spec table

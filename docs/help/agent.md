@@ -191,7 +191,8 @@ bottom.
 
 Optional `[[agents]].model` field. Per-kind handling at spawn:
 
-- claude/codex/antigravity/junie/opencode → appended as `--model <id>`
+- claude/codex/junie/opencode → appended as `--model <id>`
+  (antigravity's `agy` CLI has no `--model` flag — model spec is ignored)
 - goose → exported as `GOOSE_MODEL` env var (env vars override
   `goose configure`). `goose` also reads `GOOSE_PROVIDER` (from
   `[[agents]].provider`) and `GOOSE_PROVIDER__HOST` (from
