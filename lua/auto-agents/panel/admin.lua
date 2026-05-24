@@ -254,6 +254,107 @@ local function dispatch(input)
       emit({ "term: unknown subverb '" .. tostring(sub) .. "' — try focus|send|list|kill|hide" })
     end
 
+  elseif verb == "run" then
+    -- Dispatch any registered mailbox command from the admin REPL.
+    -- Shares one source of truth (auto-core.mailbox.commands) with
+    -- the agent-facing `commands_list` registry — admin and peer
+    -- agents invoke the same handlers with the same arg shape.
+    --
+    -- Usage:
+    --   run                      → list registered commands
+    --   run <verb>               → invoke with no args
+    --   run peep <slot> [lines]  → positional shortcut
+    --   run say  <slot> <text>   → positional shortcut (text = rest of input)
+    --   run <verb> k=v k2=v2 ... → generic key=value args
+    local cmd_name = toks[2]
+    local ok_core, core = pcall(require, "auto-core")
+    if not ok_core then
+      emit({ "run: require('auto-core') failed" })
+      return
+    end
+
+    if not cmd_name then
+      -- List the live registry.
+      local entries = core.mailbox.commands.list() or {}
+      table.sort(entries, function(a, b) return tostring(a.name) < tostring(b.name) end)
+      local lines = { "Registered commands (run <verb> args...):" }
+      for _, e in ipairs(entries) do
+        lines[#lines + 1] = string.format("  %-22s [%s]  %s",
+          e.name, e.owner or "?", e.description or "")
+      end
+      emit(lines)
+      return
+    end
+
+    local spec = core.mailbox.commands.get(cmd_name)
+    if not spec then
+      emit({ "run: unknown command '" .. cmd_name
+             .. "' (type 'run' for the live list)" })
+      return
+    end
+
+    -- Build args. Positional shortcuts for peep/say; generic
+    -- key=value for everything else. Numeric strings auto-coerce
+    -- so `run peep 2` produces { slot = 2 } (the registered schema
+    -- expects a number).
+    local args = {}
+    if cmd_name == "peep" then
+      args.slot = tonumber(toks[3])
+      if toks[4] then args.lines = tonumber(toks[4]) end
+    elseif cmd_name == "say" then
+      args.slot = tonumber(toks[3])
+      if #toks >= 4 then
+        local rest = {}
+        for i = 4, #toks do rest[#rest + 1] = toks[i] end
+        args.text = table.concat(rest, " ")
+      end
+    else
+      for i = 3, #toks do
+        local k, v = toks[i]:match("^([^=]+)=(.*)$")
+        if k and v then
+          local n = tonumber(v)
+          if n ~= nil then args[k] = n
+          elseif v == "true" then args[k] = true
+          elseif v == "false" then args[k] = false
+          else args[k] = v end
+        end
+      end
+    end
+
+    local ok_call, result = pcall(spec.handler, args, { admin = true })
+    if not ok_call then
+      emit({ "run: handler raised: " .. tostring(result) })
+      return
+    end
+    if type(result) ~= "table" then
+      emit({ "run: handler returned non-table: " .. tostring(result) })
+      return
+    end
+    if result.ok == false then
+      emit({ string.format("run %s: ERROR (%s) %s",
+        cmd_name, tostring(result.code or "?"),
+        tostring(result.error or "")) })
+      return
+    end
+    -- Render value. For peep specifically, surface the lines
+    -- directly (humans want to read terminal output, not JSON).
+    if cmd_name == "peep" and type(result.value) == "table"
+       and type(result.value.lines) == "table" then
+      local v = result.value
+      local lines = {
+        string.format("peep slot=%d (alive=%s, %d/%d lines):",
+          v.slot, tostring(v.terminal_alive),
+          v.line_count or 0, v.buffer_total or 0),
+      }
+      for _, line in ipairs(v.lines) do
+        lines[#lines + 1] = "  " .. line
+      end
+      emit(lines)
+    else
+      emit({ string.format("run %s: OK", cmd_name),
+             "  " .. vim.inspect(result.value or {}):gsub("\n", "\n  ") })
+    end
+
   elseif verb == "quit" then
     emit({ "Closing panel." })
     vim.schedule(function() require("auto-agents").close() end)
@@ -955,7 +1056,34 @@ local function complete_at(prompt, cursor_col)
 
   local candidates
   if #prev_toks == 0 then
-    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "project", "config", "panel", "slot", "term", "clear", "quit" }
+    candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "project", "config", "panel", "slot", "term", "run", "clear", "quit" }
+  elseif #prev_toks == 1 and prev_toks[1] == "run" then
+    -- Pull the live registry rather than a hardcoded list — adding
+    -- a new command via `mailbox.commands.register` makes it
+    -- tab-complete here without touching this module.
+    local core_ok, core = pcall(require, "auto-core")
+    if core_ok then
+      candidates = {}
+      for _, e in ipairs(core.mailbox.commands.list() or {}) do
+        candidates[#candidates + 1] = e.name
+      end
+      table.sort(candidates)
+    else
+      candidates = {}
+    end
+  elseif #prev_toks == 2 and prev_toks[1] == "run"
+    and (prev_toks[2] == "peep" or prev_toks[2] == "say") then
+    -- Offer live slot numbers for peep/say.
+    local aa_ok, aa = pcall(require, "auto-agents")
+    candidates = {}
+    if aa_ok and aa.state and aa.state.slot_terminals then
+      for n in pairs(aa.state.slot_terminals) do
+        if type(n) == "number" and n >= 1 then
+          candidates[#candidates + 1] = tostring(n)
+        end
+      end
+      table.sort(candidates, function(a, b) return tonumber(a) < tonumber(b) end)
+    end
   elseif #prev_toks == 1 and prev_toks[1] == "panel" then
     candidates = { "resize", "reset", "show" }
   elseif #prev_toks == 2 and prev_toks[1] == "panel" and prev_toks[2] == "resize" then

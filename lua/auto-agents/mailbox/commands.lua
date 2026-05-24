@@ -110,6 +110,128 @@ local function handle_wake(args, ctx)
   return { ok = true, value = { slot = slot, text = text, submit = submit == true } }
 end
 
+---`peep` handler. `args = { slot: number, lines: number? }`. Returns
+---the last N lines (default 20) of the target slot's terminal
+---buffer. Read-only — does not switch focus, does not modify
+---buffer state. Trailing empty lines are stripped so the response
+---contains real terminal output, not the post-cursor padding nvim
+---reserves at the end of every term buffer.
+---@param args table
+---@param _ctx table
+---@return table
+local function handle_peep(args, _ctx)
+  args = type(args) == "table" and args or {}
+  local slot = tonumber(args.slot)
+  if not slot then
+    return err("invalid_args", "args.slot (integer) required")
+  end
+  local aa = require("auto-agents")
+  if slot < 1 or slot > (aa.MAX_SLOT or 5) then
+    return err("slot_out_of_range",
+      string.format("slot %d outside 1..%d", slot, aa.MAX_SLOT or 5))
+  end
+  local term = aa.state and aa.state.slot_terminals and aa.state.slot_terminals[slot]
+  if not term then
+    return err("no_terminal",
+      string.format("slot %d has no live terminal", slot))
+  end
+  local alive = false
+  if type(term.is_alive) == "function" then
+    local ok_a, a = pcall(term.is_alive, term)
+    alive = ok_a and a == true
+  end
+  local bufnr
+  if type(term.get_bufnr) == "function" then
+    local ok_b, b = pcall(term.get_bufnr, term)
+    if ok_b and type(b) == "number" then bufnr = b end
+  end
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return err("buffer_unavailable",
+      string.format("slot %d terminal has no readable buffer", slot))
+  end
+
+  local n_total = vim.api.nvim_buf_line_count(bufnr)
+  local n_want = tonumber(args.lines) or 20
+  if n_want < 1 then n_want = 1 end
+  if n_want > 200 then n_want = 200 end  -- defensive cap
+
+  -- Terminal buffers keep blank padding after the cursor; counting
+  -- that toward `n_want` would surface noise as "output". Probe up
+  -- to (cap + n_want) lines from the end, find the last non-blank,
+  -- and slice the N lines BEFORE that point.
+  local probe_n = math.min(n_total, 200 + n_want)
+  local probe_lines = vim.api.nvim_buf_get_lines(
+    bufnr, math.max(0, n_total - probe_n), n_total, false)
+  local trailing_blanks = 0
+  for i = #probe_lines, 1, -1 do
+    if probe_lines[i] == "" or probe_lines[i]:match("^%s*$") then
+      trailing_blanks = trailing_blanks + 1
+    else
+      break
+    end
+  end
+  local effective_end = n_total - trailing_blanks
+  local start_line = math.max(0, effective_end - n_want)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start_line, effective_end, false)
+
+  return {
+    ok = true,
+    value = {
+      slot           = slot,
+      lines          = lines,
+      line_count     = #lines,
+      terminal_alive = alive,
+      buffer_total   = n_total,
+    },
+  }
+end
+
+---`say` handler. `args = { slot: number, text: string, submit: boolean? }`.
+---Inject text directly into the target slot's TUI input via the
+---existing `send_slot` chokepoint — so the codex `[...]`-prefix
+---dodge and bracketed-paste wrapping apply identically to a `say`
+---call as to a `wake` call. `submit` defaults to true (most
+---callers want the text to commit immediately).
+---
+---Distinct from `wake`: `say` is the "type at the agent" affordance.
+---`wake` produces a generic "new inbox from X" nudge; `say` carries
+---arbitrary caller-supplied text.
+---@param args table
+---@param _ctx table
+---@return table
+local function handle_say(args, _ctx)
+  args = type(args) == "table" and args or {}
+  local slot = tonumber(args.slot)
+  if not slot then
+    return err("invalid_args", "args.slot (integer) required")
+  end
+  if type(args.text) ~= "string" or args.text == "" then
+    return err("invalid_args", "args.text (non-empty string) required")
+  end
+  local aa = require("auto-agents")
+  if slot < 1 or slot > (aa.MAX_SLOT or 5) then
+    return err("slot_out_of_range",
+      string.format("slot %d outside 1..%d", slot, aa.MAX_SLOT or 5))
+  end
+  local submit = args.submit
+  if submit == nil then submit = true end
+
+  local sent = aa.send_slot(slot, args.text, { submit = submit == true })
+  if not sent then
+    return err("send_failed",
+      string.format("send_slot(%d) refused — terminal dead, slot out of "
+        .. "range, or send() returned false", slot))
+  end
+  return {
+    ok = true,
+    value = {
+      slot   = slot,
+      text   = args.text,
+      submit = submit == true,
+    },
+  }
+end
+
 ---`addressbook` handler. `args = { include_self: boolean? }` —
 ---defaults to `true`. Returns every mailbox registered with
 ---auto-core (peers, `nvim`) plus a virtual `user` entry telling
@@ -580,6 +702,18 @@ local SPECS = {
     description = "Wake an auto-agents slot terminal by agent name. Used by the router as the default inbox/responses wake hook.",
     schema      = { slot = "string", text = "string?", submit = "boolean?" },
     handler     = handle_wake,
+  },
+  peep = {
+    owner       = "auto-agents",
+    description = "Peek at the last N lines (default 20, max 200) of the target slot's TUI buffer. Read-only — does not switch focus or perturb the buffer. Returns lines + line_count + terminal_alive.",
+    schema      = { slot = "number", lines = "number?" },
+    handler     = handle_peep,
+  },
+  say = {
+    owner       = "auto-agents",
+    description = "Inject text into the target slot's TUI input via the send_slot chokepoint (codex bracketed-paste dodge + submit-delay apply). `submit` defaults to true. Distinct from `wake` — say carries caller text; wake produces a generic 'new inbox' nudge.",
+    schema      = { slot = "number", text = "string", submit = "boolean?" },
+    handler     = handle_say,
   },
   addressbook = {
     owner       = "auto-agents",
