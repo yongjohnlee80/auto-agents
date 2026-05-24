@@ -718,6 +718,14 @@ do
   local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-1.json"
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
 
+  -- ADR 0029 Decision #3 — the reconcile path now registers the
+  -- mailbox under the per-kind root. Redirect kind=claude to a
+  -- tempdir so the test doesn't write into the user's real
+  -- `~/.claude/mailbox` tree.
+  local tmp_claude_root = vim.fn.tempname() .. "_claude-mailbox"
+  vim.fn.mkdir(tmp_claude_root, "p")
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = tmp_claude_root
+
   ok("ADR 0023 §3.1: path_for honors AUTO_AGENTS_RUNTIME_IDENTITY_PATH env",
     ri.path_for(1) == tmp_sidecar)
 
@@ -818,7 +826,9 @@ do
 
   -- Teardown.
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = nil
   pcall(vim.fn.delete, tmp_sidecar)
+  pcall(vim.fn.delete, tmp_claude_root, "rf")
   aa.state.config.agents.bootstrap = {}
   aa.state.slot_terminals[1] = nil
 end
@@ -833,11 +843,22 @@ do
   local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-5.json"
   vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
 
-  -- Plant a fake slot 5 (ultron-prime).
+  -- ADR 0029 Decision #3 / lector audit must-fix — adopt now writes
+  -- the wake message under the per-kind mailbox root, not
+  -- host_fallback_root(). Redirect kind=claude to a tempdir so the
+  -- test reads from the same place the fixed adopt writes to.
+  local tmp_claude_root = vim.fn.tempname() .. "_claude-mailbox-adopt"
+  vim.fn.mkdir(tmp_claude_root, "p")
+  vim.env.AUTO_AGENTS_MAILBOX_ROOT_CLAUDE = tmp_claude_root
+
+  -- Plant a fake slot 5 (ultron-prime, kind=claude, diff_review=true).
+  -- diff_review=true exercises lector's "adopt loses diff_review" bug
+  -- below: pre-fix the sidecar would record diff_review=false because
+  -- the adopt path called build_record without the flag.
   aa.state.slot_terminals = {}
   aa.state.config.agents = aa.state.config.agents or {}
   aa.state.config.agents.bootstrap = {
-    { slot = 5, name = "ultron-prime", kind = "claude" },
+    { slot = 5, name = "ultron-prime", kind = "claude", diff_review = true },
   }
   local fake_pid = 7654321
   aa.state.slot_terminals[5] = {
@@ -875,7 +896,7 @@ do
   -- locations.
   local core = require("auto-core")
   local mb_path = require("auto-core.mailbox.path")
-  local tool_root = core.mailbox.host_fallback_root()
+  local tool_root = record and record.tool_root or core.mailbox.host_fallback_root()
   local full = mb_path.full_id("agent:ultron-prime")
   local inbox = tool_root .. "/" .. full .. "/inbox"
   local listing = vim.fn.readdir(inbox)
@@ -935,8 +956,9 @@ do
   -- outbox after adopt. Acceptance is that the router picks it up
   -- and renames into the peer's inbox.
   do
-    -- Plant a peer mailbox to deliver to.
-    pcall(function() core.mailbox.register("agent:test-peer") end)
+    -- Plant a peer mailbox to deliver to under the same tool root
+    -- used by the adopted Claude-backed agent.
+    pcall(function() core.mailbox.register("agent:test-peer", { root = tool_root }) end)
 
     -- Wait for router to recognize the freshly-registered mailbox
     -- (collect_dirs runs at start; for a mid-test register the

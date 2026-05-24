@@ -3,6 +3,15 @@ if vim.g.loaded_auto_agents then
 end
 vim.g.loaded_auto_agents = true
 
+local teardown_group = vim.api.nvim_create_augroup("AutoAgentsTeardown", { clear = true })
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  group = teardown_group,
+  callback = function()
+    pcall(function() require("auto-agents").teardown() end)
+  end,
+  desc = "Release auto-agents runtime resources before Neovim exits",
+})
+
 vim.api.nvim_create_user_command("AutoAgents", function(opts)
   require("auto-agents").toggle(opts.bang)
 end, {
@@ -339,58 +348,63 @@ vim.api.nvim_create_user_command("AutoAgentsAdoptResumedAgent", function(opts)
       .. "writing sidecar without it"):format(slot), vim.log.levels.WARN)
   end
 
-  -- Look up the slot's agent name.
+  -- Look up the slot's bootstrap spec (need name + kind +
+  -- diff_review for the identity reconcile call below).
   local agents_cfg = aa.state.config and aa.state.config.agents
                        and aa.state.config.agents.bootstrap or {}
-  local agent_name
+  local matched_spec
   for _, a in ipairs(agents_cfg) do
     if tonumber(a.slot) == slot then
-      agent_name = a.name
+      matched_spec = a
       break
     end
   end
-  if not agent_name then
+  if not matched_spec or not matched_spec.name then
     vim.notify(("AutoAgentsAdoptResumedAgent: slot %d has no registered agent name "
       .. "in state.config.agents.bootstrap"):format(slot), vim.log.levels.ERROR)
     return
   end
+  local agent_name = matched_spec.name
 
-  -- Register the mailbox at the live instance if not present.
-  -- Idempotent re-registration is safe per ADR 0013 §1.
-  local core_ok, core = pcall(require, "auto-core")
-  if not core_ok then
-    vim.notify("AutoAgentsAdoptResumedAgent: require('auto-core') failed",
+  -- ADR 0029 Decision #3 — reconcile() owns per-kind mailbox root
+  -- resolution, mailbox registration, and sidecar write. The
+  -- pre-fix adopt path called mailbox.register without per-kind
+  -- root and built the sidecar without the spec's diff_review flag,
+  -- producing two off-by-one defects on resume:
+  --   1. wake-message landed under host_fallback_root() instead of
+  --      ~/.claude or ~/.codex etc.
+  --   2. sidecar.diff_review was false even when the bootstrap row
+  --      had diff_review = true.
+  -- Both fixed by routing through the single seam.
+  local identity_ok, identity = pcall(require, "auto-agents.runtime.identity")
+  if not identity_ok then
+    vim.notify("AutoAgentsAdoptResumedAgent: require('auto-agents.runtime.identity') failed",
       vim.log.levels.ERROR)
     return
   end
-  pcall(function() core.mailbox.register("agent:" .. agent_name) end)
-
-  -- Build + write the sidecar identity record.
-  local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
-  if not ri_ok then
-    vim.notify("AutoAgentsAdoptResumedAgent: require('auto-agents.runtime_identity') failed",
+  local result = identity.reconcile({
+    slot        = slot,
+    agent_name  = agent_name,
+    kind        = matched_spec.kind,
+    diff_review = matched_spec.diff_review,
+    agent_pid   = agent_pid,
+    stamped_by  = "auto-agents:AutoAgentsAdoptResumedAgent",
+    wake        = { command = "wake", args = { slot = agent_name } },
+  })
+  if not result.ok then
+    vim.notify(("AutoAgentsAdoptResumedAgent: identity reconcile failed: %s"):format(
+      tostring(result.detail or result.error or "unknown")),
       vim.log.levels.ERROR)
     return
   end
-  local tool_root = core.mailbox.host_fallback_root()
-  local record = ri.build_record(slot, agent_name, tool_root, nil,
-    "auto-agents:AutoAgentsAdoptResumedAgent", agent_pid)
-  local sidecar_path = ri.path_for(slot)
-  local wok, werr = ri.write(sidecar_path, record)
-  if not wok then
-    vim.notify(("AutoAgentsAdoptResumedAgent: sidecar write failed at %s: %s")
-        :format(sidecar_path, tostring(werr)), vim.log.levels.ERROR)
-    return
-  end
+  local record = result.sidecar_record
+  local sidecar_path = result.sidecar_path
 
   -- Inject a wake message into the agent's inbox so it sees the
   -- reconciliation preamble on next interaction. We write directly
   -- to the live inbox (bypassing the agent's outbox) because the
   -- whole point of adopt is that the agent's outbox may be stale.
-  local mb_path = require("auto-core.mailbox.path")
-  local rec_full = mb_path.full_id("agent:" .. agent_name)
-  local mailbox_dir = tool_root .. "/" .. rec_full
-  local inbox_dir = mailbox_dir .. "/inbox"
+  local inbox_dir = result.mailbox_record.dir .. "/inbox"
   vim.fn.mkdir(inbox_dir, "p")
 
   local mid = tostring(os.time()) .. "-adopt-resumed-" .. tostring(slot)

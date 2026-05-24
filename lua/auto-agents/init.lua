@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.29"
+M.version = "0.2.30"
 
 -- v0.2.7: per-kind mailbox tool-root map. Drives the per-agent
 -- root passed to `auto-core.mailbox.register` at spawn time so
@@ -15,15 +15,11 @@ M.version = "0.2.29"
 -- agent read/write on its own config dir, so the mailbox tree
 -- is reachable without extra sandbox grants.
 --
--- Kinds not listed here fall back to
--- `auto-core.mailbox.host_fallback_root()` — typically the
--- nvim-side default (`~/.local/state/nvim/auto-core/mailbox`)
--- which the agent can still reach if it shares the user's home.
-local MAILBOX_ROOT_BY_KIND = {
-  claude = vim.fn.expand("~/.claude/mailbox"),
-  codex  = vim.fn.expand("~/.codex/mailbox"),
-  gemini = vim.fn.expand("~/.gemini/mailbox"),
-}
+-- Per-kind mailbox tool roots live in
+-- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
+-- spawn, refresh_agent_id, and adopt-resumed-agent share one source
+-- of truth. Tests override per-kind roots via
+-- `AUTO_AGENTS_MAILBOX_ROOT_<KIND>` env.
 
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
 -- admin; slots 1..MAX_SLOT are main agents in the right panel. There
@@ -616,37 +612,45 @@ local function build_agent_env(spec, cwd)
   if spec.configured ~= false and spec.name and spec.kind then
     local ok, err = pcall(function()
       local mailbox = require("auto-core").mailbox
-      local root = MAILBOX_ROOT_BY_KIND[spec.kind] or mailbox.host_fallback_root()
-      local rec = mailbox.register("agent:" .. spec.name, {
-        root = root,
-        wake = { command = "wake", args = { slot = spec.name } },
-      })
-      for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
+      local identity = require("auto-agents.runtime.identity")
+      local wake_spec = { command = "wake", args = { slot = spec.name } }
 
-      -- ADR 0023 §3.1 — sidecar identity file. Write a JSON record
-      -- to a stable path the agent reads as authoritative; bootstrap
-      -- doc instructs the agent to prefer this file over the
-      -- fork-frozen `AUTO_AGENTS_*` env. On `claude --resume` the
-      -- env is stale but the sidecar (and `refresh_agent_id`'s
-      -- rewrite of it) carries the live identity. spec.slot is
-      -- nil for unconfigured/preview spawns — skip in that case.
+      local rec
       if spec.slot ~= nil then
-        local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
-        if ri_ok then
-          local record = ri.build_record(
-            spec.slot, spec.name, rec.root, rec.dir,
-            "auto-agents.spawn", nil, spec.diff_review)
-          local sidecar_path = ri.path_for(spec.slot)
-          local wok, werr = ri.write(sidecar_path, record)
-          if wok then
-            env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = sidecar_path
-          else
-            require("auto-agents.log").warn("spawn",
-              "sidecar identity write failed at " .. sidecar_path
-                .. ": " .. tostring(werr))
+        -- ADR 0023 §3.1 + ADR 0029 Decision #3: reconcile() owns
+        -- per-kind mailbox root resolution, mailbox registration,
+        -- and sidecar identity write. One call replaces the three
+        -- previously duplicated paths (spawn / refresh_agent_id /
+        -- adopt-resumed-agent).
+        local result = identity.reconcile({
+          slot        = spec.slot,
+          agent_name  = spec.name,
+          kind        = spec.kind,
+          diff_review = spec.diff_review,
+          stamped_by  = "auto-agents.spawn",
+          wake        = wake_spec,
+        })
+        if not result.ok then
+          require("auto-agents.log").warn("spawn",
+            "identity reconcile failed: " .. tostring(result.detail))
+          if not result.mailbox_record then
+            error(result.detail or result.error or "identity reconcile failed")
           end
         end
+        rec = result.mailbox_record
+        if result.sidecar_path then
+          env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = result.sidecar_path
+        end
+      else
+        -- Preview / unconfigured spawn — register without a sidecar
+        -- (no slot to key it to).
+        local root = identity.mailbox_root_for_kind(spec.kind)
+        rec = mailbox.register("agent:" .. spec.name, {
+          root = root,
+          wake = wake_spec,
+        })
       end
+      for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
 
       -- v0.3.0: spawn-time permission injection. Append the per-kind
       -- CLI flag(s) that pre-authorize the agent to read/write its
@@ -1683,6 +1687,16 @@ function M.remove_slot(slot)
   if type(slot) ~= "number" or slot < 1 or slot > M.MAX_SLOT then
     return false, "slot must be 1.." .. tostring(M.MAX_SLOT)
   end
+  local removed_names = {}
+  do
+    local cfg = M.state.config
+    local bs = cfg and cfg.agents and cfg.agents.bootstrap or {}
+    for _, entry in ipairs(bs) do
+      if entry.slot == slot and type(entry.name) == "string" and entry.name ~= "" then
+        removed_names[#removed_names + 1] = entry.name
+      end
+    end
+  end
   -- Kill any running terminal first (idempotent — kill_slot returns
   -- false if there's nothing running, which is fine).
   pcall(M.kill_slot, slot)
@@ -1701,6 +1715,12 @@ function M.remove_slot(slot)
   end
 
   if removed then
+    pcall(function()
+      local mailbox = require("auto-core").mailbox
+      for _, name in ipairs(removed_names) do
+        mailbox.unregister("agent:" .. name)
+      end
+    end)
     if slot >= 0 and slot <= M.MAX_SLOT then
       M.refresh_winbar()
     end
@@ -1969,6 +1989,29 @@ function M.focus_slot(slot)
     vim.cmd("startinsert!")
   end
   logger.debug("panel", "focused slot=" .. slot .. " buf=" .. bufnr .. " fresh=" .. tostring(fresh_spawn))
+end
+
+---Release auto-agents-owned runtime resources. Intended for plugin
+---teardown/hot-reload and VimLeavePre; normal slot restart should use
+---restart_slot so the mailbox registration remains live.
+function M.teardown()
+  for slot in pairs(M.state.slot_terminals or {}) do
+    pcall(M.kill_slot, slot)
+  end
+  pcall(function() require("auto-agents.mcp.server").stop() end)
+  pcall(function() require("auto-agents.mailbox.commands").unregister_all() end)
+  pcall(function()
+    local mailbox = require("auto-core").mailbox
+    local cfg = M.state.config
+    local bs = cfg and cfg.agents and cfg.agents.bootstrap or {}
+    for _, entry in ipairs(bs) do
+      if type(entry.name) == "string" and entry.name ~= "" then
+        mailbox.unregister("agent:" .. entry.name)
+      end
+    end
+    mailbox.unregister("nvim")
+  end)
+  M.state.initialized = false
 end
 
 return M

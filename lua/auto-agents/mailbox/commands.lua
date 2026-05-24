@@ -501,28 +501,32 @@ local function handle_refresh_agent_id(args, _ctx)
   end
   local matched_agent_name = matched_spec.name
 
-  -- Build + write the sidecar identity record.
-  local ri_ok, ri = pcall(require, "auto-agents.runtime_identity")
-  if not ri_ok then
+  -- ADR 0029 Decision #3 — single seam owns mailbox-root resolution
+  -- (per-kind via matched_spec.kind, not host_fallback_root),
+  -- mailbox registration, and sidecar identity write. Bug pre-fix:
+  -- refresh_agent_id derived tool_root from host_fallback_root(),
+  -- which mis-located the sidecar's bootstrap-doc path for agents
+  -- registered under per-kind roots.
+  local identity_ok, identity = pcall(require, "auto-agents.runtime.identity")
+  if not identity_ok then
     return err("runtime_identity_unavailable",
-      "require('auto-agents.runtime_identity') failed")
+      "require('auto-agents.runtime.identity') failed")
   end
-  local core_ok, core = pcall(require, "auto-core")
-  if not core_ok then
-    return err("auto_core_unavailable",
-      "require('auto-core') failed")
+  local result = identity.reconcile({
+    slot        = matched_slot,
+    agent_name  = matched_agent_name,
+    kind        = matched_spec.kind,
+    diff_review = matched_spec.diff_review,
+    agent_pid   = actor_pid,
+    stamped_by  = "auto-agents.refresh_agent_id",
+    wake        = { command = "wake", args = { slot = matched_agent_name } },
+  })
+  if not result.ok then
+    return err(result.error or "identity_reconcile_failed",
+      tostring(result.detail or "identity reconcile failed"))
   end
-  local tool_root = core.mailbox.host_fallback_root()  -- approximation; agent's tool root may differ
-  local record = ri.build_record(
-    matched_slot, matched_agent_name, tool_root, nil,
-    "auto-agents.refresh_agent_id", actor_pid,
-    matched_spec.diff_review)
-  local path = ri.path_for(matched_slot)
-  local wok, werr = ri.write(path, record)
-  if not wok then
-    return err("sidecar_write_failed",
-      "Failed to atomic-write sidecar identity file at " .. path .. ": " .. tostring(werr))
-  end
+  local record = result.sidecar_record
+  local path = result.sidecar_path
 
   -- v0.2.25: re-render the per-kind instruction file (CLAUDE.md /
   -- AGENTS.md / GEMINI.md / …) so the resumed agent sees the current
@@ -640,15 +644,20 @@ function M.register_all()
   return out
 end
 
----Test-only — unregister every command we own. Does NOT touch
+---Unregister every command owned by auto-agents. Does NOT touch
 ---commands owned by other plugins.
-function M._reset_for_tests()
+function M.unregister_all()
   local ok, core = pcall(require, "auto-core")
   if not ok then return end
   for name in pairs(_registered) do
     pcall(core.mailbox.commands.unregister, name)
   end
   _registered = {}
+end
+
+---Test-only alias retained for existing specs.
+function M._reset_for_tests()
+  M.unregister_all()
 end
 
 return M
