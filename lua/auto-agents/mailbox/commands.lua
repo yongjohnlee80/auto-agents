@@ -110,7 +110,7 @@ local function handle_wake(args, ctx)
   return { ok = true, value = { slot = slot, text = text, submit = submit == true } }
 end
 
----`peep` handler. `args = { slot: number, lines: number? }`. Returns
+---`peek` handler. `args = { slot: number, lines: number? }`. Returns
 ---the last N lines (default 20) of the target slot's terminal
 ---buffer. Read-only — does not switch focus, does not modify
 ---buffer state. Trailing empty lines are stripped so the response
@@ -119,7 +119,7 @@ end
 ---@param args table
 ---@param _ctx table
 ---@return table
-local function handle_peep(args, _ctx)
+local function handle_peek(args, _ctx)
   args = type(args) == "table" and args or {}
   local slot = tonumber(args.slot)
   if not slot then
@@ -703,11 +703,11 @@ local SPECS = {
     schema      = { slot = "string", text = "string?", submit = "boolean?" },
     handler     = handle_wake,
   },
-  peep = {
+  peek = {
     owner       = "auto-agents",
     description = "Peek at the last N lines (default 20, max 200) of the target slot's TUI buffer. Read-only — does not switch focus or perturb the buffer. Returns lines + line_count + terminal_alive.",
     schema      = { slot = "number", lines = "number?" },
-    handler     = handle_peep,
+    handler     = handle_peek,
   },
   say = {
     owner       = "auto-agents",

@@ -1441,8 +1441,8 @@ do
   pcall(vim.fn.delete, tmp_root, "rf")
 end
 
--- ────────── 20. Phase 4: peep + say mailbox commands + admin `run` ──────────
-print("\n[20] Phase 4: peep + say + admin run")
+-- ────────── 20. Phase 4: peek + say mailbox commands + admin `run` ──────────
+print("\n[20] Phase 4: peek + say + admin run")
 do
   local cmds = require("auto-agents.mailbox.commands")
   local core = require("auto-core")
@@ -1450,18 +1450,18 @@ do
   -- may have unregistered them).
   cmds.register_all()
 
-  -- 20a. peep + say show up in the live registry with the right
+  -- 20a. peek + say show up in the live registry with the right
   -- owner/description (commands_list discovery surface).
   local registry_entries = core.mailbox.commands.list() or {}
   local by_name = {}
   for _, e in ipairs(registry_entries) do by_name[e.name] = e end
-  ok("Phase 4: `peep` registered with auto-agents owner",
-    by_name.peep ~= nil and by_name.peep.owner == "auto-agents")
+  ok("Phase 4: `peek` registered with auto-agents owner",
+    by_name.peek ~= nil and by_name.peek.owner == "auto-agents")
   ok("Phase 4: `say` registered with auto-agents owner",
     by_name.say ~= nil and by_name.say.owner == "auto-agents")
 
   -- Plant a fake slot 2 with a buffer that has known content. The
-  -- buffer line API returns lines verbatim; peep reads from there.
+  -- buffer line API returns lines verbatim; peek reads from there.
   aa.state.slot_terminals = {}
   aa.state.config.agents = aa.state.config.agents or {}
   aa.state.config.agents.bootstrap = {
@@ -1470,7 +1470,7 @@ do
   local fake_bufnr = vim.api.nvim_create_buf(false, true)
   local lines_planted = {}
   for i = 1, 30 do lines_planted[i] = "line " .. i end
-  lines_planted[31] = ""  -- trailing blank that peep should strip
+  lines_planted[31] = ""  -- trailing blank that peek should strip
   lines_planted[32] = ""
   vim.api.nvim_buf_set_lines(fake_bufnr, 0, -1, false, lines_planted)
   local send_calls = {}
@@ -1482,41 +1482,41 @@ do
     send      = function(_, body) send_calls[#send_calls + 1] = body; return true end,
   }
 
-  -- 20b. peep returns the last 20 real lines (default), strips
+  -- 20b. peek returns the last 20 real lines (default), strips
   -- trailing blanks, reports terminal_alive=true.
-  local peep_spec = by_name.peep and core.mailbox.commands.get("peep")
-  local peep_res = peep_spec and peep_spec.handler({ slot = 2 }, {})
-  ok("peep: ok=true on live slot",
-    type(peep_res) == "table" and peep_res.ok == true,
-    vim.inspect(peep_res))
-  ok("peep: default returns 20 lines (trailing blanks stripped)",
-    peep_res and peep_res.value
-      and peep_res.value.line_count == 20
-      and peep_res.value.lines[20] == "line 30",
-    vim.inspect(peep_res and peep_res.value))
-  ok("peep: terminal_alive mirrors term:is_alive()",
-    peep_res and peep_res.value and peep_res.value.terminal_alive == true)
-  ok("peep: respects explicit lines=N arg",
+  local peek_spec = by_name.peek and core.mailbox.commands.get("peek")
+  local peek_res = peek_spec and peek_spec.handler({ slot = 2 }, {})
+  ok("peek: ok=true on live slot",
+    type(peek_res) == "table" and peek_res.ok == true,
+    vim.inspect(peek_res))
+  ok("peek: default returns 20 lines (trailing blanks stripped)",
+    peek_res and peek_res.value
+      and peek_res.value.line_count == 20
+      and peek_res.value.lines[20] == "line 30",
+    vim.inspect(peek_res and peek_res.value))
+  ok("peek: terminal_alive mirrors term:is_alive()",
+    peek_res and peek_res.value and peek_res.value.terminal_alive == true)
+  ok("peek: respects explicit lines=N arg",
     (function()
-      local r = peep_spec.handler({ slot = 2, lines = 5 }, {})
+      local r = peek_spec.handler({ slot = 2, lines = 5 }, {})
       return r and r.value and r.value.line_count == 5
          and r.value.lines[5] == "line 30"
     end)())
 
-  -- 20c. peep error cases.
-  ok("peep: invalid slot returns invalid_args",
+  -- 20c. peek error cases.
+  ok("peek: invalid slot returns invalid_args",
     (function()
-      local r = peep_spec.handler({}, {})
+      local r = peek_spec.handler({}, {})
       return r and r.ok == false and r.code == "invalid_args"
     end)())
-  ok("peep: slot out of range returns slot_out_of_range",
+  ok("peek: slot out of range returns slot_out_of_range",
     (function()
-      local r = peep_spec.handler({ slot = 999 }, {})
+      local r = peek_spec.handler({ slot = 999 }, {})
       return r and r.ok == false and r.code == "slot_out_of_range"
     end)())
-  ok("peep: no terminal at slot returns no_terminal",
+  ok("peek: no terminal at slot returns no_terminal",
     (function()
-      local r = peep_spec.handler({ slot = 3 }, {})
+      local r = peek_spec.handler({ slot = 3 }, {})
       return r and r.ok == false and r.code == "no_terminal"
     end)())
 
@@ -1555,7 +1555,7 @@ do
     vim.inspect(send_calls))
 
   -- 20g. admin `run` dispatcher — through the dispatch path so we
-  -- exercise the positional-shortcut parsing for peep/say.
+  -- exercise the positional-shortcut parsing for peek/say.
   local admin = require("auto-agents.panel.admin")
   -- Tab-completion offers `run` at top level + the live verb list.
   local _, top_cands = admin._complete_at("", 0)
@@ -1563,12 +1563,12 @@ do
     vim.tbl_contains(top_cands, "run"))
   local _, run_cands = admin._complete_at("run ", 4)
   ok("admin completion: `run ` offers the live registry verbs",
-    vim.tbl_contains(run_cands, "peep")
+    vim.tbl_contains(run_cands, "peek")
       and vim.tbl_contains(run_cands, "say")
       and vim.tbl_contains(run_cands, "wake"))
-  local _, peep_slot_cands = admin._complete_at("run peep ", 9)
-  ok("admin completion: `run peep ` offers live slot numbers",
-    vim.tbl_contains(peep_slot_cands, "2"))
+  local _, peek_slot_cands = admin._complete_at("run peek ", 9)
+  ok("admin completion: `run peek ` offers live slot numbers",
+    vim.tbl_contains(peek_slot_cands, "2"))
 
   -- Teardown.
   vim.api.nvim_buf_delete(fake_bufnr, { force = true })
@@ -1686,12 +1686,12 @@ do
   local admin = require("auto-agents.panel.admin")
   local parse = admin._parse_run_args
 
-  -- 23a. peep / say shortcuts (regression net for Phase 4 surface).
-  local p = parse("peep", { "run", "peep", "3" })
-  ok("parse_run_args: peep slot coerced to number",
+  -- 23a. peek / say shortcuts (regression net for Phase 4 surface).
+  local p = parse("peek", { "run", "peek", "3" })
+  ok("parse_run_args: peek slot coerced to number",
     type(p.slot) == "number" and p.slot == 3, vim.inspect(p))
-  p = parse("peep", { "run", "peep", "3", "50" })
-  ok("parse_run_args: peep `lines` second positional",
+  p = parse("peek", { "run", "peek", "3", "50" })
+  ok("parse_run_args: peek `lines` second positional",
     p.slot == 3 and p.lines == 50, vim.inspect(p))
   p = parse("say", { "run", "say", "2", "hello", "world" })
   ok("parse_run_args: say slot + text-concat",

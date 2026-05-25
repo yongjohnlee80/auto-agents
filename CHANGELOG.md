@@ -2,6 +2,51 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.35] — 2026-05-25 — mailbox command `peep` renamed to `peek`
+
+Patch-level rename of the read-only TUI-buffer inspection command
+introduced in v0.2.30 Phase 4. The command's description already used
+the verb "Peek at the last N lines…"; the registered NAME now matches.
+No behavior change — `args = { slot, lines? }` schema, return shape,
+error codes, and admin REPL positional-shortcut parsing are all
+byte-identical to v0.2.34. The only externally visible difference is
+the verb you invoke (`run peek 2` instead of `run peep 2`; bare
+mailbox messages must now use `command = "peek"`).
+
+**Also catches up `M.version` drift.** The constant in
+`lua/auto-agents/init.lua` had been stuck at `"0.2.30"` while
+v0.2.31 / v0.2.32 / v0.2.33 / v0.2.34 shipped (each bumped the
+tag + CHANGELOG without updating the runtime constant). This release
+sets `M.version = "0.2.35"` so the runtime value matches the published
+tag for the first time since v0.2.30.
+
+**Breaking for hardcoded callers.** The previous name (`peep`) is no
+longer registered — `kind="command"` messages with `command="peep"`
+will fail with `{ ok = false, code = "unknown_command" }`. Consumers
+that hardcoded the name need to switch; consumers that discover via
+`commands_list` (the recommended pattern per the mailbox bootstrap
+doc) pick up the new name automatically.
+
+**Sites updated:**
+- `lua/auto-agents/mailbox/commands.lua` — spec key `peep` → `peek`,
+  handler `handle_peep` → `handle_peek`, docstring.
+- `lua/auto-agents/panel/admin.lua` — `run` dispatcher special-case
+  rendering, positional-shortcut parser, completion offers, comments.
+- `tests/smoke.lua` — section [20] (Phase 4 registry + handler
+  behavior + error cases) and section [23] (`_parse_run_args`
+  positional shortcuts). All assertions kept; only the literal
+  command-name string changed.
+
+`M.version` bumps `0.2.30 → 0.2.35` (catches up the drift).
+
+**Follow-up (separate repo).** `auto-core.nvim`'s mailbox bootstrap
+template (`lua/auto-core/mailbox/templates/bootstrap.md`) documents
+the command surface in an illustrative table that includes the old
+`peep` row. That table is non-authoritative per its own disclaimer
+(the registry is the source of truth), but updating it keeps the
+generated bootstrap doc in agreement with the live registry on the
+next regeneration.
+
 ## [v0.2.28] — 2026-05-22 — codex wake stall: sidestep leading-`[` composer queueing
 
 Closes a long-standing friction with codex-backed peers (e.g.

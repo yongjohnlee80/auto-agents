@@ -169,7 +169,7 @@ end
 ---Parse positional / k=v args for a `run <verb>` invocation. Pure
 ---function — no side effects — exposed as `M._parse_run_args` for
 ---tests. Per-verb positional shortcuts:
----  * `peep <slot> [lines]`   → { slot, lines? }
+---  * `peek <slot> [lines]`   → { slot, lines? }
 ---  * `say  <slot> <text...>` → { slot, text }
 ---  * `wake <slot-num-or-name> [text...]` → { slot=name, text? }
 ---      (resolves a numeric slot to the bootstrap entry's name)
@@ -181,7 +181,7 @@ end
 ---@return table args
 local function _parse_run_args(cmd_name, toks)
   local args = {}
-  if cmd_name == "peep" then
+  if cmd_name == "peek" then
     args.slot = tonumber(toks[3])
     if toks[4] then args.lines = tonumber(toks[4]) end
   elseif cmd_name == "say" then
@@ -335,7 +335,7 @@ local function dispatch(input)
     -- Usage:
     --   run                      → list registered commands
     --   run <verb>               → invoke with no args
-    --   run peep <slot> [lines]  → positional shortcut
+    --   run peek <slot> [lines]  → positional shortcut
     --   run say  <slot> <text>   → positional shortcut (text = rest of input)
     --   run <verb> k=v k2=v2 ... → generic key=value args
     local cmd_name = toks[2]
@@ -382,13 +382,13 @@ local function dispatch(input)
         tostring(result.error or "")) })
       return
     end
-    -- Render value. For peep specifically, surface the lines
+    -- Render value. For peek specifically, surface the lines
     -- directly (humans want to read terminal output, not JSON).
-    if cmd_name == "peep" and type(result.value) == "table"
+    if cmd_name == "peek" and type(result.value) == "table"
        and type(result.value.lines) == "table" then
       local v = result.value
       local lines = {
-        string.format("peep slot=%d (alive=%s, %d/%d lines):",
+        string.format("peek slot=%d (alive=%s, %d/%d lines):",
           v.slot, tostring(v.terminal_alive),
           v.line_count or 0, v.buffer_total or 0),
       }
@@ -1129,9 +1129,9 @@ local function complete_at(prompt, cursor_col)
       candidates = {}
     end
   elseif #prev_toks == 2 and prev_toks[1] == "run"
-    and (prev_toks[2] == "peep" or prev_toks[2] == "say"
+    and (prev_toks[2] == "peek" or prev_toks[2] == "say"
          or prev_toks[2] == "wake") then
-    -- Offer live slot numbers for peep/say.
+    -- Offer live slot numbers for peek/say.
     local aa_ok, aa = pcall(require, "auto-agents")
     candidates = {}
     if aa_ok and aa.state and aa.state.slot_terminals then
