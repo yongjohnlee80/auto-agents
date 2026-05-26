@@ -260,6 +260,135 @@ end, {
   desc = "Manage auto-agents project config (init|import|remove|list|show)",
 })
 
+-- v0.2.38: human-facing front door for the todos.* command surface.
+--
+-- :AutoAgentsTodos <verb> [key=value ...]
+--
+-- Tab-completes the 13 verbs registered by
+-- `auto-agents.mailbox.todos_commands`. Each verb is dispatched
+-- through its registered handler — same code path agents hit via
+-- the mailbox — so behavior + side effects (events, mailbox
+-- routing) match exactly.
+--
+-- Argument syntax is `key=value` per token, with simple coercion:
+--   * `true` / `false` / `nil` → bool / nil
+--   * `123` → number
+--   * `[a,b,c]` → table (comma-separated string list)
+--   * everything else → string
+--
+-- Examples:
+--   :AutoAgentsTodos list
+--   :AutoAgentsTodos list status=open
+--   :AutoAgentsTodos add title="Fix the audit feedback" priority=high
+--   :AutoAgentsTodos assign id=2026-05-26-foo assignee=agent:lector reason="needs review"
+--   :AutoAgentsTodos status id=2026-05-26-foo status=completed
+local TODOS_VERBS = {
+  "list", "show", "list_dirs", "get_dir",
+  "add", "update",
+  "status", "assign", "archive", "remove",
+  "refresh", "set_dir", "import",
+}
+
+---Parse a single `key=value` token into (key, coerced_value).
+---Returns (nil, nil) on tokens that aren't in `key=value` shape
+---so the caller can decide to ignore or error.
+local function _parse_todos_arg(token)
+  local k, v = token:match("^([%w_]+)=(.*)$")
+  if not k then return nil, nil end
+  -- Strip enclosing quotes if present.
+  if (v:sub(1, 1) == '"' and v:sub(-1) == '"')
+    or (v:sub(1, 1) == "'" and v:sub(-1) == "'")
+  then
+    v = v:sub(2, -2)
+  end
+  if     v == "true"  then return k, true
+  elseif v == "false" then return k, false
+  elseif v == "nil"   then return k, nil
+  end
+  if v:match("^%-?%d+%.?%d*$") then
+    local n = tonumber(v); if n then return k, n end
+  end
+  -- `[a,b,c]` → list
+  if v:sub(1, 1) == "[" and v:sub(-1) == "]" then
+    local inner = v:sub(2, -2)
+    local out = {}
+    for item in inner:gmatch("[^,]+") do
+      out[#out + 1] = item:match("^%s*(.-)%s*$")
+    end
+    return k, out
+  end
+  return k, v
+end
+
+vim.api.nvim_create_user_command("AutoAgentsTodos", function(opts)
+  local verb = opts.fargs[1]
+  if not verb or verb == "" then
+    vim.notify(
+      "usage: :AutoAgentsTodos <verb> [key=value ...] (try <Tab> for verbs)",
+      vim.log.levels.WARN)
+    return
+  end
+
+  local ok, mod = pcall(require, "auto-agents.mailbox.todos_commands")
+  if not ok then
+    vim.notify("auto-agents.mailbox.todos_commands not loaded: " .. tostring(mod),
+      vim.log.levels.ERROR)
+    return
+  end
+  local spec = (mod._SPECS or {})["todos." .. verb]
+  if not spec then
+    vim.notify("unknown todos verb '" .. verb .. "'. Try <Tab> for the list.",
+      vim.log.levels.ERROR)
+    return
+  end
+
+  local args = {}
+  for i = 2, #opts.fargs do
+    local k, v = _parse_todos_arg(opts.fargs[i])
+    if k then args[k] = v end
+  end
+
+  local result = spec.handler(args)
+  -- Pretty-print the response so the user sees it inline. ERROR
+  -- envelopes route through vim.notify so they're impossible to
+  -- miss; OK envelopes go to :messages via print (or `vim.print`
+  -- when available for table formatting).
+  if type(result) ~= "table" then
+    print(vim.inspect(result))
+    return
+  end
+  if result.ok == false then
+    vim.notify(
+      string.format("[%s] %s: %s",
+        tostring(verb),
+        tostring(result.code or "error"),
+        tostring(result.error or "?")),
+      vim.log.levels.ERROR)
+    return
+  end
+  if vim.print then vim.print(result.value) else print(vim.inspect(result.value)) end
+end, {
+  nargs    = "+",
+  complete = function(_, line, _cursor)
+    -- First word after the command name → complete a verb.
+    -- Subsequent positional tokens → no completion (keys are
+    -- verb-specific; auto-completion across all 13 schemas is
+    -- low-value vs. just showing the verb list).
+    local parts = vim.split(line, "%s+", { trimempty = false })
+    -- parts[1] is "AutoAgentsTodos"; parts[2] is the verb-prefix.
+    if #parts <= 2 then
+      local prefix = parts[2] or ""
+      local out = {}
+      for _, v in ipairs(TODOS_VERBS) do
+        if v:sub(1, #prefix) == prefix then out[#out + 1] = v end
+      end
+      return out
+    end
+    return {}
+  end,
+  desc = "Dispatch a todos.* mailbox verb from the cmdline (tab-completes verb names).",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsTodosDoc", function()
   local ok, mod = pcall(require, "auto-agents.mailbox.todos_commands")
   if not ok then
