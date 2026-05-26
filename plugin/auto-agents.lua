@@ -260,6 +260,23 @@ end, {
   desc = "Manage auto-agents project config (init|import|remove|list|show)",
 })
 
+vim.api.nvim_create_user_command("AutoAgentsTodosDoc", function()
+  local ok, mod = pcall(require, "auto-agents.mailbox.todos_commands")
+  if not ok then
+    vim.notify("auto-agents.mailbox.todos_commands not loaded", vim.log.levels.ERROR)
+    return
+  end
+  local path = mod.bootstrap_doc_path()
+  if not path then
+    vim.notify("bootstrap-todos.md not found on runtimepath", vim.log.levels.ERROR)
+    return
+  end
+  vim.cmd("edit " .. vim.fn.fnameescape(path))
+end, {
+  nargs = 0,
+  desc  = "Open the auto-agents `todos.*` command-surface bootstrap doc in a buffer",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsMigrateKbTodos", function(opts)
   -- Defaults to a dry-run; pass `--apply` (or any positional flag
   -- starting with `--apply`) to commit. The bang form `!` is

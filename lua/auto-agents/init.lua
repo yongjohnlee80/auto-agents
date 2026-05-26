@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.36"
+M.version = "0.2.37"
 
 -- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
@@ -478,6 +478,15 @@ function M.setup(opts)
     mailbox.configure({ autostart = true })
     mailbox.register("nvim", { root = mailbox.host_fallback_root() })
     require("auto-agents.mailbox.commands").register_all()
+    -- v0.2.37: register the 13 todos.* command verbs + install
+    -- the `core.todo.assignee:changed` mailbox-routing subscriber
+    -- so `auto-core.todo.assign()` / `todos.assign` notify the
+    -- recipient agent's inbox (per ADR-0031 §5 + lector S1).
+    local ok_todos, todos_mod = pcall(require, "auto-agents.mailbox.todos_commands")
+    if ok_todos then
+      todos_mod.register_all()
+      todos_mod.install_assignee_routing()
+    end
   end)
 
   -- Editor-window-floor invariant. AutoVim's three-column layout
