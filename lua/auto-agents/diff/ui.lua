@@ -284,6 +284,14 @@ update_preview = function()
   if not req then
     set_buf_lines(_mfloat:bufnr("middle"), { "No pending diffs." })
     set_buf_lines(_mfloat:bufnr("preview"), { "No pending diffs." })
+    -- Clear the winbar when nothing is selected so we don't leave a
+    -- stale path from a previous selection on screen.
+    for _, p in ipairs({ "middle", "preview" }) do
+      local w = _mfloat:winid(p)
+      if w and vim.api.nvim_win_is_valid(w) then
+        pcall(function() vim.wo[w].winbar = "" end)
+      end
+    end
     return
   end
 
@@ -331,6 +339,29 @@ update_preview = function()
   if preview_win and vim.api.nvim_win_is_valid(preview_win) then
     vim.api.nvim_win_call(preview_win, function() vim.cmd("diffthis") end)
   end
+
+  -- v0.2.41: stamp the full file path on the middle + preview
+  -- panes' winbar so the user always knows which file is under
+  -- review. Updates on every selection change because this whole
+  -- function re-runs on `[1-9]` / `<CR>` / `Tab` cycle. Pre-
+  -- v0.2.41 only the basename appeared in the left list — easy
+  -- to confuse when two repos in your worktree have a file with
+  -- the same name (e.g. tests/smoke.lua across plugins).
+  --
+  -- Truncation strategy: if the path is wider than the pane,
+  -- trim from the LEFT so the basename + immediate parent stay
+  -- visible (where the disambiguating bits typically live).
+  local function _path_winbar(win, path)
+    if not (win and vim.api.nvim_win_is_valid(win)) then return end
+    local width = vim.api.nvim_win_get_width(win)
+    local label = " " .. path
+    if #label > width then
+      label = " …" .. label:sub(#label - width + 4)
+    end
+    pcall(function() vim.wo[win].winbar = label end)
+  end
+  _path_winbar(middle_win,  req.file_path or "(no file_path)")
+  _path_winbar(preview_win, req.file_path or "(no file_path)")
 end
 
 render_left = function()
