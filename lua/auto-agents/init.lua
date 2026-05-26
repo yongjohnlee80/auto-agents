@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.38"
+M.version = "0.2.39"
 
 -- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
@@ -1396,6 +1396,40 @@ function M.configured_slots()
     if type(e.slot) == "number" then out[#out + 1] = e.slot end
   end
   table.sort(out)
+  return out
+end
+
+---v0.2.39: enumerate every currently-spawned agent slot. Returns
+---a list of `{slot, name, kind, mailbox_id}` entries — one per
+---configured slot whose terminal is alive. Consumers (e.g.
+---auto-finder.todos panel's `A` assign keymap) use this to pick a
+---live recipient for a `todos.assign` call without having to
+---thread through the mailbox `addressbook` indirection.
+---
+---Entries:
+---  • `slot`       — 1-based slot integer
+---  • `name`       — agent name (`jarvis`, `lector`, etc.)
+---  • `kind`       — `"claude"` / `"codex"` / etc. (from cfg)
+---  • `mailbox_id` — `agent:<name>` (bare form; the resolver
+---                    accepts both bare and full instance-scoped
+---                    forms)
+---@return { slot: integer, name: string, kind: string?, mailbox_id: string }[]
+function M.spawned_agents()
+  local out = {}
+  for _, slot in ipairs(M.configured_slots()) do
+    local term = M.state.slot_terminals[slot]
+    if term and term.is_alive and term:is_alive() then
+      local entry = _bootstrap_entry(slot)
+      if entry and type(entry.name) == "string" and entry.name ~= "" then
+        out[#out + 1] = {
+          slot       = slot,
+          name       = entry.name,
+          kind       = entry.kind,
+          mailbox_id = "agent:" .. entry.name,
+        }
+      end
+    end
+  end
   return out
 end
 

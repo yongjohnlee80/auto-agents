@@ -91,13 +91,49 @@ end
 ---@param args table
 local function h_list(args)
   local todo, errenv = todo_or_err(); if not todo then return errenv end
+
+  -- v0.2.39: default to status=open (the most common ask is "what
+  -- should I work on next?") and return a SLIM projection — id +
+  -- title + file_path per task — so the response stays token-cheap
+  -- for agents. Agents that need the full schema-v1 shape call
+  -- `todos.show id=<x>` instead.
+  --
+  -- Args:
+  --   status = "open" | "deferred" | "completed" | "archived"  -- bucket filter (default "open")
+  --   status = "all"                                            -- return every bucket
+  --   full   = true                                             -- opt back into full task tables
   local opts = {}
-  if type(args.status) == "string" and args.status ~= "" then
-    opts.status = args.status
+  local status_filter = args.status
+  if status_filter == nil or status_filter == "" then
+    status_filter = "open"
   end
+  if status_filter ~= "all" then opts.status = status_filter end
+
   local ok, list = pcall(todo.list, opts)
   if not ok then return err_response("internal_error", tostring(list)) end
-  return ok_response({ count = #list, tasks = list })
+
+  if args.full == true then
+    return ok_response({ count = #list, status = status_filter, tasks = list })
+  end
+
+  -- Compute file_path per task via the canonical paths resolver
+  -- (same one the panel uses) so the value lines up across consumers.
+  local td = todo.get_todo_dir()
+  local ok_paths, paths = pcall(require, "auto-core.todo.paths")
+  local slim = {}
+  for _, t in ipairs(list) do
+    local file_path
+    if ok_paths and type(t) == "table" and t.id and t.status then
+      local ok_p, p = pcall(paths.task_file_path, td, t.id, t.status, t.archived_at)
+      if ok_p then file_path = p end
+    end
+    slim[#slim + 1] = {
+      id        = t.id,
+      title     = t.title,
+      file_path = file_path,
+    }
+  end
+  return ok_response({ count = #slim, status = status_filter, tasks = slim })
 end
 
 local function h_show(args)
@@ -242,8 +278,8 @@ end
 local SPECS = {
   ["todos.list"] = {
     owner       = "auto-agents",
-    description = "List tasks in the active workspace's .todo-list/. Optional `status` filter narrows to one bucket (open|deferred|completed|archived). Returns `{count, tasks[]}`.",
-    schema      = { status = "string?" },
+    description = "List tasks. **Defaults to status=open** with a slim per-task projection `{id, title, file_path}` so the response is token-cheap. Pass `status` to filter to a different bucket (or `all` for every bucket). Pass `full=true` to return the full schema-v1 task tables.",
+    schema      = { status = "string?", full = "boolean?" },
     handler     = h_list,
   },
   ["todos.show"] = {
