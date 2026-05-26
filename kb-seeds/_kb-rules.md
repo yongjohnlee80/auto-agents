@@ -114,7 +114,7 @@ The inline `**Tags:**` line carries the load-bearing semantic state — `status:
 
 Convention docs under `shared/conventions/` are **binding** — they constrain agent behavior. Hard Rule #4 of `AGENTS.md` requires preserving every clause verbatim from the originating raw source. When a convention conflicts with code or an in-flight task, the convention wins or a new ADR overrides it. Agents do not silently ignore.
 
-Periodic audit of `shared/conventions/` (for accuracy, currency, mutual consistency) is healthy — schedule it via a tracked todo doc in `shared/synthesis/` (`type:todo-list`, `repo:shared`, `area:kb`) when drift becomes likely.
+Periodic audit of `shared/conventions/` (for accuracy, currency, mutual consistency) is healthy — schedule it as a task in the active `.todo-list/` (see `shared/conventions/todo-handling.md`) when drift becomes likely. The legacy `type:todo-list`-tagged synthesis docs are no longer the canonical surface; tasks live in `auto-core.todo`'s per-project task store.
 
 ---
 
