@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.39"
+M.version = "0.2.40"
 
 -- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
@@ -668,6 +668,33 @@ local function build_agent_env(spec, cwd)
   -- M5: merge in resource grants (AUTO_AGENTS_ALLOWED_PATHS, etc.).
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
   for k, v in pairs(resources_env) do env[k] = v end
+
+  -- v0.2.40: two todos-related env vars for spawned agents.
+  --
+  -- AUTO_AGENTS_TODOS_BOOTSTRAP_DOC — absolute path to the
+  -- bundled `bootstrap-todos.md` (operational reference for
+  -- the `todos.*` command surface). Mirrors the existing
+  -- AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC pattern. Soft: skipped
+  -- when the doc can't be located on the runtimepath.
+  --
+  -- AUTO_AGENTS_TODOS_CONVENTION_DOC — absolute path to the
+  -- per-KB todo-handling convention (seeded by ensure_layout;
+  -- per-project customizable). Agents track the convention's
+  -- `revision:` in their own local memory and re-ingest on
+  -- change per the doc's own protocol.
+  local ok_todos, todos_mod = pcall(require, "auto-agents.mailbox.todos_commands")
+  if ok_todos and type(todos_mod.bootstrap_doc_path) == "function" then
+    local doc_path = todos_mod.bootstrap_doc_path()
+    if doc_path and doc_path ~= "" then
+      env.AUTO_AGENTS_TODOS_BOOTSTRAP_DOC = doc_path
+    end
+  end
+  do
+    local conv = kb_root .. "/shared/conventions/todo-handling.md"
+    if vim.fn.filereadable(conv) == 1 then
+      env.AUTO_AGENTS_TODOS_CONVENTION_DOC = conv
+    end
+  end
 
   -- v0.2.26: per-agent diff_review gate. Direct, unambiguous signal
   -- the agent can self-check via `[ "$AUTO_AGENTS_DIFF_REVIEW" = "true" ]`

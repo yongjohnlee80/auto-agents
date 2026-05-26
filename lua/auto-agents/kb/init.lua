@@ -161,6 +161,36 @@ function M.ensure_layout(root, opts)
     end
   end
 
+  -- v0.2.40: ship the todo-handling convention seed into every
+  -- KB (regardless of type) so agents learn the per-project
+  -- policy for `auto-core.todo` task handling. The seed lives at
+  -- `<seeds>/_todo-handling.md` and copies to
+  -- `<kb>/shared/conventions/todo-handling.md`.
+  --
+  -- Absent-only — per-project customizations survive plugin
+  -- updates. To re-seed (overwrite local), the user passes
+  -- `force_schema = true` or deletes the existing file. The
+  -- seed's `revision:` bumps are tracked by the convention
+  -- itself; agents store the last-ingested revision in their
+  -- local memory and re-read on change (the doc explains the
+  -- protocol). The host does not propagate seed revisions on
+  -- its own.
+  do
+    local todo_seed = types.seeds_dir() .. "/_todo-handling.md"
+    local todo_dest = root .. "/shared/conventions/todo-handling.md"
+    if vim.fn.filereadable(todo_seed) == 1
+        and (opts.force_schema or vim.fn.filereadable(todo_dest) == 0)
+    then
+      vim.fn.mkdir(root .. "/shared/conventions", "p")
+      local f = io.open(todo_seed, "r")
+      if f then
+        local content = f:read("*a"); f:close()
+        local out = io.open(todo_dest, "w")
+        if out then out:write(content); out:close() end
+      end
+    end
+  end
+
   -- Per-type _templates/ bundle (optional). When the seed bundle
   -- ships a `<type>-templates/` directory alongside the seed, copy
   -- every file in it to <kb_root>/_templates/. Currently consumed
