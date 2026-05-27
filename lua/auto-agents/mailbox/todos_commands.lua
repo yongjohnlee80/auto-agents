@@ -439,16 +439,32 @@ function M.install_assignee_routing()
 
     -- Try to send via auto-core.mailbox.send. The recipient is
     -- the bare or full mailbox id (e.g. "agent:lector" or
-    -- "agent:lector:<instance>"); the router resolves either form.
+    -- "agent:lector:<instance>"); the registry resolves a bare id
+    -- against this nvim's instance.
     local ok_core, ac = pcall(require, "auto-core")
     if not (ok_core and ac and ac.mailbox and ac.mailbox.send) then return end
-    pcall(ac.mailbox.send, {
+    -- `from` is required and `kind` must be one of message.lua's
+    -- M.KINDS {message,command,response,event} — "notification" is
+    -- NOT a valid kind, so an earlier draft's send was rejected by
+    -- message.build() and the assignee never got pinged. Use the
+    -- host `nvim` mailbox as sender + the "message" kind; the router
+    -- wakes the recipient on inbox arrival regardless of kind.
+    local res, send_err = ac.mailbox.send({
       to      = to,
-      kind    = "notification",
+      from    = "nvim",
+      kind    = "message",
       subject = "[todos] task assigned to you: "
         .. tostring(payload.title or payload.id or "(unknown)"),
       body    = format_assign_body(payload),
     })
+    -- Never swallow the failure silently — that's what hid this bug.
+    if not res then
+      pcall(function()
+        require("auto-agents.log").warn("todos.assignee_routing",
+          "assignee notification send failed for '" .. tostring(to)
+            .. "': " .. tostring(send_err))
+      end)
+    end
   end)
 end
 

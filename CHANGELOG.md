@@ -2,6 +2,32 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.48] — 2026-05-27 — fix: assignee notification never delivered (invalid message kind + missing `from`)
+
+Assigning a todo task to an agent (auto-finder todos panel `A`, `:AutoAgentsTodos
+assign`, or the `todos.assign` mailbox verb) set the `assignee` field but never
+woke the recipient — no inbox message arrived, in any workspace or session.
+
+**Cause.** `auto-core.todo.assign()` correctly publishes
+`core.todo.assignee:changed`, and the routing subscriber installed by
+`install_assignee_routing()` fires on it. But the subscriber's
+`auto-core.mailbox.send{…}` call was malformed in two ways:
+`kind = "notification"` is **not** a valid kind (`message.lua` `M.KINDS` is
+`{message, command, response, event}`), and no `from` was supplied (it is
+required). `message.build()` therefore rejected the message with
+`invalid message kind: notification`, `send` returned `nil, err`, and the
+call was wrapped in `pcall(ac.mailbox.send, …)` with **the result and error
+discarded** — so the failure was completely silent. The `assignee` field
+still updated because `assign()` writes the file before publishing, which is
+why it looked like "field set, no notification." Nothing to do with the
+subscriber being installed or with needing an nvim restart.
+
+**Fix.** Send a valid message: `kind = "message"`, `from = "nvim"` (the host
+mailbox). The router wakes the recipient on inbox arrival regardless of kind,
+so the assignee now gets the standard wake nudge. The send result is also
+captured and a failed send is logged via `auto-agents.log.warn` instead of
+being swallowed — this class of bug can no longer hide.
+
 ## [v0.2.47] — 2026-05-27 — fix: wake nudge submits on codex (drop path-token popup trigger)
 
 `wake` to a codex-backed slot delivered its nudge into the composer but

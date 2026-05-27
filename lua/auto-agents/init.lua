@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.47"
+M.version = "0.2.48"
 
 -- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
