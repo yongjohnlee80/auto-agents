@@ -101,7 +101,21 @@ local function handle_wake(args, ctx)
   local submit = args.submit
   if submit == nil then submit = true end
 
-  local ok = aa.send_slot(slot, text, { submit = submit == true })
+  -- v0.2.45 (follow-up #1): a wake is a NUDGE, not a command — it
+  -- must never interrupt the agent's in-flight work. send_slot's
+  -- default submit sequence for codex is `Esc` + `CR` (Esc closes
+  -- the composer picker so CR submits). But if codex is mid-
+  -- generation, that Esc CANCELS the generation — the reported
+  -- bug. Force `submit_keys = { "<CR>" }` for wake so only a bare
+  -- Enter is sent, regardless of kind. The leading-`[` codex
+  -- bracketed-entry hazard is already dodged by the `ATTENTION:`
+  -- prefix above, so the Esc isn't needed for the nudge to land.
+  -- (claude/antigravity already default to bare `<CR>`, so this is
+  -- a no-op for them.)
+  local ok = aa.send_slot(slot, text, {
+    submit      = submit == true,
+    submit_keys = { "<CR>" },
+  })
   if not ok then
     return err("terminal_unavailable",
       "wake failed for slot " .. tostring(slot)
