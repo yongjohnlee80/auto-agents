@@ -751,10 +751,14 @@ vim.wait(80)
 ok("send_slot without submit fires exactly one chan_send",
    #sends == 1 and sends[1] == "\27[200~no-submit prompt\27[201~")
 
--- v0.2.30 Phase 7: codex slots submit with ESC + CR (Esc closes
--- any open picker/autocomplete; CR commits the freshly-pasted
--- chat input). The user's manual workaround for the wake-text-
--- retention bug, now baked in.
+-- v0.2.45 (follow-up #1): codex slots now submit with a BARE CR,
+-- same as every other kind. Previously codex defaulted to Esc + CR
+-- (Esc closing an open picker) but mid-generation that Esc CANCELS
+-- the agent's work — the reported interrupt. The leading-`[` codex
+-- bracketed-entry hazard that originally motivated Esc is handled
+-- upstream by payload prefixing (e.g. wake's `ATTENTION:`). A
+-- caller that truly needs Esc+CR can still pass it via
+-- `opts.submit_keys`.
 aa.state.config.agents.bootstrap = {
   { slot = 1, name = "jarvis", kind = "claude" },
   { slot = 2, name = "rosie",  kind = "codex"  },
@@ -768,13 +772,24 @@ aa.state.slot_terminals[2] = {
 aa.send_slot(2, "review the diff please",
   { submit = true, submit_delay_ms = 30, inter_key_delay_ms = 10 })
 vim.wait(120)
--- v0.2.34: codex Esc + CR are now sent as DISCRETE keypresses (two
--- separate term:send calls with an inter-key delay) so codex's TUI
--- doesn't interpret the combo as Alt+Enter (newline-in-composer).
--- 3 sends total: body + Esc + CR.
-ok("Phase 7 / v0.2.34: codex submit splits Esc + CR into discrete keypresses",
-  #codex_sends == 3 and codex_sends[2] == "\27" and codex_sends[3] == "\r",
+-- 2 sends total now: body + bare CR (NO Esc).
+ok("follow-up #1: codex submit is bare CR, no Esc (no mid-work interrupt)",
+  #codex_sends == 2 and codex_sends[2] == "\r",
   "got: " .. vim.inspect(codex_sends))
+-- The override still works for a caller that explicitly wants Esc+CR.
+local codex_esc = {}
+aa.state.slot_terminals[2] = {
+  is_alive = function() return true end,
+  send = function(_, text) table.insert(codex_esc, text); return true end,
+}
+aa.send_slot(2, "explicit esc", {
+  submit = true, submit_delay_ms = 30, inter_key_delay_ms = 10,
+  submit_keys = { "<Esc>", "<CR>" },
+})
+vim.wait(120)
+ok("follow-up #1: submit_keys override can still send Esc+CR",
+  #codex_esc == 3 and codex_esc[2] == "\27" and codex_esc[3] == "\r",
+  "got: " .. vim.inspect(codex_esc))
 ok("v0.2.34: claude submit still fires bare CR (no Esc, no split)",
   (function()
     local claude_sends = {}
