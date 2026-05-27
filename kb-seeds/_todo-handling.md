@@ -1,6 +1,6 @@
 ---
 type: convention
-revision: 3
+revision: 4
 status: active
 sources:
   - shared/adrs/0031-auto-core-per-project-todo-task-system.md
@@ -11,7 +11,7 @@ tags: [todos, convention, todo-handling]
 
 **Tags:** `type:convention` `living-doc` `owner:shared` `repo:shared` `area:todos` `area:workflow`
 
-**Revision**: 3 — compare against your stored value on every spawn; re-ingest on change.
+**Revision**: 4 — compare against your stored value on every spawn; re-ingest on change.
 
 **Abstract:** Per-project policy for how tasks are stored, edited, and moved
 between buckets. Each KB MAY customize this file; agents treat it as
@@ -37,27 +37,43 @@ same data:
 
 ---
 
-## Agent protocol — store this in local memory
+## Agent protocol — store this in GLOBAL memory
 
-Per-project todo handling MAY differ. Save this convention's
-`revision:` value to your local project memory after first read.
+Mailbox actions are reliably second-nature to agents because the
+protocol is **internalized once** and applied everywhere — not
+re-derived on every spawn. Todo handling should work the same way.
 
-Suggested memory:
+Save the core protocol (the `todos.*` surface exists; status /
+assign / create / archive go through verbs; doc refs are
+absolute-in / `$VAR`-out) to your **global** memory — it applies
+across every autovim project, so it should outlive any single
+project's local memory. Record this convention's `revision:`
+alongside it.
+
+Per-project *customizations* (rules a specific KB adds below) are
+project-scoped — key those by project so they don't bleed across
+workspaces.
+
+Suggested memory keys:
 
 ```
-feedback_todo_handling — local copy of this convention's protocol
-                         + the revision you last ingested.
+feedback_todo_handling          (GLOBAL) — the core protocol +
+                                  the revision you last ingested.
+feedback_todo_handling_<project> (per-project) — only when THIS
+                                  KB customizes the rules below.
 ```
 
-On every spawn:
+On every spawn (ingest gate):
 
   1. Read this file's `revision:` field.
   2. Compare against your stored value.
-  3. If newer (or absent): re-read end-to-end, adopt directives, update memory.
+  3. If newer (or absent): re-read end-to-end, adopt directives,
+     update your global memory (+ per-project entry if customized).
   4. If equal: nothing to do.
 
 This mirrors the mailbox bootstrap-revision protocol (see
-`$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC`).
+`$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC`) — same discipline, same
+reliability.
 
 ---
 
@@ -191,6 +207,34 @@ and re-ingest into memory.
 is **absent** — your customizations survive plugin updates and
 `force_schema` re-seeds (unless you opt in by deleting the file
 first or passing `force_schema = true`).
+
+---
+
+## Spawned outside autovim?
+
+If you are running **without** the autovim host — no
+`$AUTO_AGENTS_MAILBOX_DIR`, no `$AUTO_AGENTS_TODOS_*` env vars,
+`commands_list` doesn't list `todos.*` — then the mailbox verb
+surface is **unavailable**. Detect this up front:
+
+```sh
+[ -n "$AUTO_AGENTS_MAILBOX_DIR" ] && echo "in autovim" || echo "standalone"
+```
+
+In standalone mode:
+
+- You can still **read** any `<workspace>/.todo-list/` that
+  exists, and **hand-edit** task files — but status / lifecycle
+  side effects (events, bucket reconciliation, mailbox
+  notifications) will NOT fire, because nothing is listening.
+- Do **not** silently invent a task store in a random location.
+  **Ask the user** where todos should live and how to manage
+  them: (a) point you at an existing `.todo-list/` to hand-edit,
+  (b) defer todo work until you're spawned inside autovim, or
+  (c) use a project-local fallback they specify.
+- Never fall back to the legacy `*-todos.md` convention as a
+  "standalone" workaround — that's the thing we migrated away
+  from.
 
 ---
 
