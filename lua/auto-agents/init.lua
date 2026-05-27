@@ -1328,16 +1328,20 @@ function M.send_slot(slot, text, opts)
   if not term:send(payload) then return false end
   if opts and opts.submit then
     local delay = opts.submit_delay_ms or 60
-    -- Per-kind submit keystroke sequence. claude / antigravity:
-    -- bare Enter. codex: Esc + Enter, sent as TWO discrete
-    -- keypresses with an inter-key delay — sending them as one
-    -- byte chunk (`\27\r`) was being interpreted by codex's TUI as
-    -- Alt+Enter (newline in composer), which is the v0.2.33 user
-    -- report. Splitting them mimics actual keyboard timing so the
-    -- TUI sees Esc (close picker) followed by a fresh bare Enter
-    -- (submit). Override via `opts.submit_keys = { ... }`.
-    local default_keys = is_codex and { "<Esc>", "<CR>" } or { "<CR>" }
-    local submit_keys = opts.submit_keys or default_keys
+    -- Submit keystroke sequence. v0.2.45 (follow-up #1): bare Enter
+    -- for EVERY kind. Previously codex defaulted to `Esc` + `Enter`
+    -- (Esc closing a composer picker so the Enter submits). But
+    -- when codex is mid-generation that Esc CANCELS the work — a
+    -- recurring interrupt the user asked us to stop. The leading-
+    -- `[` codex bracketed-entry hazard (the original reason Esc was
+    -- introduced, v0.2.30 Phase 7) is handled upstream by prefixing
+    -- such payloads (e.g. the wake nudge's `ATTENTION:`), so the
+    -- Esc is no longer load-bearing for the common path. A caller
+    -- that genuinely needs the old behavior can still opt in with
+    -- `opts.submit_keys = { "<Esc>", "<CR>" }`. The bytes are sent
+    -- as discrete keypresses with an inter-key delay (sending
+    -- `\27\r` as one chunk read as Alt+Enter — the v0.2.33 report).
+    local submit_keys = opts.submit_keys or { "<CR>" }
     local inter_delay = opts.inter_key_delay_ms or 30
     local function press_seq(i)
       if i > #submit_keys then return end
