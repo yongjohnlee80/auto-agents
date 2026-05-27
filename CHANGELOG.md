@@ -2,6 +2,36 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.47] — 2026-05-27 — fix: wake nudge submits on codex (drop path-token popup trigger)
+
+`wake` to a codex-backed slot delivered its nudge into the composer but
+never submitted it — confirmed live via `peek` on a Codex slot: the nudge
+sat unsent under a "no matches / Press enter to insert or esc to close"
+popup. `say` to the same slot worked.
+
+**Cause.** Since v0.2.45 (follow-up #1), `wake` submits with a bare `<CR>`
+(no `Esc`) so a wake never cancels in-flight codex generation. But the
+default nudge text ended in the literal path token
+`$AUTO_AGENTS_MAILBOX_DIR/<kind>/`. Codex reacts to that token by opening
+a fuzzy path-completion popup even for bracketed-paste input, and the bare
+`<CR>` is then swallowed by the popup instead of submitting the message.
+`say` works because its default codex submit sequence is `Esc`+`CR` — the
+`Esc` dismisses the popup first.
+
+**Fix.** Extracted `commands.default_wake_nudge(kind, origin)` and reworded
+it to be popup-inert: prose only, no `$VAR`, no `/` path separator, no `@`
+mention token — so no popup opens and the bare `<CR>` submits cleanly. The
+nudge now reads `ATTENTION: [auto-agents] new <kind> from <origin> — check
+your <kind>.` The mailbox path was never load-bearing; agents resolve it
+from `bootstrap-mailbox.md`. Generation-safety (no `Esc`) is preserved.
+
+Relates to v0.2.28 (leading-`[` composer-queue dodge) — same class of
+codex-composer hazard, different trigger.
+
+**Tests.** New `tests/wake_nudge_spec.lua` (16 assertions) guards that the
+nudge text carries no codex completion-trigger token and no leading `[`,
+for both `inbox` and `responses` arrival kinds.
+
 ## [v0.2.35] — 2026-05-25 — mailbox command `peep` renamed to `peek`
 
 Patch-level rename of the read-only TUI-buffer inspection command

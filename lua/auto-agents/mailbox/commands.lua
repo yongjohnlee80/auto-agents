@@ -68,6 +68,37 @@ local function err(code, message)
   return { ok = false, code = code, error = message }
 end
 
+---Build the default wake nudge text.
+---
+---A wake is a NUDGE, not a command — the agent's bootstrap-mailbox.md
+---is the protocol, so we only point. Two codex composer hazards shape
+---the wording for codex-backed peers:
+---
+---  1. Leading `[`: codex treats a leading `[...]` as a bracketed /
+---     queued composer entry and refuses to auto-submit. The leading
+---     `ATTENTION:` sidesteps it (also handled defensively in
+---     send_slot's leading-`[` dodge).
+---  2. Path-like tokens: an earlier default ended in the literal
+---     `$AUTO_AGENTS_MAILBOX_DIR/<kind>/`. Codex reacts to that path
+---     token by opening a fuzzy path-completion popup ("no matches /
+---     Press enter to insert or esc to close") even for bracketed-paste
+---     input. Because `wake` submits with a bare `<CR>` (no `Esc` — Esc
+---     would cancel in-flight generation, see init.lua send_slot), that
+---     `<CR>` is swallowed by the popup and the nudge never submits
+---     (confirmed via `peek` on a codex slot). Keep the text prose-only
+---     — no `$VAR`, no `/` path separator, no `@` mention token — so no
+---     popup opens and the bare `<CR>` submits cleanly. The agent knows
+---     where its mailbox lives from bootstrap-mailbox.md; the path was
+---     never load-bearing.
+---@param kind string   -- arrival kind ("inbox" | "responses")
+---@param origin string -- originating mailbox name
+---@return string
+function M.default_wake_nudge(kind, origin)
+  return string.format(
+    "ATTENTION: [auto-agents] new %s from %s — check your %s.",
+    kind, origin, kind)
+end
+
 ---`wake` handler. `args = { slot: string, text: string?, submit: boolean? }`.
 ---`ctx` carries `mailbox`, `mailbox_full`, `arrival_kind`, `arrival_id`
 ---when fired by the router as a wake hook (see auto-core
@@ -88,14 +119,11 @@ local function handle_wake(args, ctx)
   local text = args.text
   if type(text) ~= "string" or text == "" then
     -- Default nudge: short directive that fits in one terminal line.
-    -- The agent's bootstrap-mailbox.md is the protocol — we just point.
-    -- Must NOT start with `[`: codex-backed peers treat a leading `[...]`
-    -- as a bracketed/queued composer entry and silently refuse to submit
-    -- until the user hits ESC + ENTER. Leading "ATTENTION:" sidesteps it.
+    -- See M.default_wake_nudge for the codex composer hazards (leading
+    -- `[` + path-token popup) that constrain the wording.
     local origin = ctx and ctx.mailbox or "?"
     local kind   = ctx and ctx.arrival_kind or "inbox"
-    text = string.format("ATTENTION: [auto-agents] new %s from %s — check $AUTO_AGENTS_MAILBOX_DIR/%s/",
-      kind, origin, kind)
+    text = M.default_wake_nudge(kind, origin)
   end
 
   local submit = args.submit
