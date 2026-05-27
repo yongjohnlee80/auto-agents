@@ -1,5 +1,5 @@
 ---
-revision: 1
+revision: 2
 title: auto-agents todos command surface — bootstrap guide
 ---
 
@@ -127,6 +127,17 @@ the hand-editable surface (`description`, `priority`, `due`,
 `assignee`, `tags`, `adr`, `review`, `blocked`). Managed fields
 (id, lifecycle timestamps, errors) are owned by the host.
 
+**Document refs (`adr`, `review`): give the ABSOLUTE path.**
+You reliably know where a doc lives on disk; you do NOT need to
+guess the right `$KB_ROOT` / `$WORKSPACE` prefix. The host
+normalizes any absolute (or bare KB-relative) ref to the
+portable `$VAR/...` symbolic form on write (auto-core v0.1.46+),
+choosing the most specific known root (`$KB_ROOT` → `$WORKSPACE`
+→ user vars → `$HOME`; absolute kept only when no root contains
+it). This is what lets the panel open the attachment from any
+workspace. Do NOT hand-write a bare relative like
+`shared/adrs/foo.md` and hope — pass the absolute path.
+
 ```jsonc
 {
   "kind": "command", "command": "todos.add",
@@ -134,11 +145,17 @@ the hand-editable surface (`description`, `priority`, `due`,
     "title": "Verify v0.1.43 assign event payload shape",
     "priority": "normal",
     "tags": ["test", "ad-hoc"],
-    "adr": ["$KB_ROOT/shared/adrs/0031-auto-core-per-project-todo-task-system.md"]
+    "adr": ["/Users/you/.config/nvim/.auto-agents-config/kb/shared/adrs/0031-auto-core-per-project-todo-task-system.md"]
   }
 }
 → { "ok": true, "value": { "id": "2026-05-26-verify-v0143-assign-event-payload-shape" } }
+// the stored task records adr[0] as
+//   $KB_ROOT/shared/adrs/0031-auto-core-per-project-todo-task-system.md
 ```
+
+The panel will then auto-refresh — `todos.add` (and `update` /
+`remove`) fire `core.todo:changed`, so a created task appears
+without a manual refresh (auto-core v0.1.46+).
 
 ### `todos.update`
 

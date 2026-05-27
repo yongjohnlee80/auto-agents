@@ -1,6 +1,6 @@
 ---
 type: convention
-revision: 1
+revision: 3
 status: active
 sources:
   - shared/adrs/0031-auto-core-per-project-todo-task-system.md
@@ -11,7 +11,7 @@ tags: [todos, convention, todo-handling]
 
 **Tags:** `type:convention` `living-doc` `owner:shared` `repo:shared` `area:todos` `area:workflow`
 
-**Revision**: 1 — compare against your stored value on every spawn; re-ingest on change.
+**Revision**: 3 — compare against your stored value on every spawn; re-ingest on change.
 
 **Abstract:** Per-project policy for how tasks are stored, edited, and moved
 between buckets. Each KB MAY customize this file; agents treat it as
@@ -94,6 +94,40 @@ effects — `status` (events), `assign` (mailbox notification),
 (`created`, `updated`, `status_changed`, `completed_at`,
 `archived_at`), `errors[]`. These are managed by the host;
 manual edits silently break refresh + cross-references.
+
+### Document references (`adr` / `review`)
+
+Give the **absolute path** to the document. You reliably know
+where it lives on disk — you do NOT need to guess a `$KB_ROOT`
+or `$WORKSPACE` prefix. The host normalizes any absolute (or
+bare KB-relative) ref to the portable `$VAR/...` symbolic form
+on write (auto-core v0.1.46+), picking the most specific known
+root: `$KB_ROOT` → `$WORKSPACE` → user-defined vars → `$HOME`.
+An absolute path is kept absolute ONLY when no known root
+contains it (last resort — see
+[[cross-machine-symbolic-refs]]).
+
+```yaml
+# you write (absolute):
+adr:
+  - /Users/you/.config/nvim/.auto-agents-config/kb/shared/adrs/0031-foo.md
+# the host stores (portable):
+adr:
+  - $KB_ROOT/shared/adrs/0031-foo.md
+```
+
+`blocked:` is different — it holds todo task **ids**, not paths,
+so keep those as bare filename stems:
+
+```yaml
+blocked:
+  - 2026-05-26-some-other-task
+```
+
+This normalization is what lets the panel open an attachment
+from any workspace. A bare relative like `shared/adrs/foo.md`
+that the host can't resolve is left as-is and flagged
+not-found — so prefer the absolute path.
 
 ---
 
