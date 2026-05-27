@@ -497,6 +497,10 @@ local function handle_commands_list(args)
         name        = entry.name,
         owner       = entry.owner,
         description = entry.description,
+        -- v0.2.43: relay the per-command arg schema (auto-core
+        -- v0.1.45+) so agents discover exactly which args each
+        -- verb takes — no guessing, no bad_args.
+        schema      = entry.schema,
       }
     end
   end
