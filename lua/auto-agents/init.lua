@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.45"
+M.version = "0.2.46"
 
 -- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
@@ -1430,6 +1430,14 @@ function M.configured_slots()
   return out
 end
 
+-- Forward declaration so `M.spawned_agents` (defined below) can
+-- reference `_bootstrap_entry` even though its `function` body is
+-- defined further down. Without this, the reference inside
+-- spawned_agents bound to a nil GLOBAL `_bootstrap_entry` and the
+-- call errored (`attempt to call global '_bootstrap_entry'`) — a
+-- v0.2.39 regression that broke the auto-finder `A` assign keymap.
+local _bootstrap_entry
+
 ---v0.2.39: enumerate every currently-spawned agent slot. Returns
 ---a list of `{slot, name, kind, mailbox_id}` entries — one per
 ---configured slot whose terminal is alive. Consumers (e.g.
@@ -1468,7 +1476,9 @@ end
 ---below; returns the raw `cfg.agents.bootstrap` entry or nil.
 ---@param slot integer
 ---@return table|nil
-local function _bootstrap_entry(slot)
+-- (forward-declared above so M.spawned_agents can call it; no
+-- `local` keyword here — assigns the existing upvalue.)
+function _bootstrap_entry(slot)
   local cfg = M.state.config
   if not (cfg and cfg.agents and cfg.agents.bootstrap) then return nil end
   for _, e in ipairs(cfg.agents.bootstrap) do

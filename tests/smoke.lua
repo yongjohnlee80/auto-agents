@@ -803,6 +803,25 @@ ok("v0.2.34: claude submit still fires bare CR (no Esc, no split)",
     return #claude_sends == 2 and claude_sends[2] == "\r"
   end)())
 
+-- v0.2.46: M.spawned_agents() must actually RUN (the v0.2.39
+-- ship had a scope bug — it referenced a nil global
+-- `_bootstrap_entry` and errored on every call, breaking the
+-- auto-finder `A` assign keymap). Mock a live terminal so an
+-- entry is returned end-to-end.
+aa.state.config.agents.bootstrap = {
+  { slot = 1, name = "jarvis", kind = "claude" },
+  { slot = 2, name = "rosie",  kind = "codex"  },
+}
+aa.state.slot_terminals[1] = { is_alive = function() return true end, send = function() return true end }
+aa.state.slot_terminals[2] = nil  -- not spawned → excluded
+local sp_ok, spawned = pcall(aa.spawned_agents)
+ok("v0.2.46: spawned_agents() runs without error", sp_ok,
+  not sp_ok and tostring(spawned) or nil)
+ok("v0.2.46: spawned_agents() returns only the alive slot with mailbox_id",
+  sp_ok and #spawned == 1 and spawned[1].name == "jarvis"
+    and spawned[1].mailbox_id == "agent:jarvis",
+  "got: " .. vim.inspect(spawned))
+
 -- v0.2.34: send_keypress symbolic helper + override hook.
 local kp_sends = {}
 aa.state.slot_terminals[2] = {
