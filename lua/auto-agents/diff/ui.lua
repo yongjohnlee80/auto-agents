@@ -340,21 +340,34 @@ update_preview = function()
     vim.api.nvim_win_call(preview_win, function() vim.cmd("diffthis") end)
   end
 
-  -- v0.2.41: stamp the full file path on the middle + preview
-  -- panes' winbar so the user always knows which file is under
-  -- review. Updates on every selection change because this whole
-  -- function re-runs on `[1-9]` / `<CR>` / `Tab` cycle. Pre-
-  -- v0.2.41 only the basename appeared in the left list — easy
-  -- to confuse when two repos in your worktree have a file with
-  -- the same name (e.g. tests/smoke.lua across plugins).
+  -- v0.2.41: stamp the file path on the middle + preview panes'
+  -- winbar so the user always knows which file is under review.
+  -- Updates on every selection change because this whole function
+  -- re-runs on `[1-9]` / `<CR>` / `Tab` cycle. Pre-v0.2.41 only
+  -- the basename appeared in the left list — easy to confuse when
+  -- two repos share a filename (e.g. tests/smoke.lua).
   --
-  -- Truncation strategy: if the path is wider than the pane,
-  -- trim from the LEFT so the basename + immediate parent stay
-  -- visible (where the disambiguating bits typically live).
+  -- v0.2.44: shorten the displayed path to its portable `$VAR/...`
+  -- symbolic form (`$WORKSPACE/...`, `$KB_ROOT/...`, etc.) via
+  -- auto-core.todo.vars.symbolize_path (v0.1.47+). Far more
+  -- legible than a deep absolute path, and consistent with how
+  -- todo refs are stored. pcall-guarded so an older auto-core
+  -- (no symbolize_path) just shows the raw path.
+  --
+  -- Truncation strategy: if still wider than the pane, trim from
+  -- the LEFT so the basename + immediate parent stay visible.
+  local function _display_path(path)
+    local ok_v, vars = pcall(require, "auto-core.todo.vars")
+    if ok_v and type(vars.symbolize_path) == "function" then
+      local ok_s, sym = pcall(vars.symbolize_path, path)
+      if ok_s and type(sym) == "string" and sym ~= "" then return sym end
+    end
+    return path
+  end
   local function _path_winbar(win, path)
     if not (win and vim.api.nvim_win_is_valid(win)) then return end
     local width = vim.api.nvim_win_get_width(win)
-    local label = " " .. path
+    local label = " " .. _display_path(path)
     if #label > width then
       label = " …" .. label:sub(#label - width + 4)
     end
