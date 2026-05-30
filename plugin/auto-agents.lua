@@ -389,6 +389,68 @@ end, {
   desc = "Dispatch a todos.* mailbox verb from the cmdline (tab-completes verb names).",
 })
 
+-- ADR-0035 §4.5 — interactive trust-acknowledgement command. The
+-- mailbox surface (`todos.automation_set { bash_enabled = true }`)
+-- refuses until this command flips the workspace's
+-- `bash_first_run_acknowledged` flag. Keeping the gate behind a
+-- user-typed command is the whole point: a remote agent cannot
+-- bootstrap shell execution on the user's behalf.
+vim.api.nvim_create_user_command("AutoAgentsTodosAutomationEnable", function()
+  local ok, automation = pcall(require, "auto-core.todo.automation")
+  if not ok then
+    vim.notify("auto-core.todo.automation not available", vim.log.levels.ERROR)
+    return
+  end
+  local ts = automation.trust_state()
+  if ts.bash_first_run_acknowledged then
+    -- Already acknowledged. Just flip bash_enabled = true (or
+    -- report current state if already on).
+    if ts.bash_enabled then
+      vim.notify("automation bash already enabled for this workspace.",
+        vim.log.levels.INFO)
+      return
+    end
+    local set_ok, set_err = automation.set_trust({ bash_enabled = true })
+    if not set_ok then
+      vim.notify("automation enable failed: " .. tostring(set_err),
+        vim.log.levels.ERROR)
+      return
+    end
+    vim.notify("automation bash enabled.", vim.log.levels.INFO)
+    return
+  end
+
+  -- First run. Confirm with the user explicitly. `vim.fn.confirm`
+  -- blocks on the modal; we treat anything other than choice 1
+  -- ("Yes") as a refusal.
+  local prompt = table.concat({
+    "Enable bash execution for `.todo-list/automated/` in this",
+    "workspace? Any automated task will run shell commands with",
+    "this user's identity. ADR-0035 §4.5 trust model.",
+    "",
+    "Workspace: " .. tostring(vim.fn.getcwd()),
+  }, "\n")
+  local choice = vim.fn.confirm(prompt, "&Yes\n&No", 2, "Question")
+  if choice ~= 1 then
+    vim.notify("automation bash NOT enabled.", vim.log.levels.WARN)
+    return
+  end
+
+  automation.acknowledge_first_run()
+  local set_ok, set_err = automation.set_trust({ bash_enabled = true })
+  if not set_ok then
+    vim.notify("automation enable failed after ack: " .. tostring(set_err),
+      vim.log.levels.ERROR)
+    return
+  end
+  vim.notify(
+    "automation bash enabled. Use `:AutoAgentsTodos automation_set bash_enabled=false` to disable.",
+    vim.log.levels.INFO)
+end, {
+  nargs = 0,
+  desc  = "Interactively enable bash automation for this workspace (ADR-0035 §4.5)",
+})
+
 vim.api.nvim_create_user_command("AutoAgentsTodosDoc", function()
   local ok, mod = pcall(require, "auto-agents.mailbox.todos_commands")
   if not ok then

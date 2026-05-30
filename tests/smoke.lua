@@ -11,11 +11,14 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
--- Sibling auto-core.nvim worktree. Prefer `main` (the integration
--- line; v0.2.30 cycle retired the comms-2 feature branch since its
--- ADR 0023 Phase 1 work has long since merged). Fall back to the
--- plain repo for developer machines without a worktree tree.
-local core_root = plugins_root .. "/auto-core.nvim/main"
+-- Sibling auto-core.nvim worktree. ADR-0035 Phase 2 in-flight:
+-- prefer the paired feature worktree if present so the smoke
+-- exercises the new automation engine. Falls through to `main`,
+-- then the plain repo, for dev machines without that worktree.
+local core_root = plugins_root .. "/auto-core.nvim/adr-0035-p1"
+if vim.fn.isdirectory(core_root) == 0 then
+  core_root = plugins_root .. "/auto-core.nvim/main"
+end
 if vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
@@ -1761,6 +1764,155 @@ do
   p = parse("addressbook", { "run", "addressbook", "limit=10" })
   ok("parse_run_args: generic k=v with numeric coerced to number",
     p.limit == 10, vim.inspect(p))
+end
+
+-- ───────────────────── 24. ADR-0035 Phase 2 ─────────────────────────
+-- Hook + executor registration with auto-core.todo.automation,
+-- `assign user` sentinel skip in the recipient router, the two new
+-- mailbox verbs (todos.fire, todos.automation_set), and the KB
+-- audit subscriber.
+print("\n[24] ADR-0035 Phase 2 — todo_automation adapter + mailbox surface + KB audit")
+do
+  local ok_aa_auto, aa_auto = pcall(require, "auto-agents.todo_automation")
+  if not ok_aa_auto then
+    ok("ADR-0035 Phase 2: auto-agents.todo_automation loads", false,
+      "module load failed: " .. tostring(aa_auto))
+  else
+    -- Re-arm from a clean slate.
+    pcall(aa_auto.uninstall)
+
+    -- 24a. install registers the hook + executor + starts the engine.
+    aa_auto.install()
+    local automation = require("auto-core.todo.automation")
+    local hs, es = automation.registry_snapshot()
+    ok("install registers `assign slot:` hook",
+      (function() for _, p in ipairs(hs) do if p == "assign slot:" then return true end end return false end)(),
+      "got hooks: " .. vim.inspect(hs))
+    ok("install registers `bash -t=` executor",
+      (function() for _, p in ipairs(es) do if p == "bash -t=" then return true end end return false end)(),
+      "got executors: " .. vim.inspect(es))
+    ok("install starts the automation engine",
+      automation.list_pending().running == true)
+
+    -- 24b. uninstall is symmetric.
+    aa_auto.uninstall()
+    local hs2, es2 = automation.registry_snapshot()
+    ok("uninstall removes the hook",
+      (function() for _, p in ipairs(hs2) do if p == "assign slot:" then return false end end return true end)())
+    ok("uninstall removes the executor",
+      (function() for _, p in ipairs(es2) do if p == "bash -t=" then return false end end return true end)())
+    ok("uninstall stops the engine",
+      automation.list_pending().running == false)
+
+    -- 24c. todo_automation.install is idempotent.
+    aa_auto.install(); aa_auto.install()
+    ok("install is idempotent (still installed)", aa_auto.is_installed() == true)
+
+    -- 24d. The hook resolves `assign slot:N` via spawned_agents().
+    -- The smoke harness has bootstrap agents starting from setup.
+    -- Resolve slot 1 (jarvis per the project roster).
+    local hook = nil
+    -- Re-register a probe to capture the hook fn since registry
+    -- doesn't expose it. Easiest: call automation directly through
+    -- validate(); a registered prefix should make `assign slot:N`
+    -- pass validation (we're not asking for a positive identifier
+    -- resolution here — that requires live spawn state — just the
+    -- prefix-match-now-resolves invariant).
+    local schema = require("auto-core.todo.schema")
+    local test_template = schema.blank({
+      status = "automated",
+      condition = { "event:new-task" },
+      execute   = { "assign slot:1" },
+    })
+    ok("`assign slot:N` validates clean when adapter installed",
+      #automation.validate(test_template) == 0)
+
+    -- 24e. `bash -t=N` validates clean when executor registered.
+    test_template.execute = { "bash -t=2 echo hi" }
+    ok("`bash -t=N <cmd>` validates clean when adapter installed",
+      #automation.validate(test_template) == 0)
+
+    -- 24f. assign user sentinel: the assignee-routing subscriber
+    -- skips mailbox delivery for `to == "user"`. We don't have a
+    -- live mailbox in smoke; assert behavior via direct event
+    -- publish + sniff: there should be no error, no log warning,
+    -- no attempt to send. We verify by checking that triggering
+    -- the assignee event with to="user" doesn't fail.
+    local todos_mod = require("auto-agents.mailbox.todos_commands")
+    todos_mod.install_assignee_routing()
+    local events = require("auto-core.events")
+    local user_event_landed = false
+    events.publish("core.todo.assignee:changed", {
+      id        = "test-assign-user",
+      title     = "smoke fixture",
+      file_path = "/tmp/nonexistent.md",
+      from      = nil,
+      to        = "user",
+      reason    = nil,
+      at        = "2026-05-30T00:00:00Z",
+    })
+    user_event_landed = true  -- if we got here, no crash
+    ok("assign user sentinel: event publish completes without error",
+      user_event_landed)
+
+    -- 24g. todos.fire mailbox handler rejects bypass flags.
+    local fire_spec = todos_mod._SPECS["todos.fire"]
+    ok("todos.fire spec registered", type(fire_spec) == "table"
+      and type(fire_spec.handler) == "function")
+
+    local r_bypass = fire_spec.handler({
+      id = "any-id",
+      bypass_bash_disabled = true,
+    })
+    ok("todos.fire rejects bypass_bash_disabled from mailbox",
+      r_bypass.ok == false and r_bypass.code == "mailbox_bypass_rejected",
+      "got: " .. vim.inspect(r_bypass))
+
+    local r_bypass_al = fire_spec.handler({
+      id = "any-id",
+      bypass_allowlist = true,
+    })
+    ok("todos.fire rejects bypass_allowlist from mailbox",
+      r_bypass_al.ok == false and r_bypass_al.code == "mailbox_bypass_rejected")
+
+    -- 24h. todos.automation_set: refuse bash_enabled=true without ack.
+    local as_spec = todos_mod._SPECS["todos.automation_set"]
+    ok("todos.automation_set spec registered",
+      type(as_spec) == "table" and type(as_spec.handler) == "function")
+
+    -- Reset trust state to defaults for this assertion.
+    local state = require("auto-core.state")
+    local ns = state.namespace("auto-core.todo.automation")
+    ns:set("bash_enabled", false)
+    ns:set("bash_first_run_acknowledged", false)
+    ns:set("bash_allowlist", nil)
+
+    local r_no_ack = as_spec.handler({ bash_enabled = true })
+    ok("todos.automation_set rejects bash_enabled=true without ack",
+      r_no_ack.ok == false and r_no_ack.code == "trust_not_acknowledged",
+      "got: " .. vim.inspect(r_no_ack))
+
+    -- 24i. After interactive ack, mailbox-driven enable works.
+    automation.acknowledge_first_run()
+    local r_ack_set = as_spec.handler({ bash_enabled = true })
+    ok("todos.automation_set succeeds after ack",
+      r_ack_set.ok == true and r_ack_set.value.bash_enabled == true,
+      "got: " .. vim.inspect(r_ack_set))
+
+    -- 24j. allowlist shape validation.
+    local r_bad_al = as_spec.handler({ bash_allowlist = "not a list" })
+    ok("todos.automation_set rejects non-list allowlist",
+      r_bad_al.ok == false)
+    local r_good_al = as_spec.handler({ bash_allowlist = { "^echo ", "^make " } })
+    ok("todos.automation_set accepts list allowlist",
+      r_good_al.ok == true)
+
+    -- Reset for downstream.
+    ns:set("bash_enabled", false)
+    ns:set("bash_first_run_acknowledged", false)
+    ns:set("bash_allowlist", nil)
+    aa_auto.uninstall()
+  end
 end
 
 -- ───────────────────────── summary ─────────────────────────
