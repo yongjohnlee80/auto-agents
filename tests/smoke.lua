@@ -11,14 +11,10 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
--- Sibling auto-core.nvim worktree. ADR-0035 Phase 2 in-flight:
--- prefer the paired feature worktree if present so the smoke
--- exercises the new automation engine. Falls through to `main`,
--- then the plain repo, for dev machines without that worktree.
-local core_root = plugins_root .. "/auto-core.nvim/adr-0035-p1"
-if vim.fn.isdirectory(core_root) == 0 then
-  core_root = plugins_root .. "/auto-core.nvim/main"
-end
+-- Sibling auto-core.nvim worktree. Prefer `main` (the
+-- integration line). Falls back to the plain repo for dev
+-- machines without a worktree tree.
+local core_root = plugins_root .. "/auto-core.nvim/main"
 if vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
