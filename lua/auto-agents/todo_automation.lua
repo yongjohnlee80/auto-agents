@@ -84,12 +84,42 @@ end
 ---range slot) at validate time instead of fire time.
 ---@param step string
 ---@return string? err
-local function _bash_t_validate(step)
-  local n_str, cmd = step:match("^bash %-t=(%d+)%s+(.+)$")
-  if not n_str or not cmd or cmd == "" then
-    return "malformed `bash -t=<N> <cmd>` step: '" .. step .. "'"
+---Parse `bash -t=<N> <cmd>` step into `(slot, cmd, err)`.
+---
+---Quoting convention (ADR-0035 post-ship UX amendment 2026-05-31):
+---  - `bash -t=1 echo hello world` — bare; sent verbatim to T1.
+---    Typical when `<cmd>` is a file path (`./script.sh`) or a
+---    single-token / shell-safe form.
+---  - `bash -t=1 "echo hello world"` — quoted; outer quotes
+---    SIGNAL "inline bash command, treat as a literal command to
+---    execute." Stripped before sending so bash doesn't try to
+---    execute the quoted string as a single-token command name.
+---  - `bash -t=1 'echo hello world'` — same, single-quote form.
+---
+---Internal quotes are preserved (e.g. `bash -t=1 grep "foo bar"
+---/tmp/log` keeps `"foo bar"` as the quoted arg). The strip only
+---applies when the ENTIRE `<cmd>` portion is wrapped in matched
+---outer quotes.
+---@param step string
+---@return integer? slot, string? cmd, string? err
+local function _parse_bash_t(step)
+  local n_str, raw_cmd = step:match("^bash %-t=(%d+)%s+(.+)$")
+  if not n_str or not raw_cmd or raw_cmd == "" then
+    return nil, nil, "malformed `bash -t=<N> <cmd>` step: '" .. step .. "'"
   end
-  local slot = tonumber(n_str)
+  -- Strip a single layer of outer quotes if the WHOLE cmd is
+  -- wrapped (matching open/close pair, non-empty inside).
+  local stripped = raw_cmd:match("^\"(.+)\"$") or raw_cmd:match("^'(.+)'$")
+  local cmd = stripped or raw_cmd
+  if cmd == "" then
+    return nil, nil, "empty cmd after `bash -t=<N>`"
+  end
+  return tonumber(n_str), cmd, nil
+end
+
+local function _bash_t_validate(step)
+  local slot, _cmd, perr = _parse_bash_t(step)
+  if perr then return perr end
   -- Auto-agents.term may not be loaded during refresh-side
   -- validation (headless smoke without the full plugin), so fall
   -- back to the canonical 1..4 range when we can't read it.
@@ -129,8 +159,13 @@ local function _bash_t_executor(step, _clone, ctx)
   local verr = _bash_t_validate(step)
   if verr then return nil, verr end
 
-  local n_str, cmd = step:match("^bash %-t=(%d+)%s+(.+)$")
-  local slot = tonumber(n_str)
+  -- Re-parse via the shared helper so the cmd has any outer
+  -- quotes stripped (inline-bash semantic from the 2026-05-31 UX
+  -- amendment). Without this, sending `"echo hello world"` to the
+  -- terminal would have bash try to execute the quoted string as
+  -- a single-token command name and fail.
+  local slot, cmd, _perr = _parse_bash_t(step)
+  if not slot then return nil, _perr end
 
   local ok_term, term = pcall(require, "auto-agents.term")
   if not (ok_term and term) then

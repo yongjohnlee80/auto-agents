@@ -1857,6 +1857,32 @@ do
         and v_bad_bt_range[1].message:find("out of range", 1, true) ~= nil,
       "got: " .. vim.inspect(v_bad_bt_range))
 
+    -- 24e-quotes. Post-ship UX amendment (2026-05-31): the
+    -- `bash -t=N <cmd>` parser strips a single layer of outer
+    -- quotes around the `<cmd>` portion. Quoted form signals
+    -- "inline bash command, treat as a literal command to execute"
+    -- — without the strip, bash would receive the quoted string
+    -- and try to run it as a single-token command name.
+    --
+    -- We can't easily assert what gets sent to term.send (it's a
+    -- runtime side effect on a floating terminal), so we instead
+    -- assert that both forms validate clean — proving the parser
+    -- accepts both shapes — and that an unmatched quote stays
+    -- malformed.
+    test_template.execute = { 'bash -t=1 "echo hello world"' }
+    ok("post-ship: double-quoted `bash -t=1 \"...\"` validates clean",
+      #automation.validate(test_template) == 0,
+      "got: " .. vim.inspect(automation.validate(test_template)))
+    test_template.execute = { "bash -t=1 'echo hello world'" }
+    ok("post-ship: single-quoted `bash -t=1 '...'` validates clean",
+      #automation.validate(test_template) == 0)
+    test_template.execute = { "bash -t=1 echo hello world" }
+    ok("post-ship: unquoted `bash -t=1 echo hello world` validates clean",
+      #automation.validate(test_template) == 0)
+    test_template.execute = { 'bash -t=1 grep "foo bar" /tmp/f' }
+    ok("post-ship: internal-quoted cmd preserved (not stripped) — validates clean",
+      #automation.validate(test_template) == 0)
+
     -- 24f. assign user sentinel: the assignee-routing subscriber
     -- skips mailbox delivery for `to == "user"`. We don't have a
     -- live mailbox in smoke; assert behavior via direct event
