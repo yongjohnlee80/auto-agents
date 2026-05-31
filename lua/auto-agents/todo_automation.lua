@@ -34,6 +34,20 @@ local function _log()
   return ok and log or nil
 end
 
+---Validator for `assign slot:<N>` (Lector F4): called from
+---`auto-core.todo.automation.validate(task)`. Pure syntax check —
+---roster lookup is deferred to fire-time (a slot that's currently
+---empty is a runtime issue, not a malformed-template issue, and we
+---don't want refresh-side validation to flap with slot state).
+---@param step string
+---@return string? err
+local function _slot_validate(step)
+  if not step:match("^assign slot:%d+$") then
+    return "malformed `assign slot:<N>` step (expected `assign slot:<integer>`): '" .. step .. "'"
+  end
+  return nil
+end
+
 ---Resolve `assign slot:N` to `assign agent:<live-agent-name>`.
 ---Returns `(rewritten_step, err)`. Empty slot / out-of-range / no
 ---roster → err with a code prefix matching the validator hints in
@@ -41,10 +55,11 @@ end
 ---@param step string
 ---@return string?, string?
 local function _slot_resolver(step)
+  -- Run the validator first so syntax errors produce the same
+  -- message at fire-time as at validate-time.
+  local verr = _slot_validate(step)
+  if verr then return nil, verr end
   local n = step:match("^assign slot:(%d+)$")
-  if not n then
-    return nil, "malformed `assign slot:<N>` step: '" .. step .. "'"
-  end
   local slot = tonumber(n)
 
   local ok_aa, aa = pcall(require, "auto-agents")
@@ -62,20 +77,59 @@ local function _slot_resolver(step)
   return nil, "no live agent in slot " .. tostring(slot)
 end
 
+---Validator for `bash -t=<N> <cmd>` (Lector F4): called from
+---`auto-core.todo.automation.validate(task)` at refresh / live-edit
+---time. Returns an error string on syntax / range failure, nil on
+---success. Surfaces malformed forms (`bash -t=abc echo`, out-of-
+---range slot) at validate time instead of fire time.
+---@param step string
+---@return string? err
+local function _bash_t_validate(step)
+  local n_str, cmd = step:match("^bash %-t=(%d+)%s+(.+)$")
+  if not n_str or not cmd or cmd == "" then
+    return "malformed `bash -t=<N> <cmd>` step: '" .. step .. "'"
+  end
+  local slot = tonumber(n_str)
+  -- Auto-agents.term may not be loaded during refresh-side
+  -- validation (headless smoke without the full plugin), so fall
+  -- back to the canonical 1..4 range when we can't read it.
+  local max = 4
+  local ok_term, term = pcall(require, "auto-agents.term")
+  if ok_term and term and type(term.MAX_SLOTS) == "number" then
+    max = term.MAX_SLOTS
+  end
+  if slot < 1 or slot > max then
+    return "N=" .. tostring(slot) .. " out of range 1.." .. tostring(max)
+      .. " (`bash -t=<N>` targets floating terminal T<N>)"
+  end
+  return nil
+end
+
 ---Executor for `bash -t=<N> <cmd>` — send text to floating terminal
 ---T<N> via auto-agents.term.send. ADR-0035 §4 / §5: delivery success
 ---means "accepted and submitted", NOT "shell command exited 0". The
 ---clone stays in-progress after a successful -t= step; only another
 ---step or explicit `todo.status` advances it.
 ---
+---Lector F3 amendment: `ctx` (3rd arg) carries the host-side bypass
+---flags from `M.fire(id, opts)`. Without this, the documented Lua
+---bypass for admins (`automation.fire(id, {bypass_bash_disabled=true})`)
+---wouldn't reach the terminal-routed form — the mailbox correctly
+---refuses bypass either way per ADR §10.
+---
 ---@param step string
 ---@param _clone table  -- unused; the term send doesn't need clone context
+---@param ctx { bypass_bash_disabled: boolean?, bypass_allowlist: boolean? }?
 ---@return table?, string?
-local function _bash_t_executor(step, _clone)
+local function _bash_t_executor(step, _clone, ctx)
+  ctx = ctx or {}
+  -- Use the validator first so syntax / range errors surface with
+  -- the same message refresh-side validation would have produced —
+  -- keeps fire-time and validate-time errors consistent.
+  local verr = _bash_t_validate(step)
+  if verr then return nil, verr end
+
   local n_str, cmd = step:match("^bash %-t=(%d+)%s+(.+)$")
-  if not n_str or not cmd or cmd == "" then
-    return nil, "malformed `bash -t=<N> <cmd>` step: '" .. step .. "'"
-  end
   local slot = tonumber(n_str)
 
   local ok_term, term = pcall(require, "auto-agents.term")
@@ -83,26 +137,20 @@ local function _bash_t_executor(step, _clone)
     return nil, "auto-agents.term module not available"
   end
 
-  local max = type(term.MAX_SLOTS) == "number" and term.MAX_SLOTS or 4
-  if slot < 1 or slot > max then
-    -- Distinct error code so `automation-bash-t-range` can be
-    -- recognized via the step-failed message at the consumer side.
-    return nil, "[automation-bash-t-range] N=" .. tostring(slot)
-      .. " out of range 1.." .. tostring(max)
-  end
-
-  -- ADR §4.5 trust gate also applies to `bash -t=` — both forms
-  -- gated uniformly. We re-check here even though the executor is
-  -- invoked through automation.fire's step loop, because
-  -- automation.fire's built-in `bash` trust check only fires for
-  -- the `bash ` / `bash:` prefixes — `bash -t=` goes through the
-  -- executor registry, bypassing that gate. So enforce it here.
+  -- ADR §4.5 trust gate. The executor bypasses auto-core's built-in
+  -- `bash ` / `bash:` trust check (those gates only fire for the
+  -- auto-core-direct primitives), so enforce uniformly here.
+  -- Lector F3: ctx flags let the host Lua API supply bypass; mailbox
+  -- callers can't reach this path with bypass set (todos.fire rejects
+  -- the flag at the mailbox boundary, never passes it through).
   local ts = _automation().trust_state()
-  if not ts.bash_enabled then
+  if not ts.bash_enabled and not ctx.bypass_bash_disabled then
     return nil, "[automation-bash-disabled] bash steps are disabled "
       .. "for this workspace (run :AutoAgentsTodosAutomationEnable to enable)"
   end
-  if type(ts.bash_allowlist) == "table" and #ts.bash_allowlist > 0 then
+  if type(ts.bash_allowlist) == "table" and #ts.bash_allowlist > 0
+      and not ctx.bypass_allowlist
+  then
     local matched = false
     for _, pat in ipairs(ts.bash_allowlist) do
       if cmd:match(pat) then matched = true; break end
@@ -166,8 +214,19 @@ function M.install()
   if _installed then return end
   local automation = _automation()
 
-  automation.register_hook("assign slot:", _slot_resolver)
-  automation.register_executor("bash -t=", _bash_t_executor)
+  -- Lector F4: register validators alongside the resolver/executor
+  -- so refresh-side `errors[]` population AND auto-finder's live
+  -- `vim.diagnostic` surface catch malformed plugin-owned forms
+  -- (`assign slot:abc`, `bash -t=99 echo`) at validate-time instead
+  -- of fire-time.
+  automation.register_hook("assign slot:", {
+    resolve  = _slot_resolver,
+    validate = _slot_validate,
+  })
+  automation.register_executor("bash -t=", {
+    execute  = _bash_t_executor,
+    validate = _bash_t_validate,
+  })
 
   _install_kb_audit()
 

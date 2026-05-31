@@ -1832,6 +1832,31 @@ do
     ok("`bash -t=N <cmd>` validates clean when adapter installed",
       #automation.validate(test_template) == 0)
 
+    -- 24e-F4. Lector F4: the adapter registers VALIDATORS alongside
+    -- the resolver/executor so malformed plugin-owned forms fail at
+    -- validate-time instead of fire-time. Confirm both forms reject
+    -- shape errors when auto-agents is installed (the validators
+    -- only have visibility through the registered prefix; without
+    -- the validators, prefix-match alone would let these through).
+    test_template.execute = { "assign slot:not-a-number" }
+    local v_bad_slot = automation.validate(test_template)
+    ok("F4: malformed `assign slot:` rejected by auto-agents-registered validator",
+      #v_bad_slot == 1 and v_bad_slot[1].code == "automation-execute-malformed",
+      "got: " .. vim.inspect(v_bad_slot))
+
+    test_template.execute = { "bash -t=abc echo hi" }
+    local v_bad_bt_syntax = automation.validate(test_template)
+    ok("F4: malformed `bash -t=` syntax rejected by validator",
+      #v_bad_bt_syntax == 1 and v_bad_bt_syntax[1].code == "automation-execute-malformed",
+      "got: " .. vim.inspect(v_bad_bt_syntax))
+
+    test_template.execute = { "bash -t=99 echo hi" }
+    local v_bad_bt_range = automation.validate(test_template)
+    ok("F4: out-of-range `bash -t=99` rejected by validator (1..4)",
+      #v_bad_bt_range == 1 and v_bad_bt_range[1].code == "automation-execute-malformed"
+        and v_bad_bt_range[1].message:find("out of range", 1, true) ~= nil,
+      "got: " .. vim.inspect(v_bad_bt_range))
+
     -- 24f. assign user sentinel: the assignee-routing subscriber
     -- skips mailbox delivery for `to == "user"`. We don't have a
     -- live mailbox in smoke; assert behavior via direct event
