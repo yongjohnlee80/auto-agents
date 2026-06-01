@@ -1592,16 +1592,27 @@ local function _build_reingest_body(entry)
   if not doc or doc == "" then
     return nil, "no AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC in live env"
   end
+  -- Resolve the seen-revision path HOST-SIDE so the agent receives a
+  -- literal absolute path. Previously the body embedded a
+  -- `$(dirname "$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC")/...` shell
+  -- expression, which agents copied verbatim into `cat`/`stat`
+  -- commands — command substitution trips Claude Code's permission
+  -- gate ("Contains simple_expansion") and stalls the re-ingest.
+  local seen_dir = doc:match("^(.*)/[^/]+$") or "."
+  local seen = seen_dir .. "/.agent-state/seen-revision"
   return table.concat({
     "Re-ingest your bootstrap-mailbox protocol doc.",
     "",
-    "Path (canonical, from $AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC): " .. doc,
+    "Bootstrap doc:  " .. doc,
+    "Seen-revision:  " .. seen,
     "",
-    "Read the doc end-to-end. If its `revision:` frontmatter differs",
-    "from the value in the persistent tool-root state file next to",
-    "the doc (`$(dirname \"$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC\")/.agent-state/seen-revision`),",
-    "update that file to match and adopt any protocol changes the",
-    "doc describes. Then acknowledge here with the revision you adopted.",
+    "Use the **Read tool** on each of those two literal paths — do NOT",
+    "build a shell command (`cat`, `$(dirname …)`, `;`-chains, pipes,",
+    "redirects all trip the permission gate). Compare the doc's",
+    "`revision:` frontmatter against the seen-revision file. If they",
+    "differ, adopt the protocol changes the doc describes, then **Write**",
+    "the new revision to the seen-revision path (Write tool, not",
+    "`echo >`). Acknowledge here with the revision you adopted.",
   }, "\n")
 end
 
