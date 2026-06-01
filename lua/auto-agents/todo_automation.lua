@@ -12,8 +12,11 @@
 ---      - executor `"bash -t="` → parses N (1..MAX_SLOTS), calls
 ---        `auto-agents.term.send(N, cmd, {submit=true})`. Success
 ---        means the text was delivered to T<N>, NOT that the
----        shell command exited 0 (per Lector A3); clone stays
----        in-progress after delivery.
+---        shell command exited 0. No `exit_code` is recorded
+---        (live terminal — nothing to reap). Per ADR-0035 r4 the
+---        clone COMPLETES on this successful dispatch (M.fire's
+---        end-of-chain rule, unless a step agent-assigned it) —
+---        reverses the r3 A3 "stays in-progress" behavior.
 ---      - subscriber on `core.todo.automation:fired` → writes a
 ---        one-line audit entry into `$AUTO_AGENTS_KB_ROOT/log.md`
 ---        when that env is set. No-op otherwise.
@@ -137,9 +140,10 @@ end
 
 ---Executor for `bash -t=<N> <cmd>` — send text to floating terminal
 ---T<N> via auto-agents.term.send. ADR-0035 §4 / §5: delivery success
----means "accepted and submitted", NOT "shell command exited 0". The
----clone stays in-progress after a successful -t= step; only another
----step or explicit `todo.status` advances it.
+---means "accepted and submitted", NOT "shell command exited 0", so
+---no `exit_code` is recorded. Per ADR-0035 r4, a successful dispatch
+---lets `M.fire` complete the clone at end-of-chain (unless a step
+---agent-assigned it) — auto-core drives completion, not this executor.
 ---
 ---Lector F3 amendment: `ctx` (3rd arg) carries the host-side bypass
 ---flags from `M.fire(id, opts)`. Without this, the documented Lua
@@ -201,12 +205,17 @@ local function _bash_t_executor(step, _clone, ctx)
     return nil, "auto-agents.term.send returned false for slot " .. slot
   end
 
-  -- Per ADR §5: delivery ≠ exit. `completed_clone = false` so the
-  -- clone stays in-progress.
+  -- ADR-0035 r4: `completed_clone` is INFORMATIONAL only — auto-core's
+  -- M.fire drives completion (success + no agent-assign → completed),
+  -- not this flag. We report `true` because a successful terminal
+  -- dispatch is exactly the "fire succeeded" case that completes the
+  -- clone. (Pre-r4 this was `false` to keep -t= clones in-progress;
+  -- that gate is gone. Kept truthful so a future refactor can't revive
+  -- a stale `false`.)
   return {
     ok              = true,
     message         = "delivered to T" .. slot,
-    completed_clone = false,
+    completed_clone = true,
   }, nil
 end
 
