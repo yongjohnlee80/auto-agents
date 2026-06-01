@@ -1666,6 +1666,48 @@ local function _build_reassert_body(entry)
   return table.concat(lines, "\n")
 end
 
+---Deterministic permission-bootstrap prompt body (ADR-0036). Injects
+---the prompt-avoidance directive + a directive to read & follow the
+---agent's `PERMISSION.md` guideline. The agent VERIFIES its mailbox/KB
+---grants and REQUESTS any missing ones from the user — it does not
+---self-provision. Goes through `send_slot` (Esc+CR for codex), so the
+---PERMISSION.md path token is safe here (unlike the bare-`<CR>` wake
+---nudge, which must stay path-token-free).
+---@param entry table
+---@return string|nil body, string|nil err
+local function _build_permission_body(entry)
+  local env = _live_env_for(entry)
+  local doc = env and env.AUTO_AGENTS_PERMISSION_DOC
+  local lines = {
+    "Permission bootstrap (ADR-0036).",
+    "",
+    "The user has their own work to complete, and your mailbox",
+    "permission prompts disrupt the user's workflow greatly. Make the",
+    "best effort to avoid requesting permission prompts on mailbox",
+    "operations to the best of your ability, and instead tell the user",
+    "which grants you require to perform read/write and other available",
+    "mailbox operations at your hand.",
+    "",
+  }
+  if doc and doc ~= "" then
+    lines[#lines + 1] = "Read and follow your PERMISSION.md guideline at: " .. doc
+  else
+    lines[#lines + 1] = "Read and follow your PERMISSION.md guideline (a peer of"
+    lines[#lines + 1] = "your bootstrap-mailbox.md, in the same workspace mailbox root)."
+  end
+  vim.list_extend(lines, {
+    "",
+    "Use the **Read tool** to read it. Then VERIFY the permission grants",
+    "it lists for your capability bucket are present, and REQUEST any",
+    "missing ones from the user (state the exact rule + what it unlocks)",
+    "— do NOT write your own permission settings. Do mailbox/KB work via",
+    "the Read/Write tools, never shell that expands `$VAR`. Acknowledge",
+    "here with what you verified and what (if anything) you are",
+    "requesting.",
+  })
+  return table.concat(lines, "\n")
+end
+
 ---Bootstrap-refresh picker shared between §2.1 and §2.2. Opens
 ---`vim.ui.select` over the live (configured + alive) slots, then
 ---feeds the selected slot through `build_body` to produce the prompt
@@ -1712,6 +1754,16 @@ end
 ---Bound to `<leader>ai` by the autovim consumer config.
 function M.reassert_identity_picker()
   _bootstrap_refresh_picker("Re-assert identity for slot:", _build_reassert_body)
+end
+
+---ADR-0036 — bootstrap mailbox permissions into a live agent slot.
+---Slot picker → deterministic prompt (the prompt-avoidance directive +
+---"read & follow PERMISSION.md") → paste-safe submit. The agent
+---verifies its capability-bucket grants and requests any missing ones
+---from the user. Bound to `<leader>ap` by the autovim consumer config
+---(replacing the prior help-tip binding).
+function M.permission_bootstrap_picker()
+  _bootstrap_refresh_picker("Bootstrap permissions for slot:", _build_permission_body)
 end
 
 ---Resolve an agent slot from its name. Returns nil if no bootstrap

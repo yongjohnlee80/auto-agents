@@ -90,10 +90,24 @@ end
 ---     popup opens and the bare `<CR>` submits cleanly. The agent knows
 ---     where its mailbox lives from bootstrap-mailbox.md; the path was
 ---     never load-bearing.
----@param kind string   -- arrival kind ("inbox" | "responses")
----@param origin string -- originating mailbox name
+---@param kind string          -- arrival kind ("inbox" | "responses")
+---@param origin string        -- originating mailbox name
+---@param arrival_path string? -- full path of the new message file
 ---@return string
-function M.default_wake_nudge(kind, origin)
+function M.default_wake_nudge(kind, origin, arrival_path)
+  -- ADR-0036: when the router supplies the arriving message's full
+  -- PATH, point the agent straight at it so it Read-tools the message
+  -- directly instead of `ls`-ing the dir to find it (the recurring
+  -- permission prompt we want gone). The path appears MID-LINE (the
+  -- nudge leads with "ATTENTION:"), so it never triggers the codex
+  -- fuzzy-path-completion popup — that hazard only fires when a token
+  -- *starts* a line with `/`. VERIFY on a live codex slot (peek/say)
+  -- before relying on it.
+  if type(arrival_path) == "string" and arrival_path ~= "" then
+    return string.format(
+      "ATTENTION: [auto-agents] new %s from %s — read it with the Read tool: %s",
+      kind, origin, arrival_path)
+  end
   return string.format(
     "ATTENTION: [auto-agents] new %s from %s — check your %s.",
     kind, origin, kind)
@@ -123,7 +137,8 @@ local function handle_wake(args, ctx)
     -- `[` + path-token popup) that constrain the wording.
     local origin = ctx and ctx.mailbox or "?"
     local kind   = ctx and ctx.arrival_kind or "inbox"
-    text = M.default_wake_nudge(kind, origin)
+    local arrival_path = ctx and ctx.arrival_path or nil
+    text = M.default_wake_nudge(kind, origin, arrival_path)
   end
 
   local submit = args.submit
