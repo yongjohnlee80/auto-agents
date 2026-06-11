@@ -505,14 +505,15 @@ function M.ensure(spec, kb_root, cwd)
     pcall(vim.fn.mkdir, parent, "p")
   end
 
-  local out, err = io.open(path, "w")
-  if not out then
+  -- ADR-0039 Batch C: atomic write — this is the agent's CLAUDE.md /
+  -- AGENTS.md; a truncated instruction file breaks every subsequent
+  -- spawn of that slot.
+  local wok, werr = require("auto-core.fs.atomic").write(path, new_content)
+  if not wok then
     require("auto-agents.log").warn("kb.instruct",
-      "failed to write " .. path .. ": " .. tostring(err))
+      "failed to write " .. path .. ": " .. tostring(werr))
     return nil
   end
-  out:write(new_content)
-  out:close()
   return path
 end
 

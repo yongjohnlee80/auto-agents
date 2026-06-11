@@ -107,7 +107,13 @@ local function bridge_to_family(level, component, message_parts)
   elseif level == M.levels.DEBUG then fn = fl.debug
   else fn = fl.trace
   end
-  fn(prefixed, table.unpack(message_parts))
+  -- LuaJIT (Neovim's Lua) has no `table.unpack` — it's the 5.1
+  -- global `unpack`. Calling table.unpack here crashed the bridge
+  -- (and the WS read loop above it) on the first WARN-level
+  -- emission. ADR-0039 Batch A bonus fix; the bridge is a local
+  -- modification, not vendored-verbatim (ADR-0021 §10.2).
+  local unpack_fn = table.unpack or unpack
+  fn(prefixed, unpack_fn(message_parts))
 end
 
 local function log(level, component, message_parts)

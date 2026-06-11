@@ -36,6 +36,35 @@
 
 local M = {}
 
+---ADR-0039 Batch C: every scaffold write goes through auto-core's
+---atomic primitive (auto-core >= 0.1.58) so a crash mid-write can't
+---leave a truncated AGENTS.md / KB_RULES.md / index.md behind — these
+---are user-facing persistence, not scratch. Failures are logged
+---instead of silently swallowed (C5 spirit).
+---@param path string
+---@param text string
+---@return boolean ok
+local function atomic_write(path, text)
+  local ok, err = require("auto-core.fs.atomic").write(path, text, { mkdir = true })
+  if not ok then
+    require("auto-agents.log").warn("kb",
+      "write failed for " .. path .. ": " .. tostring(err))
+  end
+  return ok
+end
+
+---Read `src` fully and atomically write it to `dst`.
+---@param src string
+---@param dst string
+---@return boolean ok
+local function copy_file(src, dst)
+  local f = io.open(src, "r")
+  if not f then return false end
+  local content = f:read("*a")
+  f:close()
+  return atomic_write(dst, content)
+end
+
 ---@return string
 function M.root()
   local aa = require("auto-agents")
@@ -90,25 +119,21 @@ function M.ensure_layout(root, opts)
   -- user can edit it freely after that.
   local raw_readme = root .. "/raw/README.md"
   if vim.fn.filereadable(raw_readme) == 0 then
-    local f = io.open(raw_readme, "w")
-    if f then
-      f:write(table.concat({
-        "# raw/ — immutable source material",
-        "",
-        "Files in this directory are **evidence**: original sources, exports,",
-        "transcripts, datasets. Agents read from here but do not edit, rename,",
-        "or delete content.",
-        "",
-        "To retire a source, move it to `archive/raw/<original-path>` (creating",
-        "the dir if needed) and update citations in the same change. Outright",
-        "deletion is reserved for accidentally-clipped, wrong, or sensitive",
-        "material — and citing pages must be scrubbed at the same time.",
-        "",
-        "Synthesis goes in `shared/`, not here.",
-        "",
-      }, "\n"))
-      f:close()
-    end
+    atomic_write(raw_readme, table.concat({
+      "# raw/ — immutable source material",
+      "",
+      "Files in this directory are **evidence**: original sources, exports,",
+      "transcripts, datasets. Agents read from here but do not edit, rename,",
+      "or delete content.",
+      "",
+      "To retire a source, move it to `archive/raw/<original-path>` (creating",
+      "the dir if needed) and update citations in the same change. Outright",
+      "deletion is reserved for accidentally-clipped, wrong, or sensitive",
+      "material — and citing pages must be scrubbed at the same time.",
+      "",
+      "Synthesis goes in `shared/`, not here.",
+      "",
+    }, "\n"))
   end
 
   -- AGENTS.md: copy from seed if absent (or forced). Serves as the
@@ -117,12 +142,7 @@ function M.ensure_layout(root, opts)
   local agents_md = root .. "/AGENTS.md"
   local seed_path = opts.seed_path or types.seed_path(type) or types.seed_path("general")
   if seed_path and (opts.force_schema or vim.fn.filereadable(agents_md) == 0) then
-    local f = io.open(seed_path, "r")
-    if f then
-      local content = f:read("*a"); f:close()
-      local out = io.open(agents_md, "w")
-      if out then out:write(content); out:close() end
-    end
+    copy_file(seed_path, agents_md)
   end
 
   -- KB_RULES.md: universal cross-KB-type rules (log.md weekly rotation,
@@ -134,12 +154,7 @@ function M.ensure_layout(root, opts)
   local kb_rules_seed = types.seeds_dir() .. "/_kb-rules.md"
   if vim.fn.filereadable(kb_rules_seed) == 1
       and (opts.force_schema or vim.fn.filereadable(kb_rules_md) == 0) then
-    local f = io.open(kb_rules_seed, "r")
-    if f then
-      local content = f:read("*a"); f:close()
-      local out = io.open(kb_rules_md, "w")
-      if out then out:write(content); out:close() end
-    end
+    copy_file(kb_rules_seed, kb_rules_md)
   end
 
   -- RULES.md: per-type rules file (optional). When the seed bundle
@@ -153,12 +168,7 @@ function M.ensure_layout(root, opts)
   local rules_md = root .. "/RULES.md"
   if vim.fn.filereadable(type_rules_seed) == 1
       and (opts.force_schema or vim.fn.filereadable(rules_md) == 0) then
-    local f = io.open(type_rules_seed, "r")
-    if f then
-      local content = f:read("*a"); f:close()
-      local out = io.open(rules_md, "w")
-      if out then out:write(content); out:close() end
-    end
+    copy_file(type_rules_seed, rules_md)
   end
 
   -- v0.2.40: ship the todo-handling convention seed into every
@@ -181,13 +191,8 @@ function M.ensure_layout(root, opts)
     if vim.fn.filereadable(todo_seed) == 1
         and (opts.force_schema or vim.fn.filereadable(todo_dest) == 0)
     then
-      vim.fn.mkdir(root .. "/shared/conventions", "p")
-      local f = io.open(todo_seed, "r")
-      if f then
-        local content = f:read("*a"); f:close()
-        local out = io.open(todo_dest, "w")
-        if out then out:write(content); out:close() end
-      end
+      -- copy_file's atomic write mkdir-p's shared/conventions itself.
+      copy_file(todo_seed, todo_dest)
     end
   end
 
@@ -210,12 +215,7 @@ function M.ensure_layout(root, opts)
           local src = templates_seed_dir .. "/" .. name
           local dst = templates_root .. "/" .. name
           if opts.force_schema or vim.fn.filereadable(dst) == 0 then
-            local f = io.open(src, "r")
-            if f then
-              local content = f:read("*a"); f:close()
-              local out = io.open(dst, "w")
-              if out then out:write(content); out:close() end
-            end
+            copy_file(src, dst)
           end
         end
       end
@@ -241,11 +241,7 @@ function M.ensure_layout(root, opts)
   for _, p in ipairs(pointers) do
     local path = root .. "/" .. p.file
     if vim.fn.filereadable(path) == 0 then
-      local f = io.open(path, "w")
-      if f then
-        f:write(string.format(pointer_body, p.name, p.name, p.name))
-        f:close()
-      end
+      atomic_write(path, string.format(pointer_body, p.name, p.name, p.name))
     end
   end
 
@@ -255,38 +251,34 @@ function M.ensure_layout(root, opts)
   -- grows past the first ISO week).
   local log = root .. "/log.md"
   if vim.fn.filereadable(log) == 0 then
-    local f = io.open(log, "w")
-    if f then
-      f:write(table.concat({
-        "# auto-agents knowledge-base log",
-        "",
-        "> **Current ISO week only.** Closed weeks live in `log/YYYY-W<NN>.md`;",
-        "> weeks older than 3 months live in `archive/log/YYYY-W<NN>.md`.",
-        "> See [`KB_RULES.md`](./KB_RULES.md) §R1 for the rotation procedure.",
-        "",
-      }, "\n"))
-      f:close()
-    end
+    atomic_write(log, table.concat({
+      "# auto-agents knowledge-base log",
+      "",
+      "> **Current ISO week only.** Closed weeks live in `log/YYYY-W<NN>.md`;",
+      "> weeks older than 3 months live in `archive/log/YYYY-W<NN>.md`.",
+      "> See [`KB_RULES.md`](./KB_RULES.md) §R1 for the rotation procedure.",
+      "",
+    }, "\n"))
   end
   local index = root .. "/index.md"
   if vim.fn.filereadable(index) == 0 then
-    local f = io.open(index, "w")
-    if f then
-      f:write(table.concat({
-        "# index",
-        "",
-        "Catalog of pages in this knowledge base. Agents update this on every",
-        "new `shared/` page — one entry per page with a one-line summary.",
-        "",
-      }, "\n"))
-      f:close()
-    end
+    atomic_write(index, table.concat({
+      "# index",
+      "",
+      "Catalog of pages in this knowledge base. Agents update this on every",
+      "new `shared/` page — one entry per page with a one-line summary.",
+      "",
+    }, "\n"))
   end
 
   return root
 end
 
 ---Append a one-line entry to log.md (timestamp + message).
+---Append stays `io.open("a")` — an atomic read-modify-rewrite would
+---race concurrent appenders. ADR-0039 Batch C adds the flush so the
+---entry reaches the OS before close (durability without atomicity is
+---the right trade for an append-only audit log).
 ---@param msg string
 function M.log(msg)
   local root = M.root()
@@ -294,6 +286,7 @@ function M.log(msg)
   local f = io.open(root .. "/log.md", "a")
   if not f then return end
   f:write(string.format("- %s — %s\n", os.date("%Y-%m-%d %H:%M:%S"), msg))
+  f:flush()
   f:close()
 end
 

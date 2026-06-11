@@ -328,7 +328,9 @@ function M.setup(opts)
   -- mailbox tree never ends up tracked. (2) Surface a one-line
   -- migration warning if any legacy per-CLI mailbox dirs are
   -- detected, so the user knows running agents may need re-spawn.
-  pcall(function()
+  -- ADR-0039 C4: capture + log — a silent failure here hides broken
+  -- housekeeping (gitignore, legacy detection, mailbox prune).
+  local ok_housekeeping, housekeeping_err = pcall(function()
     local identity = require("auto-agents.runtime.identity")
     local logger = require("auto-agents.log")
     local mailbox_root = identity.mailbox_root()
@@ -430,6 +432,10 @@ function M.setup(opts)
       end
     end
   end)
+  if not ok_housekeeping then
+    require("auto-agents.log").warn("setup",
+      "workspace mailbox housekeeping failed: " .. tostring(housekeeping_err))
+  end
 
   -- M6 diff-review bridge: agents opted in via `diff_review =
   -- true` in TOML will route their openDiff requests to our native
@@ -473,7 +479,10 @@ function M.setup(opts)
   -- etc.) register their own commands via the same
   -- `auto-core.mailbox.commands.register` API when they load — this is
   -- just auto-agents' contribution to the whitelist.
-  pcall(function()
+  -- ADR-0039 C4: capture + log — a silent failure here means agents
+  -- lose their entire command surface (wake/say/todos.*) with zero
+  -- diagnostics. Failures here are ERROR-class per auto-family-logging.
+  local ok_mailbox_wire, mailbox_wire_err = pcall(function()
     local mailbox = require("auto-core").mailbox
     mailbox.configure({ autostart = true })
     mailbox.register("nvim", { root = mailbox.host_fallback_root() })
@@ -486,6 +495,9 @@ function M.setup(opts)
     if ok_todos then
       todos_mod.register_all()
       todos_mod.install_assignee_routing()
+    else
+      require("auto-agents.log").warn("init",
+        "todos.* mailbox surface unavailable: " .. tostring(todos_mod))
     end
 
     -- ADR-0035 Phase 2: register auto-agents-owned execute primitives
@@ -495,9 +507,21 @@ function M.setup(opts)
     -- registry boundary per ADR-0035 §"Plugin boundaries (recap)".
     local ok_aa_auto, aa_auto = pcall(require, "auto-agents.todo_automation")
     if ok_aa_auto then
-      pcall(aa_auto.install)
+      local ok_install, install_err = pcall(aa_auto.install)
+      if not ok_install then
+        require("auto-agents.log").warn("init",
+          "todo automation install failed: " .. tostring(install_err))
+      end
+    else
+      require("auto-agents.log").warn("init",
+        "todo_automation module unavailable: " .. tostring(aa_auto))
     end
   end)
+  if not ok_mailbox_wire then
+    require("auto-agents.log").error("init",
+      "mailbox wiring failed — agent command surface is DOWN: "
+      .. tostring(mailbox_wire_err))
+  end
 
   -- Editor-window-floor invariant. AutoVim's three-column layout
   -- (AutoFinder | Editor | AutoAgents) needs at least one editor window
@@ -507,9 +531,14 @@ function M.setup(opts)
   -- both the WinClosed-recovery autocmd and the BufWinEnter diff-route
   -- gate. Defaults: post-:q create-scratch, diff manufactured-by-
   -- claudecode warn-and-close.
-  pcall(function()
+  -- ADR-0039 C4: capture + log instead of silent swallow.
+  local ok_floor, floor_err = pcall(function()
     require("auto-agents.integrations.editor_floor").install(config)
   end)
+  if not ok_floor then
+    require("auto-agents.log").warn("init",
+      "editor-floor integration install failed: " .. tostring(floor_err))
+  end
 
   -- Default the initial focus to admin (slot 0) when no agents are
   -- configured. Otherwise the first :AutoAgents drops you into a
@@ -942,11 +971,18 @@ local function _with_unfixed_buf(winid, fn)
   if not winid or not vim.api.nvim_win_is_valid(winid) then
     return pcall(fn)
   end
-  local was = vim.wo[winid].winfixbuf
-  if was then vim.wo[winid].winfixbuf = false end
+  -- ADR-0028 / ADR-0039 C1: winfixbuf is global-local; a bare
+  -- `vim.wo[winid].winfixbuf = v` write uses `:set` semantics and
+  -- mutates the GLOBAL default (the family's "winfixbuf propagation"
+  -- bug). Restore must be scope-local — same fix as auto-core
+  -- panel:with_unfixed_buf (v0.1.57).
+  local was = vim.api.nvim_get_option_value("winfixbuf", { win = winid })
+  if was then
+    vim.api.nvim_set_option_value("winfixbuf", false, { win = winid, scope = "local" })
+  end
   local ok, result = pcall(fn)
   if was and vim.api.nvim_win_is_valid(winid) then
-    vim.wo[winid].winfixbuf = true
+    vim.api.nvim_set_option_value("winfixbuf", true, { win = winid, scope = "local" })
   end
   return ok, result
 end

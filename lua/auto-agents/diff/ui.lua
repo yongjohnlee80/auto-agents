@@ -43,9 +43,21 @@ local _edit_mode = false
 --- @type integer?
 local _edits_autocmd_id = nil
 
---- Best-effort filetype detection — lifted from
---- `mcp/ws-server/diff.lua` so the diff panes can carry syntax
---- highlighting that matches the underlying file. Falls through:
+--- ADR-0028 / ADR-0039 C1: window options must be written scope-local.
+--- Bare `vim.wo[win].x = v` uses `:set` semantics on global-local
+--- options and pollutes the global default for every subsequently
+--- created window (the family's winfixbuf-class bug).
+--- @param win integer
+--- @param name string
+--- @param value any
+local function set_winlocal(win, name, value)
+  vim.api.nvim_set_option_value(name, value, { win = win, scope = "local" })
+end
+
+--- Best-effort filetype detection — originally lifted from the legacy
+--- `mcp/ws-server/diff.lua` (retired in ADR-0039 Batch B; this is now
+--- the sole copy) so the diff panes can carry syntax highlighting that
+--- matches the underlying file. Falls through:
 --- vim.filetype.match → extension table → nil.
 --- @param path string
 --- @return string?
@@ -128,7 +140,7 @@ local function open_native_diff(req)
     -- because foldenable is window-local.
     for _, w in ipairs({ old_win, new_win }) do
       if vim.api.nvim_win_is_valid(w) then
-        vim.wo[w].foldenable = false
+        set_winlocal(w, "foldenable", false)
       end
     end
 
@@ -289,7 +301,7 @@ update_preview = function()
     for _, p in ipairs({ "middle", "preview" }) do
       local w = _mfloat:winid(p)
       if w and vim.api.nvim_win_is_valid(w) then
-        pcall(function() vim.wo[w].winbar = "" end)
+        pcall(set_winlocal, w, "winbar", "")
       end
     end
     return
@@ -371,7 +383,7 @@ update_preview = function()
     if #label > width then
       label = " …" .. label:sub(#label - width + 4)
     end
-    pcall(function() vim.wo[win].winbar = label end)
+    pcall(set_winlocal, win, "winbar", label)
   end
   _path_winbar(middle_win,  req.file_path or "(no file_path)")
   _path_winbar(preview_win, req.file_path or "(no file_path)")
@@ -687,7 +699,7 @@ function M.open()
       for _, pane in ipairs({ "middle", "preview" }) do
         local win = self:winid(pane)
         if win and vim.api.nvim_win_is_valid(win) then
-          vim.wo[win].number = true
+          set_winlocal(win, "number", true)
         end
       end
     end,

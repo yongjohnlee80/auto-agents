@@ -103,11 +103,25 @@ function M.write(namespace_dir, resolve_index)
   vim.fn.mkdir(namespace_dir, "p")
   local manifest = M.generate(namespace_dir, resolve_index)
   local ok, encoded = pcall(vim.json.encode, manifest)
-  if not ok then return "json encode failed: " .. tostring(encoded), nil end
-  local f = io.open(namespace_dir .. "/manifest.json", "w")
-  if not f then return "open for write failed", nil end
-  f:write(encoded)
-  f:close()
+  if not ok then
+    -- ADR-0039 C5: errors were previously returned-but-unlogged; the
+    -- caller chain (sync → admin) only displayed counts, leaving a
+    -- stale manifest invisible. Log at the failure site.
+    local err = "json encode failed: " .. tostring(encoded)
+    require("auto-agents.log").warn("kb.manifest",
+      namespace_dir .. ": " .. err)
+    return err, nil
+  end
+  -- ADR-0039 Batch C: atomic write (auto-core >= 0.1.58) — readers
+  -- (agents resolving wikilinks) must never see a half-written JSON.
+  local wok, werr = require("auto-core.fs.atomic").write(
+    namespace_dir .. "/manifest.json", encoded)
+  if not wok then
+    local err = "write failed: " .. tostring(werr)
+    require("auto-agents.log").warn("kb.manifest",
+      namespace_dir .. ": " .. err)
+    return err, nil
+  end
   return nil, manifest.broken_link_count
 end
 

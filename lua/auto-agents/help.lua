@@ -190,11 +190,18 @@ function M.popup(verb, sub)
     title_pos = "center",
     zindex = 200,
   })
-  vim.wo[win].wrap = true
-  vim.wo[win].linebreak = true
-  vim.wo[win].cursorline = true
-  vim.wo[win].conceallevel = 2  -- markdown headings render cleaner
-  vim.wo[win].concealcursor = "n"
+  -- ADR-0028 / ADR-0039 C1: window options must be written scope-local
+  -- (bare `vim.wo[win].x = v` uses `:set` semantics and pollutes the
+  -- global-local default for every subsequently created window).
+  for opt, val in pairs({
+    wrap = true,
+    linebreak = true,
+    cursorline = true,
+    conceallevel = 2, -- markdown headings render cleaner
+    concealcursor = "n",
+  }) do
+    vim.api.nvim_set_option_value(opt, val, { win = win, scope = "local" })
+  end
 
   -- Cursor at top so users see the heading first.
   pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })

@@ -11,6 +11,17 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:prepend(project_root)
 
+-- auto-core is a hard dep of auto-agents (v0.2.0+); kb/instruct's
+-- write path delegates to `auto-core.fs.atomic.write` as of ADR-0039
+-- Batch C, so this spec needs it on the rtp like smoke.lua does.
+-- Prefer the sibling `main` worktree; fall back to the plain repo.
+local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
+local core_root = plugins_root .. "/auto-core.nvim/main"
+if vim.fn.isdirectory(core_root) == 0 then
+  core_root = plugins_root .. "/auto-core.nvim"
+end
+vim.opt.runtimepath:prepend(core_root)
+
 local pass = 0
 local fail = 0
 local function ok(name, cond, detail)

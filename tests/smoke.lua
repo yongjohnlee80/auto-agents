@@ -1962,6 +1962,146 @@ do
   end
 end
 
+-- ─────────────── 25. ADR-0039 Batches A+B+C ───────────────
+print("\n[25] ADR-0039 A+B+C — scope-local options, queue drain, legacy diff retirement, durable writes")
+do
+  local function gopt(name)
+    return vim.api.nvim_get_option_value(name, { scope = "global" })
+  end
+
+  -- 25a. C1: help popup applies its window options LOCALLY and leaves
+  -- the global defaults untouched. (On nvim 0.10+ the indexed
+  -- `vim.wo[w]` form was already :setlocal-like — this is the
+  -- hardening guard that keeps the dangerous unindexed `:set`-like
+  -- form from creeping back in, plus proof the options still land.)
+  local g_before = {
+    wrap = gopt("wrap"),
+    linebreak = gopt("linebreak"),
+    cursorline = gopt("cursorline"),
+    conceallevel = gopt("conceallevel"),
+    concealcursor = gopt("concealcursor"),
+  }
+  local help = require("auto-agents.help")
+  local win_before_popup = vim.api.nvim_get_current_win()
+  local popup_ok = pcall(help.popup)
+  ok("25a: help.popup opens without error", popup_ok)
+  local popup_win = vim.api.nvim_get_current_win()
+  if popup_ok and popup_win ~= win_before_popup then
+    ok("25a: popup window has LOCAL wrap=true",
+      vim.api.nvim_get_option_value("wrap", { win = popup_win }) == true)
+    ok("25a: popup window has LOCAL conceallevel=2",
+      vim.api.nvim_get_option_value("conceallevel", { win = popup_win }) == 2)
+    pcall(vim.api.nvim_win_close, popup_win, true)
+  end
+  for name, before in pairs(g_before) do
+    ok("25a: global '" .. name .. "' default unchanged after help popup",
+      gopt(name) == before,
+      string.format("before=%s after=%s", tostring(before), tostring(gopt(name))))
+  end
+
+  -- 25b. C3: dropping a still-pending queue entry resumes its
+  -- callback with DIFF_REJECTED (clear + direct remove). Without the
+  -- drain, the blocked coroutine and its deferred-response entry
+  -- leak until server stop.
+  local queue = require("auto-agents.diff.queue")
+  queue.clear()
+  local cleared_result = nil
+  queue.enqueue({
+    agent_name = "smoke-25",
+    file_path = "/tmp/smoke-25.txt",
+    old_contents = "a",
+    new_contents = "b",
+    tab_name = "smoke-25-clear",
+    callback = function(result) cleared_result = result end,
+  })
+  queue.clear()
+  ok("25b: clear() drains pending entry via callback",
+    type(cleared_result) == "table"
+    and cleared_result.content
+    and cleared_result.content[1]
+    and cleared_result.content[1].text == "DIFF_REJECTED",
+    vim.inspect(cleared_result))
+
+  local removed_result = nil
+  local rm_id = queue.enqueue({
+    agent_name = "smoke-25",
+    file_path = "/tmp/smoke-25.txt",
+    old_contents = "a",
+    new_contents = "b",
+    tab_name = "smoke-25-remove",
+    callback = function(result) removed_result = result end,
+  })
+  queue.remove(rm_id)
+  ok("25b: remove() of a pending entry drains via callback",
+    type(removed_result) == "table"
+    and removed_result.content[1].text == "DIFF_REJECTED",
+    vim.inspect(removed_result))
+  ok("25b: drained entry no longer pending", #queue.get_pending() == 0)
+  queue.clear()
+
+  -- 25c. Batch B: the legacy native-diff module is a retirement stub.
+  local legacy = require("auto-agents.mcp.ws-server.diff")
+  ok("25c: close_diff_by_tab_name preserved and answers false",
+    legacy.close_diff_by_tab_name("no-such-tab") == false)
+  ok("25c: retired exports are gone (open_diff_blocking)",
+    legacy.open_diff_blocking == nil)
+  ok("25c: retired exports are gone (_setup_blocking_diff)",
+    legacy._setup_blocking_diff == nil)
+
+  -- close_tab MCP contract for an unmatched tab: still TAB_CLOSED.
+  local close_tab = require("auto-agents.mcp.ws-server.tools.close_tab")
+  local ct_ok, ct_res = pcall(close_tab.handler, { tab_name = "no-such-tab" })
+  ok("25c: close_tab(unmatched) keeps the TAB_CLOSED contract",
+    ct_ok and type(ct_res) == "table"
+    and ct_res.content and ct_res.content[1]
+    and ct_res.content[1].text == "TAB_CLOSED",
+    ct_ok and vim.inspect(ct_res) or tostring(ct_res))
+
+  -- 25d. Batch C: runtime_identity.write delegates to the atomic
+  -- primitive — content lands complete, no temp strays remain.
+  local rid = require("auto-agents.runtime_identity")
+  local id_dir = vim.fn.tempname() .. "_aa-identity"
+  local id_path = id_dir .. "/nested/agent.json"
+  local w_ok, w_err = rid.write(id_path, { mailbox_id = "agent:smoke:1", slot = 1 })
+  ok("25d: identity write succeeds (mkdir included)", w_ok == true, tostring(w_err))
+  local fh = io.open(id_path, "r")
+  local raw = fh and fh:read("*a") or ""
+  if fh then fh:close() end
+  local dec_ok, dec = pcall(vim.fn.json_decode, raw)
+  ok("25d: identity roundtrip intact",
+    dec_ok and type(dec) == "table" and dec.mailbox_id == "agent:smoke:1", raw)
+  local strays = vim.fn.glob(id_dir .. "/**/.tmp-*", false, true)
+  ok("25d: no atomic-write temp strays", #strays == 0, vim.inspect(strays))
+
+  -- kb scaffold writes are atomic too: fresh layout, no .tmp strays.
+  local kb_dir = vim.fn.tempname() .. "_aa-kb25"
+  local kb = require("auto-agents.kb")
+  local lay_ok, lay_err = pcall(kb.ensure_layout, kb_dir, { type = "general" })
+  ok("25d: ensure_layout on fresh dir succeeds", lay_ok, tostring(lay_err))
+  ok("25d: AGENTS.md scaffolded", vim.fn.filereadable(kb_dir .. "/AGENTS.md") == 1)
+  local kb_strays = vim.fn.glob(kb_dir .. "/**/.tmp-*", false, true)
+  ok("25d: no temp strays in scaffolded KB", #kb_strays == 0, vim.inspect(kb_strays))
+
+  -- manifest.write: valid JSON on disk, atomic (no strays).
+  vim.fn.mkdir(kb_dir .. "/shared", "p")
+  local manifest = require("auto-agents.kb.manifest")
+  local m_err = manifest.write(kb_dir .. "/shared", nil)
+  ok("25d: manifest.write succeeds", m_err == nil, tostring(m_err))
+  local mf = io.open(kb_dir .. "/shared/manifest.json", "r")
+  local m_raw = mf and mf:read("*a") or ""
+  if mf then mf:close() end
+  local m_ok = pcall(vim.json.decode, m_raw)
+  ok("25d: manifest.json is complete valid JSON", m_ok, m_raw:sub(1, 80))
+
+  -- 25e. Batch A bonus: the vendored-logger family bridge no longer
+  -- crashes on multi-part emissions (table.unpack is nil on LuaJIT;
+  -- the WS read loop died on its first WARN before the fix).
+  local ws_logger = require("auto-agents.mcp.ws-server.logger")
+  local warn_ok, warn_err = pcall(ws_logger.warn, "smoke", "part one: ", "part two")
+  ok("25e: ws-server logger multi-part warn does not crash",
+    warn_ok, tostring(warn_err))
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

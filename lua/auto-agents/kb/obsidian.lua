@@ -44,11 +44,9 @@ local function write_if_missing(path, data)
   if vim.fn.filereadable(path) == 1 then return false end
   local ok, encoded = pcall(vim.json.encode, data)
   if not ok then return false end
-  local f = io.open(path, "w")
-  if not f then return false end
-  f:write(encoded)
-  f:close()
-  return true
+  -- ADR-0039 Batch C: atomic write via the canonical primitive.
+  local wok = require("auto-core.fs.atomic").write(path, encoded, { mkdir = true })
+  return wok == true
 end
 
 ---@param kb_root string

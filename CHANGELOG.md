@@ -2,6 +2,93 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.54] — 2026-06-12 — ADR-0039 Batches A+B+C: correctness sweep, legacy diff retirement, durable writes
+
+*(v0.2.49–v0.2.53 were released without changelog entries — see `git log
+v0.2.48..v0.2.53` for those.)*
+
+Implements the recommended batches from ADR-0039 (the auto-agents companion to
+auto-core's ADR-0038 programme; full audit in the KB at
+`shared/adrs/0039-auto-agents-structural-and-performance-enhancements.md`).
+Public `M.*` API, mailbox verb surface, and event topics unchanged.
+
+**Batch A — correctness sweep.**
+- **C1 (ADR-0028 compliance):** all 12 bare `vim.wo` sites (11 writes + 1
+  read across `init.lua` `_with_unfixed_buf` fallback, `help.lua` popup,
+  `diff/ui.lua` panel) now use `nvim_set_option_value(..., {win, scope =
+  "local"})` / `nvim_get_option_value`. Honest mechanism note: on nvim 0.10+
+  the indexed `vim.wo[w].x = v` form is already `:setlocal`-like, so these
+  were latent convention violations rather than active global-default
+  pollution — the dangerous `:set`-like form is the *unindexed* `vim.wo.x`
+  (verified empirically on 0.12.2; repo swept clean of both). The explicit
+  API is version-proof and is the binding ADR-0028 rule.
+- **C4 (silent pcall → logged):** setup-critical registration failures now
+  log instead of vanish — workspace mailbox housekeeping, the mailbox
+  command/todos wiring (ERROR-class: "agent command surface is DOWN"),
+  todo-automation install, editor-floor install, the status observer's
+  core-status mirror (new throttled `log.warn_throttled`/`error_throttled`
+  wrapper passthroughs, additive), and `todos_commands.register_all` (the
+  warn itself is no longer inside a swallowed pcall).
+- **C3 (deferred-response leak):** dropping a still-pending diff entry
+  (`queue.clear()`, or a direct `queue.remove()` of a pending entry) now
+  drains its coroutine callback with `DIFF_REJECTED` first — the blocked
+  CLI unblocks and the matching `_G.claude_deferred_responses` entry is
+  released instead of leaking until server stop.
+- **Bonus:** the vendored ws-server logger's family bridge (a local
+  modification per ADR-0021 §10.2) called `table.unpack`, which is nil on
+  LuaJIT — the first WARN-level emission crashed the bridge and the WS read
+  loop above it (pre-existing `mcp_server_spec` crash). Now
+  `table.unpack or unpack`.
+
+**Batch B — legacy native-diff retirement (−1,493 lines).**
+- `mcp/ws-server/diff.lua` (1,538 lines) was the retired pre-queue in-tab
+  diff UI, unreachable since the unified queue: `openDiff` always enqueues
+  (`tools/open_diff.lua` → `diff.queue` → `diff/ui.lua`). It carried a
+  guaranteed nil-dereference stub (`pcall(function() return nil end)` then
+  indexing the nil at line 99, five unguarded call sites) and every
+  remaining deprecated `nvim_buf_set_option` call in owned code. Replaced
+  with a 45-line contract-preserving stub.
+- **The `close_tab` legacy-fallback contract is PRESERVED** (lector
+  amendment 2): `close_diff_by_tab_name` keeps existing and answers
+  `false`, so `close_tab` for an unmatched tab still returns `TAB_CLOSED`
+  exactly as before. Spec assertion added (smoke 25c).
+- Retired surface (for the record): `open_diff`, `open_diff_blocking`,
+  `_open_native_diff`, `_setup_blocking_diff`, `_register_diff_state`,
+  `_resolve_diff_as_saved/_rejected`, `_create_diff_view_from_window`,
+  `_cleanup_diff_state`, `_cleanup_all_active_diffs`,
+  `reload_file_buffers_manual`, `accept_current_diff`, `deny_current_diff`,
+  `setup`. None had production callers (verification gate: repo-wide grep +
+  full spec run).
+
+**Batch C — durable writes (min auto-core floor → `0.1.58`).**
+- `runtime_identity.write` (the agent identity sidecar), all KB scaffold
+  writes (`kb/init.lua` ×9: AGENTS.md/KB_RULES.md/RULES.md/seeds/pointers/
+  log/index stubs), `kb/manifest.json`, `kb/instruct.lua`'s CLAUDE.md/
+  AGENTS.md instruction blocks, and `kb/obsidian.lua` now delegate to
+  `auto-core.fs.atomic.write` (temp → fsync → rename; first shipped in
+  auto-core v0.1.58) — readers never see a half-written file, no temp
+  strays on failure. Append-only logs (`kb.log`, the automation KB audit)
+  keep append semantics and gain `f:flush()`.
+- **C5:** `kb/manifest.write` failures now log at the failure site
+  (previously returned-but-unlogged; the admin `kb sync` output already
+  rendered per-namespace errors).
+- README dependency floor updated: `auto-core.nvim ^0.1.58` (lector
+  amendment 3).
+- `tests/instruct_diff_review_spec.lua` harness now puts the sibling
+  auto-core on the rtp (it is a hard dep; the spec only passed before
+  because instruct's write path didn't touch auto-core).
+
+**Tests.** New smoke section `[25]` (+24 assertions): scope-local option
+application + global-default guards, queue drain on clear/remove, retirement
+stub + `TAB_CLOSED` contract, atomic identity/KB/manifest writes with
+no-temp-stray checks, logger multi-part emission. Suite: **283 passed / 1
+failed** — the single failure is the pre-existing Phase 6 `/tmp`
+mailbox-prune env issue, identical to the v0.2.53 baseline. All 11 spec
+files green except the pre-existing macOS-env failures unchanged from
+baseline (`diff_peer_identity` 3× Linux-only `/proc/net/tcp`,
+`mcp_server_spec` SSE handshake — the latter now fails *cleanly* instead of
+crashing the logger).
+
 ## [v0.2.48] — 2026-05-27 — fix: assignee notification never delivered (invalid message kind + missing `from`)
 
 Assigning a todo task to an agent (auto-finder todos panel `A`, `:AutoAgentsTodos

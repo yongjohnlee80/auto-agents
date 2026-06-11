@@ -118,13 +118,37 @@ function M.find_by_tab_name(tab_name)
   return nil
 end
 
+--- Unblock a still-pending entry that is about to be dropped without a
+--- user verdict (direct remove of a pending entry, or queue clear).
+--- Resuming the coroutine callback with DIFF_REJECTED lets the agent's
+--- CLI stop waiting AND clears the matching `_G.claude_deferred_responses`
+--- entry (open_diff's callback removes its own key on resume) — without
+--- this, a dropped pending entry strands both until server stop
+--- (ADR-0039 C3).
+--- @param req AutoAgentsDiffRequest
+--- @param why string
+local function _drain_pending(req, why)
+  if req.status ~= "pending" then return end
+  req.status = "rejected"
+  pcall(req.callback, {
+    content = {
+      { type = "text", text = "DIFF_REJECTED" },
+      { type = "text", text = why },
+    },
+  })
+end
+
 --- Remove a request from the queue (usually after resolution).
 --- @param id string
 function M.remove(id)
   for i, req in ipairs(_queue) do
     if req.id == id then
+      -- Resolution paths (resolve/reject) flip status before calling
+      -- remove, so this only fires for direct removal of a pending
+      -- entry — which must not strand the blocked coroutine.
+      _drain_pending(req, "Diff entry removed from the queue.")
       table.remove(_queue, i)
-      
+
       local ok, events = pcall(require, "auto-core.events")
       if ok and events.publish then
         events.publish("auto-agents:diff_removed", { id = id })
@@ -263,8 +287,14 @@ function M.reject(id, reason)
   M.remove(id)
 end
 
---- Clear the entire queue (mostly for testing/cleanup)
+--- Clear the entire queue (mostly for testing/cleanup).
+--- Pending entries are drained with DIFF_REJECTED first so their
+--- blocked coroutines resume and the matching deferred-response
+--- bookkeeping is released (ADR-0039 C3).
 function M.clear()
+  for _, req in ipairs(_queue) do
+    _drain_pending(req, "Diff queue cleared.")
+  end
   _queue = {}
   _next_id = 1
 end

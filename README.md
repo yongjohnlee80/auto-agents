@@ -61,10 +61,13 @@ without losing the main view.
 ### Dependencies
 
 - **[`auto-core.nvim`](https://github.com/yongjohnlee80/auto-core.nvim)
-  ^0.1.0** — foundation library for the AutoVim plugin family. Provides the
+  ^0.1.58** — foundation library for the AutoVim plugin family. Provides the
   shared event bus, namespaced state store, panel singleton, float
-  primitives, and canonical task-status surface that auto-agents consumes
-  as of v0.2.0. Required.
+  primitives, canonical task-status surface, and the `fs.atomic` write
+  primitive that auto-agents consumes. Required. The `0.1.58` floor is
+  set by auto-agents v0.2.54+ (ADR-0039 Batch C: identity/KB persistence
+  delegates to `auto-core.fs.atomic.write`, first shipped in auto-core
+  v0.1.58).
 - **[`folke/snacks.nvim`](https://github.com/folke/snacks.nvim)** — required
   for the sub-agent floats (slots 6–9) and the `:AutoAgentsDock` navigation
   dock.

@@ -69,6 +69,28 @@ function M.info(component, ...)  level_call(core_log.info,  component, ...) end
 function M.debug(component, ...) level_call(core_log.debug, component, ...) end
 function M.trace(component, ...) level_call(core_log.trace, component, ...) end
 
+---Throttled level emissions (ADR-0039 Batch A, additive). Thin
+---namespacing passthroughs to `auto-core.log.<level>_throttled` for
+---call sites that can fire per-tick/per-transition — the hot-loop
+---guard from auto-family-logging. Soft-dep: no-op level fallback
+---when auto-core predates the throttled surface.
+---@param key string        -- stable throttle key
+---@param every_ms number   -- minimum interval between emissions
+---@param component string|any
+function M.warn_throttled(key, every_ms, component, ...)
+  if type(core_log.warn_throttled) ~= "function" then
+    return M.warn(component, ...)
+  end
+  core_log.warn_throttled(key, every_ms, ns(component), ...)
+end
+
+function M.error_throttled(key, every_ms, component, ...)
+  if type(core_log.error_throttled) ~= "function" then
+    return M.error(component, ...)
+  end
+  core_log.error_throttled(key, every_ms, ns(component), ...)
+end
+
 ---Force-toast single emission. Writes ring + fires vim.notify
 ---(subject to the global level filter). Use this instead of bare
 ---`vim.notify(...)` so every toast lands in the auto-core ring for

@@ -239,8 +239,15 @@ local function _install_kb_audit()
       tostring(payload.clone_id),
       tostring(payload.outcome))
     local path = kb_root .. "/log.md"
+    -- ADR-0039 Batch C: flush before close so the audit entry reaches
+    -- the OS (append-only log — flush, not atomic rewrite, to avoid
+    -- racing concurrent appenders).
     local f = io.open(path, "a")
-    if f then f:write(line); f:close() end
+    if f then
+      f:write(line)
+      f:flush()
+      f:close()
+    end
   end)
 end
 

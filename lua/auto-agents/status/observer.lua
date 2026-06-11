@@ -171,7 +171,14 @@ local function emit_if_changed(obs)
   -- :AutoCoreChannel panel + other family plugins observe this
   -- slot's transition.
   if aa._sync_core_status then
-    pcall(aa._sync_core_status, obs.slot, state)
+    -- ADR-0039 C4: surface mirror failures (throttled — this fires on
+    -- every status transition, so a persistent break must not spam).
+    local ok_sync, sync_err = pcall(aa._sync_core_status, obs.slot, state)
+    if not ok_sync then
+      require("auto-agents.log").warn_throttled(
+        "observer.sync_core_status", 60000, "status",
+        "core status mirror failed: " .. tostring(sync_err))
+    end
   end
   if aa.refresh_winbar then pcall(aa.refresh_winbar) end
   if aa.refresh_dock then pcall(aa.refresh_dock) end

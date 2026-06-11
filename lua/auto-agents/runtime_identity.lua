@@ -76,37 +76,19 @@ function M.build_record(slot, agent_name, tool_root, mailbox_dir,
   }
 end
 
----Atomic write — temp file + rename. Idempotent overwrite of any
----existing sidecar at `path`. Returns `ok, err`.
+---Atomic write — delegates to `auto-core.fs.atomic.write` (ADR-0039
+---Batch C). The previous hand-rolled temp+rename here skipped fsync,
+---so a crash between write and rename could strand the one file whose
+---truncation breaks an agent's identity reconciliation. The canonical
+---primitive (auto-core >= 0.1.58) adds best-effort fsync + tmp
+---cleanup on every failure path. Idempotent overwrite of any existing
+---sidecar at `path`. Returns `ok, err`.
 ---@param path string
 ---@param record table
 ---@return boolean, string?
 function M.write(path, record)
   local encoded = vim.fn.json_encode(record)
-  local dir = vim.fn.fnamemodify(path, ":h")
-  if vim.fn.isdirectory(dir) == 0 then
-    local mk = vim.fn.mkdir(dir, "p")
-    if mk == 0 then
-      return false, "mkdir failed: " .. dir
-    end
-  end
-  local tmp = path .. ".tmp." .. tostring(vim.fn.getpid()) .. "." .. tostring(os.time())
-  local f, ferr = io.open(tmp, "w")
-  if not f then
-    return false, "open " .. tmp .. " failed: " .. tostring(ferr)
-  end
-  local ok_write, werr = pcall(function() f:write(encoded) end)
-  f:close()
-  if not ok_write then
-    pcall(os.remove, tmp)
-    return false, "write failed: " .. tostring(werr)
-  end
-  local ok_rename, rerr = os.rename(tmp, path)
-  if not ok_rename then
-    pcall(os.remove, tmp)
-    return false, "rename failed: " .. tostring(rerr)
-  end
-  return true, nil
+  return require("auto-core.fs.atomic").write(path, encoded, { mkdir = true })
 end
 
 ---Read the sidecar identity record from disk. Returns nil if the

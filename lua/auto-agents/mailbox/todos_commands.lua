@@ -478,10 +478,13 @@ function M.register_all()
       out.registered[#out.registered + 1] = name
     else
       out.skipped[#out.skipped + 1] = name
-      pcall(function()
-        require("auto-agents.log").warn("mailbox.commands",
-          string.format("register('%s') failed: %s", name, tostring(regerr)))
-      end)
+      -- ADR-0039 C4: the warn was previously wrapped in a swallowed
+      -- pcall — if logging failed, `regerr` vanished. auto-core is a
+      -- hard dep already required at the top of this function, so the
+      -- log wrapper (which only delegates to auto-core.log) cannot
+      -- fail here; log unconditionally.
+      require("auto-agents.log").warn("mailbox.commands",
+        string.format("register('%s') failed: %s", name, tostring(regerr)))
     end
   end
   -- Sort for stable test output

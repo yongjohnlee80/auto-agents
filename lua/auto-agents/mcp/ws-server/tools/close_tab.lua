@@ -93,9 +93,13 @@ local function handler(params)
       end
     end
 
-    -- Legacy in-tab diff path: native split UI registered in
-    -- auto-agents.mcp.ws-server.diff (kept for callers that opened
-    -- diffs through the old non-queued surface).
+    -- Legacy in-tab diff path: the native split UI was retired in
+    -- ADR-0039 Batch B — auto-agents.mcp.ws-server.diff is now a
+    -- contract-preserving stub whose close_diff_by_tab_name always
+    -- returns false (no legacy diffs can exist), so this falls
+    -- through to the "Diff not found" branch below and still
+    -- answers TAB_CLOSED. The branch structure is kept verbatim so
+    -- the MCP reply contract is unchanged.
     local diff_module_ok, diff = pcall(require, "auto-agents.mcp.ws-server.diff")
     if diff_module_ok and diff.close_diff_by_tab_name then
       local closed = diff.close_diff_by_tab_name(tab_name)
