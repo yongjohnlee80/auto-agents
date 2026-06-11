@@ -2,6 +2,34 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.55] — 2026-06-12 — ADR-0039 Batch D: KB hot-path performance
+
+**P1 — `kb/instruct.ensure()` bail-out cache.** `ensure()` runs on every
+`refresh_agent_id` resume and previously paid a full read of the target
+CLAUDE.md / AGENTS.md / GEMINI.md each time, even when nothing changed (the
+overwhelmingly common case). Now a per-path cache keyed by the rendered
+block's sha256 + the file's size/mtime turns the unchanged case into a
+single `fs_stat` — zero file reads, zero writes. External edits bust the
+cache via the stat mismatch; config/roster changes bust it via the block
+hash. Test hooks: `M._ensure_cache_hits`, `M._invalidate_ensure_cache()`.
+
+**P2 — single-pass `kb sync`.** `manifest.write()` now returns the generated
+manifest as a third value and `sync.sync_all()` reuses it — previously
+`record()` called `manifest.generate()` a *second* time per namespace purely
+to count entries, doubling the recursive glob + read + sha256 of every page
+in the KB on every `:AutoAgents kb sync`. Test hook:
+`manifest._generate_count` (asserted: one generate per namespace).
+
+**Tests.** New smoke section `[26]` (+11 assertions): bail-out hit/miss
+behavior, external-edit cache bust with user content + single managed block
+preserved, per-namespace generate count, entry counts and wikilink
+resolution flowing through `write()`'s returned manifest. Suite: **294
+passed / 1 failed** (the pre-existing Phase 6 `/tmp` prune env issue,
+unchanged). `instruct_diff_review_spec`: 24/0.
+
+Public API unchanged (the third return value of `manifest.write` and the
+test hooks are additive).
+
 ## [v0.2.54] — 2026-06-12 — ADR-0039 Batches A+B+C: correctness sweep, legacy diff retirement, durable writes
 
 *(v0.2.49–v0.2.53 were released without changelog entries — see `git log

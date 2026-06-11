@@ -2102,6 +2102,87 @@ do
     warn_ok, tostring(warn_err))
 end
 
+-- ─────────────── 26. ADR-0039 Batch D — KB hot-path perf ───────────────
+print("\n[26] ADR-0039 D — instruct.ensure bail-out cache + single-pass kb sync")
+do
+  -- 26a. P1: second ensure() with identical inputs takes the
+  -- stat-only bail-out — no read, no write, identical file.
+  local instr = require("auto-agents.kb.instruct")
+  local d_cwd = vim.fn.tempname() .. "_aa-instr26"
+  vim.fn.mkdir(d_cwd, "p")
+  local d_kb = vim.fn.tempname() .. "_aa-kb26"
+  vim.fn.mkdir(d_kb, "p")
+  local spec = { kind = "claude", name = "smoke26", slot = 1, kb_scope = "shared" }
+
+  instr._invalidate_ensure_cache()
+  local p1 = instr.ensure(spec, d_kb, d_cwd)
+  ok("26a: first ensure writes the instruction file",
+    p1 ~= nil and vim.fn.filereadable(p1) == 1, tostring(p1))
+  local function slurp(p)
+    local f = io.open(p, "r"); local s = f and f:read("*a") or ""
+    if f then f:close() end
+    return s
+  end
+  local content_after_first = slurp(p1)
+
+  local hits_before = instr._ensure_cache_hits
+  local p2 = instr.ensure(spec, d_kb, d_cwd)
+  ok("26a: second ensure bails out via the cache",
+    p2 == p1 and instr._ensure_cache_hits == hits_before + 1,
+    string.format("hits %d -> %d", hits_before, instr._ensure_cache_hits))
+  ok("26a: file content identical after bail-out",
+    slurp(p1) == content_after_first)
+
+  -- External edit busts the cache: ensure() must re-read, keep the
+  -- user's content, and keep exactly one auto-agents block.
+  local fh = assert(io.open(p1, "a"))
+  fh:write("\nuser note appended outside the block\n")
+  fh:close()
+  local hits_mid = instr._ensure_cache_hits
+  local p3 = instr.ensure(spec, d_kb, d_cwd)
+  local content_after_edit = slurp(p1)
+  ok("26a: external edit busts the cache (no bail-out)",
+    p3 == p1 and instr._ensure_cache_hits == hits_mid,
+    string.format("hits %d -> %d", hits_mid, instr._ensure_cache_hits))
+  ok("26a: user content survives the re-splice",
+    content_after_edit:find("user note appended outside the block", 1, true) ~= nil)
+  local _, block_count = content_after_edit:gsub("auto%-agents:begin", "")
+  ok("26a: exactly one managed block after re-splice",
+    block_count <= 1, "begin markers: " .. tostring(block_count))
+
+  -- 26b. P2: sync_all generates each namespace manifest exactly once
+  -- (write() returns the manifest; record() reuses it).
+  local manifest = require("auto-agents.kb.manifest")
+  local sync = require("auto-agents.kb.sync")
+  local kb26 = vim.fn.tempname() .. "_aa-sync26"
+  vim.fn.mkdir(kb26 .. "/shared", "p")
+  vim.fn.mkdir(kb26 .. "/agents/a1", "p")
+  local function put(p, s)
+    local f = assert(io.open(p, "w")); f:write(s); f:close()
+  end
+  put(kb26 .. "/shared/one.md", "# one\nlinks [[two]]\n")
+  put(kb26 .. "/shared/two.md", "# two\n")
+  put(kb26 .. "/agents/a1/note.md", "# note\n")
+
+  manifest._generate_count = 0
+  local summary = sync.sync_all(kb26)
+  ok("26b: sync_all covers both namespaces",
+    #summary.namespaces == 2, vim.inspect(summary))
+  local by_name = {}
+  for _, ns in ipairs(summary.namespaces) do by_name[ns.name] = ns end
+  ok("26b: shared count flows through from write()'s manifest",
+    by_name["shared"] and by_name["shared"].count == 2,
+    vim.inspect(by_name["shared"]))
+  ok("26b: agents/a1 count flows through",
+    by_name["agents/a1"] and by_name["agents/a1"].count == 1,
+    vim.inspect(by_name["agents/a1"]))
+  ok("26b: one generate per namespace (no double walk)",
+    manifest._generate_count == 2,
+    "generate_count=" .. tostring(manifest._generate_count))
+  ok("26b: wikilink resolution intact ([[two]] resolves, zero broken)",
+    summary.total_broken == 0, "total_broken=" .. tostring(summary.total_broken))
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

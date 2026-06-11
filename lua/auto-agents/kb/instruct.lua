@@ -451,6 +451,33 @@ local function render_block(spec, kb_root)
   return table.concat(lines, "\n")
 end
 
+---ADR-0039 Batch D (P1): per-path bail-out cache. `ensure()` runs on
+---every `refresh_agent_id` resume; before this cache each call paid a
+---full read of the target CLAUDE.md/AGENTS.md even when nothing
+---changed (the common case). Key: rendered-block sha256 + the file's
+---size/mtime as of our last look. When both match, the splice result
+---is provably identical to last time — skip the read entirely (one
+---fs_stat instead). External edits bust the cache via the stat
+---mismatch; config/roster changes bust it via the block sha.
+local _ensure_cache = {}
+M._ensure_cache_hits = 0   -- test hook
+---@private test helper
+function M._invalidate_ensure_cache() _ensure_cache = {} end
+
+---@param path string
+---@param sig string
+local function _cache_store(path, sig)
+  local st = vim.uv.fs_stat(path)
+  if st then
+    _ensure_cache[path] = {
+      block_sha = sig,
+      size = st.size,
+      mtime_sec = st.mtime.sec,
+      mtime_nsec = st.mtime.nsec,
+    }
+  end
+end
+
 ---Ensure the instruction file at `cwd/<kind-file>` contains an up-to-date
 ---auto-agents block. Idempotent. User content outside the block is
 ---preserved verbatim.
@@ -470,6 +497,20 @@ function M.ensure(spec, kb_root, cwd)
   local filename = M.filename_for(spec.kind or "generic")
   local path = cwd .. "/" .. filename
   local block = render_block(spec, kb_root)
+
+  -- P1 bail-out: same rendered block + untouched file → identical
+  -- outcome to the previous call; skip the file read and splice.
+  local sig = vim.fn.sha256(block)
+  local cached = _ensure_cache[path]
+  if cached and cached.block_sha == sig then
+    local st = vim.uv.fs_stat(path)
+    if st and st.size == cached.size
+        and st.mtime.sec == cached.mtime_sec
+        and st.mtime.nsec == cached.mtime_nsec then
+      M._ensure_cache_hits = M._ensure_cache_hits + 1
+      return path
+    end
+  end
 
   local f = io.open(path, "r")
   local existing = f and f:read("*a") or ""
@@ -496,7 +537,10 @@ function M.ensure(spec, kb_root, cwd)
     end
   end
 
-  if new_content == existing then return path end  -- no-op
+  if new_content == existing then
+    _cache_store(path, sig)  -- prime the P1 bail-out for the next call
+    return path  -- no-op
+  end
 
   -- Ensure parent dir exists for kinds whose filename is multi-segment
   -- (e.g. junie's `.junie/guidelines.md`). mkdir -p is idempotent.
@@ -514,6 +558,7 @@ function M.ensure(spec, kb_root, cwd)
       "failed to write " .. path .. ": " .. tostring(werr))
     return nil
   end
+  _cache_store(path, sig)  -- prime the P1 bail-out for the next call
   return path
 end
 

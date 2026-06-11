@@ -49,10 +49,13 @@ end
 ---resolution is *not* done here — `resolve_index` (a basename → paths
 ---map) is optional; if supplied, each wikilink is annotated with a
 ---`resolved` field pointing at the matching kb-relative path (or nil).
+M._generate_count = 0  -- test hook (ADR-0039 D/P2: one generate per namespace per sync)
+
 ---@param namespace_dir string  -- absolute
 ---@param resolve_index table|nil  -- { [basename]: kb_relative_path[] }
 ---@return table
 function M.generate(namespace_dir, resolve_index)
+  M._generate_count = M._generate_count + 1
   local entries = {}
   local broken_count = 0
   local files = vim.fn.glob(namespace_dir .. "/**/*.md", false, true)
@@ -94,11 +97,16 @@ function M.generate(namespace_dir, resolve_index)
 end
 
 ---Write `<namespace_dir>/manifest.json`. Returns nil on success, an
----error string on failure.
+---error string on failure. ADR-0039 Batch D (P2): the generated
+---manifest is returned as the third value so callers (kb/sync.lua)
+---can reuse it instead of paying a second full `generate()` — each
+---generate is a recursive glob + read+hash of every page in the
+---namespace, so the double call doubled sync cost for nothing.
 ---@param namespace_dir string
 ---@param resolve_index table|nil
 ---@return string|nil err
 ---@return integer|nil broken_count
+---@return table|nil manifest  -- the generated manifest (nil on error)
 function M.write(namespace_dir, resolve_index)
   vim.fn.mkdir(namespace_dir, "p")
   local manifest = M.generate(namespace_dir, resolve_index)
@@ -122,7 +130,7 @@ function M.write(namespace_dir, resolve_index)
       namespace_dir .. ": " .. err)
     return err, nil
   end
-  return nil, manifest.broken_link_count
+  return nil, manifest.broken_link_count, manifest
 end
 
 return M

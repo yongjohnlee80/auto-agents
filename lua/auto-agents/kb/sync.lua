@@ -47,13 +47,11 @@ function M.sync_all(kb_root)
 
   local function record(name, dir)
     if vim.fn.isdirectory(dir) ~= 1 then return end
-    local err, broken = manifest.write(dir, index)
-    local entries
-    if err then
-      entries = {}
-    else
-      entries = manifest.generate(dir, index).entries
-    end
+    -- ADR-0039 Batch D (P2): reuse the manifest that write() just
+    -- generated instead of re-running the full namespace walk
+    -- (glob + read + hash of every page) a second time per namespace.
+    local err, broken, written = manifest.write(dir, index)
+    local entries = (written and written.entries) or {}
     summary.total_broken = summary.total_broken + (broken or 0)
     table.insert(summary.namespaces, {
       name = name,
