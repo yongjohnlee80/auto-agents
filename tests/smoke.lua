@@ -1962,6 +1962,62 @@ do
   end
 end
 
+-- ─────────── 24k. todos.add `review` schema drift (bug 2026-05-29) ───────────
+-- Regression for the mailbox↔auto-core schema mismatch: the
+-- todos.add mailbox schema declared `review = "string?"` while
+-- auto-core.todo.schema treats `review` (like adr/blocked) as a
+-- `string_list`. So a list tripped the mailbox validator
+-- ("expected string, got table") and a string tripped auto-core
+-- ("expected list of strings") — no caller could attach `review:`
+-- via the verb at all. Fix: `review = "any?"`, matching its
+-- list-type siblings.
+--
+-- Tested at the validator gate (auto-core.mailbox.commands.validate_args),
+-- which is the exact bug surface. We deliberately do NOT run a full
+-- todo.add round-trip: the post-gate path (h_add → todo.add →
+-- auto-core string_list) already works, and a real todo.add would
+-- write into the live `.todo-list/` store.
+print("\n[24k] todos.add review schema drift (bug 2026-05-29)")
+do
+  local commands  = require("auto-core.mailbox.commands")
+  local todos_mod = require("auto-agents.mailbox.todos_commands")
+  local add_spec  = todos_mod._SPECS["todos.add"]
+
+  ok("24k: todos.add spec registered",
+    type(add_spec) == "table" and type(add_spec.schema) == "table")
+
+  -- The fix: review must mirror its list-type siblings, not be a
+  -- lone "string?" outlier.
+  ok("24k: review schema is 'any?' (not the drifted 'string?')",
+    add_spec.schema.review == "any?",
+    "review=" .. tostring(add_spec.schema.review))
+
+  -- Drift-policy guard: every auto-core string_list field
+  -- (tags/adr/review/blocked) must be "any?" in this mailbox mirror.
+  for _, f in ipairs({ "tags", "adr", "review", "blocked" }) do
+    ok("24k: list-type field '" .. f .. "' is 'any?' in the mailbox schema",
+      add_spec.schema[f] == "any?",
+      f .. "=" .. tostring(add_spec.schema[f]))
+  end
+
+  -- The actual regression: a review LIST must pass the validator gate
+  -- that previously rejected it with "expected string, got table".
+  local ok_list, err_list = commands.validate_args(
+    { title = "repro: review as list", review = { "/abs/foo.md" } },
+    add_spec.schema)
+  ok("24k: validator accepts review as a list (was rejected pre-fix)",
+    ok_list == true, tostring(err_list))
+
+  -- A bare string also passes the (now type-agnostic) gate; auto-core's
+  -- string_list layer — covered in auto-core's own suite — owns
+  -- list-enforcement downstream of this gate.
+  local ok_str = commands.validate_args(
+    { title = "repro: review as string", review = "/abs/foo.md" },
+    add_spec.schema)
+  ok("24k: validator no longer hard-types review at the mailbox gate",
+    ok_str == true)
+end
+
 -- ─────────────── 25. ADR-0039 Batches A+B+C ───────────────
 print("\n[25] ADR-0039 A+B+C — scope-local options, queue drain, legacy diff retirement, durable writes")
 do

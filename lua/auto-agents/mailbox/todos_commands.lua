@@ -375,6 +375,12 @@ local SPECS = {
   ["todos.add"] = {
     owner       = "auto-agents",
     description = "Create a new open task. `title` is required; other hand-editable fields (description, priority, due, assignee, tags, adr, review, blocked) accepted. Returns `{id}`.",
+    -- NOTE: every field that auto-core.todo.schema declares as
+    -- `kind = "string_list"` (tags / adr / review / blocked) MUST be
+    -- "any?" here — the list arrives as a Lua table and the gate's
+    -- "string?" would reject it ("expected string, got table"). The
+    -- string_list enforcement lives downstream in auto-core; this
+    -- mailbox gate only screens shape. Keep this mirror in sync.
     schema      = {
       title       = "string",
       description = "string?",
@@ -383,7 +389,7 @@ local SPECS = {
       assignee    = "string?",
       tags        = "any?",
       adr         = "any?",
-      review      = "string?",
+      review      = "any?",
       blocked     = "any?",
     },
     handler     = h_add,

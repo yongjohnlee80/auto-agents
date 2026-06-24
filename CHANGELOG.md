@@ -2,6 +2,35 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.56] — 2026-06-25 — Fix: todos.add rejected every form of `review:`
+
+Fixes a schema-drift bug (filed 2026-05-29) where the `todos.add` mailbox
+command rejected **every** shape of the `review:` argument — so no caller
+could attach a review doc via the verb at all (the workaround was
+hand-editing the task's YAML afterward).
+
+**Root cause.** The `todos.add` mailbox schema declared
+`review = "string?"`, but auto-core's `todo.schema` treats `review` — like
+`adr` and `blocked` — as a `string_list`. A list argument tripped the
+mailbox validator (`field 'review' expected string, got table`); a string
+argument tripped auto-core (`expected list of strings`). The sibling
+list-type fields (`tags`, `adr`, `blocked`) were already `"any?"`;
+`review` was the lone outlier.
+
+**Fix.** `lua/auto-agents/mailbox/todos_commands.lua` — `review = "any?"`
+in the `todos.add` schema, matching its list-type siblings, with a comment
+recording the mirror policy: any auto-core `string_list` field must be
+`"any?"` in the mailbox schema (the gate screens shape only; auto-core owns
+list-enforcement). `todos.update` was unaffected (its `patch` is `"any"`).
+
+- **`tests/smoke.lua [24k]`** — pins `review == "any?"`, the
+  tags/adr/review/blocked drift-policy guard, and drives a `review` list
+  through `auto-core.mailbox.commands.validate_args` (the gate that
+  rejected it pre-fix). 8 assertions; verified red on the pre-fix schema,
+  green after. Suite 303 passed / 0 failed.
+
+Also catches up `M.version` (lagged at `0.2.48` since v0.2.49).
+
 ## [v0.2.55] — 2026-06-12 — ADR-0039 Batch D: KB hot-path performance
 
 **P1 — `kb/instruct.ensure()` bail-out cache.** `ensure()` runs on every
