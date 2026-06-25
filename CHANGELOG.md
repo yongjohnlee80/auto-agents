@@ -2,6 +2,34 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.58] — 2026-06-25 — ADR-0045: `<leader>ab` send-buffer-to-agent picker
+
+Adds `M.send_buffer_picker(bufnr?)` — an operator-push that hands the current
+editor buffer to a live agent slot with an optional instruction, mirroring
+auto-finder's `todos.assign` pick-agent→instruct UX but delivering via
+`send_slot` (immediate TUI push, like the `<leader>am`/`ai`/`ap` pickers).
+Bound to `<leader>ab` by the autovim consumer config (v0.3.17+).
+
+- **Payload = file-path reference for a real readable file.** When the buffer
+  maps to an on-disk file (`vim.fn.filereadable(abspath) == 1`), the body sends
+  just the path so the agent reads/edits the real file with its own tools; a
+  modified buffer gets an explicit "on-disk lags the editor" note (we never
+  auto-write).
+- **Inline fallback** (size-capped at `SEND_BUFFER_MAX_INLINE_LINES = 1000`,
+  with a truncation note) for unnamed buffers and named-but-not-yet-saved
+  buffers — naming the intended path without implying a disk source exists.
+- **Guard:** accepts only `buftype == ""`; `acwrite` (this repo's synthetic
+  diff-proposal buffers), `nofile`, terminals/prompts/panels are rejected.
+- **`tests/smoke.lua [27]`** — 17 assertions driving the public picker with
+  stubbed `vim.ui.select`/`vim.ui.input`/`send_slot` over every payload/guard
+  path (named-clean→path, named-modified→unsaved note, named-not-readable→
+  inline, unnamed→inline, `nofile`→rejected, oversized→truncated, no-live-slots
+  →no send, codex-safe body start, empty-instruction placeholder). Suite 326
+  passed / 0 failed.
+
+Lector-reviewed: ADR-0045 r1 `change_requested` (path-reference dead-path bug +
+missing committed smoke) → r2 `approved` (0 must/should-fix).
+
 ## [v0.2.57] — 2026-06-25 — Test: ADR-0028 criterion #4 editor-floor scratch coverage
 
 Test-only patch. Closes the last uncovered ADR-0028 acceptance criterion

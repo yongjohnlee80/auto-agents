@@ -5,7 +5,7 @@ require("auto-agents.types")
 
 local M = {}
 
-M.version = "0.2.57"
+M.version = "0.2.58"
 
 -- Mailbox root resolution lives in
 -- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
@@ -1802,6 +1802,157 @@ function M.permission_bootstrap_picker()
   _bootstrap_refresh_picker("Bootstrap permissions for slot:", _build_permission_body)
 end
 
+---Line cap for the inline-contents fallback (ADR-0045 r2 / Lector
+---should-fix #2). Path-reference payloads are unaffected (they send a
+---path, not content); only the unnamed / not-yet-on-disk fallback can
+---paste arbitrary buffer text into the TUI, so it is bounded.
+local SEND_BUFFER_MAX_INLINE_LINES = 1000
+
+---ADR-0045 — build the deterministic prompt body for `send_buffer_picker`.
+---Payload model: **file-path reference, but only for a real readable
+---on-disk file** (Lector review, must-fix #2). When `abspath` names a
+---file that exists on disk, send just the path so the recipient agent
+---reads/edits the real file with its own tools (a modified buffer gets
+---an explicit "on-disk lags the editor" note — we never auto-write).
+---Otherwise — an unnamed buffer, OR a named buffer whose path is not a
+---readable file yet (a brand-new `:edit foo` not saved) — fall back to
+---**inline fenced contents** (size-capped) so the agent still gets
+---something actionable; when there is an intended-but-absent path we
+---name it without implying a disk source exists. The body never starts
+---with `[` (send_slot's codex leading-`[` hazard), so it submits
+---cleanly on every kind.
+---@param bufnr integer
+---@param abspath string?   -- absolute path, or nil for an unnamed buffer
+---@param modified boolean  -- buffer has unsaved changes
+---@param instruction string  -- may be "" (no extra directive)
+---@return string|nil body
+local function _build_send_buffer_body(bufnr, abspath, modified, instruction)
+  local lines = {}
+  local has_path = abspath ~= nil and abspath ~= ""
+  local readable = has_path and vim.fn.filereadable(abspath) == 1
+
+  if readable then
+    -- Path-reference mode: the file exists on disk; the agent reads/
+    -- edits it directly. No content paste.
+    lines[#lines + 1] = "Please work on this file per the instruction below."
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "File: " .. abspath
+    if modified then
+      lines[#lines + 1] = "(note: the editor buffer has unsaved changes — read the"
+      lines[#lines + 1] = " file as-is on disk; ask before assuming the latest edits)"
+    end
+  else
+    -- Inline fallback: unnamed buffer, or a named buffer whose path is
+    -- not a readable on-disk file yet. Either way a path reference is
+    -- useless, so inline the (size-capped) contents.
+    local ok, content = pcall(vim.api.nvim_buf_get_lines, bufnr, 0, -1, false)
+    if not ok then return nil end
+    local total = #content
+    local truncated = false
+    if total > SEND_BUFFER_MAX_INLINE_LINES then
+      local capped = {}
+      for i = 1, SEND_BUFFER_MAX_INLINE_LINES do capped[i] = content[i] end
+      content = capped
+      truncated = true
+    end
+    local ft = vim.bo[bufnr].filetype or ""
+    if has_path then
+      -- Named but not on disk (e.g. unsaved new file). Name the
+      -- intended path WITHOUT implying it can be read (Lector nit).
+      lines[#lines + 1] = "Please work on the buffer contents below per the instruction."
+      lines[#lines + 1] = "Intended file path (NOT yet written to disk): " .. abspath
+    else
+      lines[#lines + 1] = "Please work on the (unnamed) buffer contents below per the"
+      lines[#lines + 1] = "instruction."
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "```" .. ft
+    vim.list_extend(lines, content)
+    lines[#lines + 1] = "```"
+    if truncated then
+      lines[#lines + 1] = string.format(
+        "(buffer truncated to the first %d of %d lines)",
+        SEND_BUFFER_MAX_INLINE_LINES, total)
+    end
+  end
+
+  lines[#lines + 1] = ""
+  if instruction and instruction ~= "" then
+    lines[#lines + 1] = "Instruction:"
+    lines[#lines + 1] = instruction
+  else
+    lines[#lines + 1] = "(no additional instruction given)"
+  end
+  return table.concat(lines, "\n")
+end
+
+---ADR-0045 — `<leader>ab` operator-push: hand the current editor buffer
+---to a live agent slot with an optional instruction. Mirrors the
+---auto-finder `todos.assign` (`A`) two-step UX (pick agent → instruct),
+---but delivers via `send_slot` (immediate TUI push) like the other
+---operator pickers rather than a mailbox message.
+---
+---The target buffer is captured at invocation (before `vim.ui.select`
+---steals focus). Non-file buffers (terminals / agent panels / prompts)
+---are rejected. Bound to `<leader>ab` by the autovim consumer config.
+---@param bufnr integer?  -- defaults to the current buffer at call time
+function M.send_buffer_picker(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    require("auto-agents.log").notify("no valid buffer to send",
+      { level = "warn", component = "send_slot" })
+    return
+  end
+  -- Normal editor file buffers only: `buftype == ""`. Everything else
+  -- is rejected — terminals/prompts/help, the agent panel, the picker,
+  -- AND `acwrite` (Lector review): this repo uses `acwrite` for the
+  -- synthetic diff-proposal buffers (`diff/ui.lua`) whose names are not
+  -- real on-disk paths, so they must not be treated as files. `nofile`
+  -- scratch buffers stay rejected; the inline fallback covers unnamed
+  -- and not-yet-saved `buftype == ""` buffers instead.
+  local buftype = vim.bo[bufnr].buftype
+  if buftype ~= "" then
+    require("auto-agents.log").notify(
+      "current buffer is not a normal file buffer (buftype=" .. buftype .. ")",
+      { level = "warn", component = "send_slot" })
+    return
+  end
+
+  local items = _refresh_picker_items()
+  if #items == 0 then
+    require("auto-agents.log").notify("no live agent slots to target",
+      { level = "warn", component = "send_slot" })
+    return
+  end
+
+  -- Capture buffer state NOW — the picker will change the current buffer.
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  local abspath = (name ~= nil and name ~= "")
+    and vim.fn.fnamemodify(name, ":p") or nil
+  local modified = vim.bo[bufnr].modified and true or false
+
+  vim.ui.select(items, {
+    prompt = "Send buffer to slot:",
+    format_item = function(item) return item.label end,
+  }, function(choice)
+    if not choice then return end
+    vim.ui.input({ prompt = "Instructions: " }, function(instruction)
+      if instruction == nil then return end  -- user cancelled the input
+      local body = _build_send_buffer_body(bufnr, abspath, modified, instruction)
+      if not body then
+        require("auto-agents.log").notify("failed to build buffer-send prompt",
+          { level = "error", component = "send_slot" })
+        return
+      end
+      local ok = M.send_slot(choice.slot, body, { submit = true })
+      if not ok then
+        require("auto-agents.log").notify("send_slot failed for slot " .. choice.slot,
+          { level = "error", component = "send_slot" })
+      end
+    end)
+  end)
+end
+
 ---Resolve an agent slot from its name. Returns nil if no bootstrap
 ---entry matches. Public-facing wrapper around the same lookup used by
 ---resolve_status_slot — handy for consumers that have an agent_name
@@ -1844,6 +1995,32 @@ function M.diff_review_slots_with_pid()
           if ok and type(pid) == "number" and pid > 0 then
             out[#out + 1] = { slot = e.slot, name = e.name, pid = pid }
           end
+        end
+      end
+    end
+  end
+  return out
+end
+
+---ADR-0046 D-A: like `diff_review_slots_with_pid()` but over EVERY live
+---spawned slot, not just `diff_review = true` ones. The openDiff MCP
+---bridge is a single shared port; any spawned agent — not only
+---`diff_review`-enabled ones — can reach it via lockfile auto-discovery
+---when agents share a workspace. So the peer-PID attribution candidate
+---set must be all live slots, else a peer's connection matches nothing
+---and collapses to the lone `diff_review` agent. No kind filter: a
+---non-connecting kind simply won't own the socket inode.
+---@return { slot: integer, name: string, pid: integer }[]
+function M.spawned_agents_with_pid()
+  local out = {}
+  for _, entry in ipairs(M.spawned_agents()) do
+    local term = M.state.slot_terminals[entry.slot]
+    if term and term:is_alive() and term.get_jobid then
+      local jobid = term:get_jobid()
+      if jobid and jobid > 0 then
+        local ok, pid = pcall(vim.fn.jobpid, jobid)
+        if ok and type(pid) == "number" and pid > 0 then
+          out[#out + 1] = { slot = entry.slot, name = entry.name, pid = pid }
         end
       end
     end

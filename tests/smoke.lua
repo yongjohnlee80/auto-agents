@@ -2293,6 +2293,109 @@ do
     summary.total_broken == 0, "total_broken=" .. tostring(summary.total_broken))
 end
 
+-- ──── 27. ADR-0045 — send_buffer_picker payload + guards ────
+print("\n[27] ADR-0045 — send_buffer_picker payload + guards")
+do
+  local saved_cfg  = aa.state.config.agents.bootstrap
+  local saved_t1   = aa.state.slot_terminals[1]
+  local saved_sel  = vim.ui.select
+  local saved_inp  = vim.ui.input
+  local saved_send = aa.send_slot
+
+  -- One live slot; stub the two pickers + capture what send_slot gets.
+  aa.state.config.agents.bootstrap = { { slot = 1, name = "jarvis", kind = "claude" } }
+  aa.state.slot_terminals[1] = { is_alive = function() return true end, send = function() return true end }
+  vim.ui.select = function(items, _, cb) cb(items[1]) end
+  local captured
+  aa.send_slot = function(slot, body, opts)
+    captured = { slot = slot, body = body, opts = opts }; return true
+  end
+  local function drive(bufnr, instruction)
+    captured = nil
+    vim.ui.input = function(_, cb) cb(instruction) end
+    aa.send_buffer_picker(bufnr)
+    return captured
+  end
+
+  -- A) named existing CLEAN file → path-reference mode
+  local tmpA = vim.fn.tempname() .. ".lua"
+  vim.fn.writefile({ "local x = 1", "return x" }, tmpA)
+  vim.cmd.edit(vim.fn.fnameescape(tmpA))
+  local bA = vim.api.nvim_get_current_buf()
+  local cA = drive(bA, "review this")
+  ok("27a: named clean file sent to slot 1 with submit",
+    cA ~= nil and cA.slot == 1 and cA.opts and cA.opts.submit == true,
+    cA and vim.inspect(cA.opts) or "nil")
+  ok("27a: body carries the absolute File: path",
+    cA ~= nil and cA.body:find("File: " .. vim.fn.fnamemodify(tmpA, ":p"), 1, true) ~= nil)
+  ok("27a: path mode does NOT inline contents (no fence)",
+    cA ~= nil and cA.body:find("```", 1, true) == nil)
+  ok("27a: instruction is appended",
+    cA ~= nil and cA.body:find("Instruction:\nreview this", 1, true) ~= nil)
+  ok("27a: body never starts with '[' (codex-safe)",
+    cA ~= nil and cA.body:sub(1, 1) ~= "[")
+
+  -- B) named existing MODIFIED file → path mode + unsaved note
+  vim.api.nvim_buf_set_lines(bA, 0, 0, false, { "-- dirty" })
+  local cB = drive(bA, "")
+  ok("27b: modified file emits the unsaved-changes note",
+    cB ~= nil and cB.body:find("unsaved changes", 1, true) ~= nil)
+  ok("27b: empty instruction → placeholder",
+    cB ~= nil and cB.body:find("(no additional instruction given)", 1, true) ~= nil)
+
+  -- C) named buffer whose path is NOT on disk → inline fallback (must-fix #2)
+  local tmpC = vim.fn.tempname() .. "-missing.md"  -- never written
+  vim.cmd.edit(vim.fn.fnameescape(tmpC))
+  local bC = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_set_lines(bC, 0, -1, false, { "fresh line A", "fresh line B" })
+  ok("27c: new-file buffer is not readable on disk",
+    vim.fn.filereadable(vim.fn.fnamemodify(tmpC, ":p")) == 0)
+  local cC = drive(bC, "make it a module")
+  ok("27c: not-readable named buffer inlines contents (no bare path)",
+    cC ~= nil and cC.body:find("```", 1, true) ~= nil
+      and cC.body:find("fresh line A", 1, true) ~= nil)
+  ok("27c: names the intended path without implying a disk source",
+    cC ~= nil and cC.body:find("NOT yet written to disk", 1, true) ~= nil
+      and cC.body:find("unsaved changes", 1, true) == nil)
+
+  -- D) unnamed normal buffer (buftype "") → inline fallback
+  local bD = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_lines(bD, 0, -1, false, { "scratch A", "scratch B" })
+  ok("27d: unnamed buffer has buftype ''", vim.bo[bD].buftype == "")
+  local cD = drive(bD, "turn into a module")
+  ok("27d: unnamed buffer inlines contents",
+    cD ~= nil and cD.body:find("```", 1, true) ~= nil
+      and cD.body:find("scratch A", 1, true) ~= nil)
+  ok("27d: unnamed buffer has no File: path", cD ~= nil and cD.body:find("File: ", 1, true) == nil)
+
+  -- E) special (nofile) buffer → rejected, no send
+  local bE = vim.api.nvim_create_buf(false, true)  -- nofile scratch
+  ok("27e: nofile scratch buffer has buftype nofile", vim.bo[bE].buftype == "nofile")
+  local cE = drive(bE, "x")
+  ok("27e: nofile buffer is rejected (no send)", cE == nil)
+
+  -- F) oversized inline fallback → capped with a truncation note (should-fix #2)
+  local bF = vim.api.nvim_create_buf(true, false)
+  local big = {}
+  for i = 1, 1500 do big[i] = "line " .. i end
+  vim.api.nvim_buf_set_lines(bF, 0, -1, false, big)
+  local cF = drive(bF, "")
+  ok("27f: oversized inline fallback is truncated with a note",
+    cF ~= nil and cF.body:find("truncated to the first 1000 of 1500 lines", 1, true) ~= nil)
+
+  -- G) no live slots → no send (picker bails before asking)
+  aa.state.slot_terminals[1] = nil
+  local cG = drive(bD, "anything")
+  ok("27g: no live slots → no send", cG == nil)
+
+  -- restore
+  vim.ui.select = saved_sel
+  vim.ui.input = saved_inp
+  aa.send_slot = saved_send
+  aa.state.slot_terminals[1] = saved_t1
+  aa.state.config.agents.bootstrap = saved_cfg
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
