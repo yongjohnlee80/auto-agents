@@ -242,6 +242,60 @@ ok("count_editor_windows returns >= 1 with scratch present",
 -- Cleanup so subsequent tests start fresh.
 pcall(vim.api.nvim_win_close, scratch_winid, true)
 
+-- 8d. ADR-0028 criterion #4: an editor-floor scratch materialized while
+-- only panels remain must carry EDITOR appearance defaults (number /
+-- relativenumber / signcolumn), not the panels' masked locals — and the
+-- panel must keep its masked locals. The panel-open path writes
+-- appearance options scope="local" (auto-core v0.1.31), so the global
+-- defaults a freshly-materialized editor window inherits stay correct.
+do
+  local panel_w = aa.state.panel_winid
+  local saved = {
+    number         = vim.api.nvim_get_option_value("number", { scope = "global" }),
+    relativenumber = vim.api.nvim_get_option_value("relativenumber", { scope = "global" }),
+    signcolumn     = vim.api.nvim_get_option_value("signcolumn", { scope = "global" }),
+  }
+  vim.api.nvim_set_option_value("number", true, { scope = "global" })
+  vim.api.nvim_set_option_value("relativenumber", true, { scope = "global" })
+  vim.api.nvim_set_option_value("signcolumn", "yes", { scope = "global" })
+
+  local scratch = floor.materialize_editor_scratch()
+  ok("8d: editor-floor scratch materialized",
+    scratch ~= nil and vim.api.nvim_win_is_valid(scratch))
+  if scratch and vim.api.nvim_win_is_valid(scratch) then
+    ok("8d: scratch carries editor number=true (not panel-masked)",
+      vim.api.nvim_get_option_value("number", { win = scratch }) == true,
+      "number=" .. tostring(vim.api.nvim_get_option_value("number", { win = scratch })))
+    ok("8d: scratch carries editor relativenumber=true",
+      vim.api.nvim_get_option_value("relativenumber", { win = scratch }) == true,
+      "relativenumber=" .. tostring(vim.api.nvim_get_option_value("relativenumber", { win = scratch })))
+    ok("8d: scratch carries editor signcolumn=yes",
+      vim.api.nvim_get_option_value("signcolumn", { win = scratch }) == "yes",
+      "signcolumn=" .. tostring(vim.api.nvim_get_option_value("signcolumn", { win = scratch })))
+  end
+  -- The panel keeps its OWN window-local appearance regardless of the
+  -- global seed above — that's the ADR-0028 invariant from the panel's
+  -- side (the panel masks number locally; whatever it set for signcolumn
+  -- is its local value, not the global one). We assert insulation (the
+  -- global change did NOT bleed into the panel), not specific masked
+  -- values, since the auto-agents panel masks number=false but leaves
+  -- signcolumn at its own local (`auto`), not `no`.
+  if panel_w and vim.api.nvim_win_is_valid(panel_w) then
+    ok("8d: panel insulated — number stays false despite global number=true",
+      vim.api.nvim_get_option_value("number", { win = panel_w }) == false,
+      "panel number=" .. tostring(vim.api.nvim_get_option_value("number", { win = panel_w })))
+    ok("8d: panel insulated — signcolumn not polluted by global=yes",
+      vim.api.nvim_get_option_value("signcolumn", { win = panel_w }) ~= "yes",
+      "panel signcolumn=" .. tostring(vim.api.nvim_get_option_value("signcolumn", { win = panel_w })))
+  end
+  if scratch and vim.api.nvim_win_is_valid(scratch) then
+    pcall(vim.api.nvim_win_close, scratch, true)
+  end
+  vim.api.nvim_set_option_value("number", saved.number, { scope = "global" })
+  vim.api.nvim_set_option_value("relativenumber", saved.relativenumber, { scope = "global" })
+  vim.api.nvim_set_option_value("signcolumn", saved.signcolumn, { scope = "global" })
+end
+
 -- ───────────────────── 9. flat slot model + admin DSL ───────────────
 -- v0.1.24: cfg.panel.slot_count (default 5, range 2..9). The admin
 -- DSL `slot add N` / `slot remove N` mutates the count and re-syncs

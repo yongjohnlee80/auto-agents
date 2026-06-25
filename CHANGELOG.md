@@ -2,6 +2,26 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.57] — 2026-06-25 — Test: ADR-0028 criterion #4 editor-floor scratch coverage
+
+Test-only patch. Closes the last uncovered ADR-0028 acceptance criterion
+(#4 — "editor-floor scratch materialization preserves editor defaults
+after all panels are open"). The production fix shipped 2026-05-23
+(auto-core v0.1.31 local-scope panel writes + auto-agents v0.2.29); only
+this integration probe was outstanding.
+
+- **`tests/smoke.lua [8d]`** — seeds editor appearance globals
+  (`number`/`relativenumber`/`signcolumn`), materializes an editor-floor
+  scratch while only panels remain, and asserts the scratch carries the
+  editor defaults (proving the panel-open path no longer pollutes the
+  global-local defaults a freshly-materialized window inherits), plus the
+  panel stays insulated from a later global change. 6 assertions; suite
+  309 passed / 0 failed.
+
+Re-validating the aged todo (per todo-handling convention rev 5) confirmed
+the scratch already inherits editor defaults with no explicit seeding —
+obviating ADR-0028 §4.5's "seed editor defaults explicitly" deferred item.
+
 ## [v0.2.56] — 2026-06-25 — Fix: todos.add rejected every form of `review:`
 
 Fixes a schema-drift bug (filed 2026-05-29) where the `todos.add` mailbox
