@@ -15,10 +15,11 @@
 ---   2. Walk `/proc/net/tcp` (+ `tcp6`) for the row whose local_address
 ---      matches the listening port AND rem_address matches the peer's
 ---      source port. That row has an `inode` field.
----   3. For each `diff_review = true` slot's spawned PID (from
----      `auto-agents.diff_review_slots_with_pid()`), list `/proc/<pid>/fd/*`
----      and look for a symlink target `socket:[<inode>]`. The matching
----      PID is the originator.
+---   3. For each spawned slot's PID (from
+---      `auto-agents.spawned_agents_with_pid()` — ALL live slots, not just
+---      `diff_review` ones, per ADR-0046 D-A), list `/proc/<pid>/fd/*` and
+---      look for a symlink target `socket:[<inode>]`. The matching PID is
+---      the originator.
 ---
 --- Linux-only. On macOS/BSD this falls back to nil (the caller treats
 --- that as "unattributed" — same as the existing display predicate).
@@ -146,41 +147,78 @@ local function pid_owns_socket(pid, inode)
   return false
 end
 
---- Public API. Given a ws-server `client` and the listening port of
---- the server, return the slot's agent name — or nil if attribution
---- fails (non-Linux, no peer, no match in /proc/net/tcp, no PID match).
----
---- @param client     table?   WebSocketClient with `id` + `tcp_handle`; nil → nil
---- @param listen_port integer? the ws-server's listening port; nil → nil
---- @return string?  agent name, or nil if unattributable
-function M.resolve(client, listen_port)
-  if not client or type(client.id) ~= "string" then return nil end
+--- @class PeerIdentityStatus
+--- @field name      string?  resolved slot name, or nil if unattributable
+--- @field attempted boolean  was a live peer present to attribute? `false`
+---                           ONLY when no client was passed — the caller
+---                           may then keep its legacy bootstrap fallback.
+---                           With a live client it is always `true`, so a
+---                           nil `name` means "live peer, could not
+---                           attribute" → caller MUST treat as
+---                           unattributed, NOT guess from the bootstrap.
+--- @field reason    string?  diagnostic for a nil `name`
 
+--- Public API (ADR-0046 D-A + D-B). Given a ws-server `client` and the
+--- listening port, return an attribution STATUS. The candidate set is
+--- ALL spawned slots (`spawned_agents_with_pid`), not just `diff_review`
+--- ones — any spawned agent can reach the single shared bridge via
+--- lockfile auto-discovery. `attempted` lets the caller distinguish
+--- "no live peer to attribute" (keep legacy fallback) from "live peer
+--- that matched no slot" (must be unattributed).
+---
+--- @param client      table?   WebSocketClient with `id` + `tcp_handle`
+--- @param listen_port integer? the ws-server's listening port
+--- @return PeerIdentityStatus
+function M.resolve_status(client, listen_port)
+  if not client or type(client.id) ~= "string" then
+    return { name = nil, attempted = false, reason = "no_client" }
+  end
+
+  -- From here a live peer is present → `attempted = true` on every path.
   -- Cache hit (positive only — negative results re-probe in case the
   -- slot has since come up).
   local cached = _cache[client.id]
-  if type(cached) == "string" and cached ~= "" then return cached end
+  if type(cached) == "string" and cached ~= "" then
+    return { name = cached, attempted = true }
+  end
 
   -- Linux-only path. uv stat /proc to feature-detect.
-  if not vim.uv.fs_stat("/proc/net/tcp") then return nil end
+  if not vim.uv.fs_stat("/proc/net/tcp") then
+    return { name = nil, attempted = true, reason = "not_linux" }
+  end
 
   local pp = peer_port(client)
-  if not pp or not listen_port then return nil end
+  if not pp or not listen_port then
+    return { name = nil, attempted = true, reason = "no_peer_port" }
+  end
 
   local inode = find_agent_inode(listen_port, pp)
-  if not inode then return nil end
+  if not inode then
+    return { name = nil, attempted = true, reason = "no_inode" }
+  end
 
   local ok, aa = pcall(require, "auto-agents")
-  if not ok or type(aa.diff_review_slots_with_pid) ~= "function" then return nil end
+  if not ok or type(aa.spawned_agents_with_pid) ~= "function" then
+    return { name = nil, attempted = true, reason = "no_slots_api" }
+  end
 
-  for _, entry in ipairs(aa.diff_review_slots_with_pid()) do
+  for _, entry in ipairs(aa.spawned_agents_with_pid()) do
     if pid_owns_socket(entry.pid, inode) then
       _cache[client.id] = entry.name
-      return entry.name
+      return { name = entry.name, attempted = true }
     end
   end
 
-  return nil
+  return { name = nil, attempted = true, reason = "no_pid_match" }
+end
+
+--- Back-compat string wrapper around `resolve_status`. Returns just the
+--- resolved name (or nil). Kept for callers/specs that only need the name.
+--- @param client      table?
+--- @param listen_port integer?
+--- @return string?
+function M.resolve(client, listen_port)
+  return M.resolve_status(client, listen_port).name
 end
 
 --- Drop the cache entry for a disconnecting client. Called by the

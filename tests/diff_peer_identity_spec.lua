@@ -244,6 +244,66 @@ eq("explicit _auto_agents_name kept as agent_name",
 -- Clean up the yielded coroutine so we don't leak.
 queue.clear()
 
+-- ── [6] ADR-0046 D-A/D-B: spawned-slots primitive + tri-state status ──
+print("\n[6] ADR-0046 — spawned_agents_with_pid + peer_identity.resolve_status tri-state")
+local aa = require("auto-agents")
+
+-- D-A: the all-slots PID-candidate primitive exists and is well-shaped.
+ok("aa.spawned_agents_with_pid exists and returns a list",
+   type(aa.spawned_agents_with_pid) == "function"
+     and type(aa.spawned_agents_with_pid()) == "table")
+
+-- D-B tri-state: no client → attempted=false (caller may keep its legacy
+-- fallback); a live client we can't attribute → attempted=true, name=nil
+-- (caller MUST treat as unattributed, not guess).
+do
+  local s_noclient = pi.resolve_status(nil, 40781)
+  ok("resolve_status(nil) → {attempted=false, name=nil, reason=no_client}",
+     type(s_noclient) == "table" and s_noclient.attempted == false
+       and s_noclient.name == nil and s_noclient.reason == "no_client",
+     vim.inspect(s_noclient))
+
+  local s_live = pi.resolve_status({ id = "live-but-unattributable" }, 40781)
+  ok("resolve_status(live client, no tcp_handle) → {attempted=true, name=nil}",
+     type(s_live) == "table" and s_live.attempted == true and s_live.name == nil,
+     vim.inspect(s_live))
+end
+
+ok("resolve (string wrapper) still returns nil on no-client (back-compat)",
+   pi.resolve(nil, 40781) == nil)
+
+-- ── [7] ADR-0046 D-B: open_diff resolve_agent_name suppresses collapse ──
+print("\n[7] ADR-0046 — open_diff resolve_agent_name suppresses the lone-agent collapse")
+local resolve_name = od._test_resolve_agent_name
+ok("_test_resolve_agent_name hook exists", type(resolve_name) == "function")
+
+-- Explicit self-id wins.
+ok("explicit _auto_agents_name wins",
+   resolve_name({ _auto_agents_name = "lector" }, nil) == "lector")
+
+-- Stub the bootstrap lone-agent resolver to a CONFIDENT WRONG name — this
+-- is the misattribution the user reported (everything collapses to the
+-- single diff_review agent = jarvis).
+local saved_rdan = aa.resolve_diff_agent_name
+aa.resolve_diff_agent_name = function(_) return "jarvis" end
+
+-- No live ws peer (no ctx.client) → legacy bootstrap fallback applies.
+ok("no ws peer → bootstrap fallback resolves the lone agent",
+   resolve_name({}, nil) == "jarvis")
+
+-- THE REGRESSION (D-B): a live ws peer we can't attribute must resolve to
+-- "unattributed", NEVER the lone diff_review agent — otherwise its
+-- change-request misroutes to that agent's TUI (the reported bug).
+if not aa.state then aa.state = {} end
+local saved_port = aa.state.diff_review_port
+aa.state.diff_review_port = 65000
+local got = resolve_name({}, { client = { id = "peer-no-tcp-handle" } })
+ok("D-B: live ws peer + unattributable → 'unattributed' (NOT the lone agent)",
+   got == "unattributed", "got " .. tostring(got))
+
+aa.state.diff_review_port = saved_port
+aa.resolve_diff_agent_name = saved_rdan
+
 print()
 print(string.format("Passed: %d, Failed: %d", pass_count, fail_count))
 os.exit(fail_count == 0 and 0 or 1)

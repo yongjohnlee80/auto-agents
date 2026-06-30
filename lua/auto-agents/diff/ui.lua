@@ -286,6 +286,22 @@ local function agent_for(name)
   return "unattributed"
 end
 
+-- ADR-0046 D-C: resolve the slot a request-change reason should be
+-- delivered to. Returns the AUTHOR's slot, or nil when the diff is
+-- unattributed / its name maps to no live slot. Callers MUST NOT fall
+-- back to `focused_slot` on nil — the focused slot is a UI accident, not
+-- evidence of authorship, so injecting the request there is the exact
+-- wrong-TUI misrouting this ADR fixes. On nil, refuse + notify instead.
+---@param agent_name string?
+---@return integer? slot
+local function request_change_target(agent_name)
+  local ok_aa, aa = pcall(require, "auto-agents")
+  if not ok_aa or type(aa.slot_for_name) ~= "function" then return nil end
+  local slot = aa.slot_for_name(agent_name)
+  if type(slot) == "number" and slot >= 1 then return slot end
+  return nil
+end
+
 -- Declaration for mutually recursive calls
 local render_left, update_preview
 
@@ -539,10 +555,12 @@ function M.open()
         --      This is the channel that actually conveys the reason
         --      today; channel 1 will start working when Claude Code
         --      forwards content[2].
-        -- Slot resolution prefers the queue entry's agent_name (when
-        -- the MCP bridge injects _auto_agents_name) and falls back to
-        -- the focused slot otherwise — single-agent setups always
-        -- have one focused slot and the user is reviewing its diff.
+        -- Slot resolution (ADR-0046 D-C): route to the diff's ATTRIBUTED
+        -- author via request_change_target(req.agent_name). If the diff is
+        -- unattributed (the name maps to no live slot), REFUSE + notify
+        -- rather than fall back to the focused slot — the focused slot is a
+        -- UI accident, not evidence of authorship, so injecting the request
+        -- there is the exact wrong-TUI misroute this ADR fixes.
         -- O (Open): drop the float and open the full-file native diff
         -- view for the currently-selected entry. Bound on every pane so
         -- the user can hit O without first jumping back to the list.
@@ -568,12 +586,22 @@ function M.open()
             -- input prompt before we type into it. 150ms is plenty
             -- for a local MCP round-trip + Claude's TUI redraw.
             vim.defer_fn(function()
+              local slot = request_change_target(req.agent_name)
+              if not slot then
+                -- ADR-0046 D-C: unattributed diff → do NOT inject into
+                -- focused_slot (wrong-TUI misroute). Refuse + notify.
+                vim.notify(
+                  "auto-agents: diff is unattributed ("
+                    .. tostring(req.agent_name)
+                    .. ") — can't route the change request to an author. "
+                    .. "Open the author's TUI and paste it manually.",
+                  vim.log.levels.WARN)
+                return
+              end
               local ok_aa, aa = pcall(require, "auto-agents")
-              if not ok_aa then return end
-              local slot = aa.slot_for_name and aa.slot_for_name(req.agent_name)
-              if not slot and aa.state then slot = aa.state.focused_slot end
-              if not slot or slot < 1 then return end
-              aa.send_slot(slot, "REQUEST CHANGE: " .. input, { submit = true })
+              if ok_aa then
+                aa.send_slot(slot, "REQUEST CHANGE: " .. input, { submit = true })
+              end
             end, 150)
           end)
         end)
@@ -813,6 +841,7 @@ end
 --- standing up the float UI. Not part of the public contract.
 M._test_repo_for  = repo_for
 M._test_agent_for = agent_for
+M._test_request_change_target = request_change_target
 
 -- Subscriptions to `auto-agents:diff_queued` and `:diff_removed`
 -- are intentionally registered INSIDE `M.open()` (not at module

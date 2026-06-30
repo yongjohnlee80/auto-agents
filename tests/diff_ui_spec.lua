@@ -229,12 +229,14 @@ aa.send_slot = function(slot, text, opts)
   table.insert(send_captures, { slot = slot, text = text, opts = opts })
   return true
 end
--- Make sure the focused-slot fallback resolves to something concrete.
--- The queue entry's agent_name "jarvis" doesn't map to any bootstrap
--- here (we didn't call aa.setup), so M's resolver falls back to
--- aa.state.focused_slot.
+-- ADR-0046 D-C: the request-change reason routes to the diff's
+-- ATTRIBUTED author via aa.slot_for_name(agent_name) — NOT a
+-- focused_slot fallback. Mock slot_for_name so "jarvis" maps to slot 3
+-- (the author) and assert send_slot routes there.
+local saved_slot_for_name = aa.slot_for_name
+aa.slot_for_name = function(name) return (name == "jarvis") and 3 or nil end
 if not aa.state then aa.state = {} end
-aa.state.focused_slot = 1
+aa.state.focused_slot = 1  -- present but must NOT be used as a fallback
 
 queue.clear()
 local m2_result = nil
@@ -260,8 +262,8 @@ m_handler()
 vim.wait(250)  -- exceeds the 150ms M-handler defer
 
 ok("send_slot was invoked exactly once after M", #send_captures == 1)
-ok("send_slot routed to a real slot (focused fallback)",
-   send_captures[1] and send_captures[1].slot == 1)
+ok("send_slot routed to the ATTRIBUTED author's slot (not focused_slot)",
+   send_captures[1] and send_captures[1].slot == 3)
 ok("send_slot payload is prefixed with REQUEST CHANGE:",
    send_captures[1] and send_captures[1].text == "REQUEST CHANGE: " .. injected_reason2)
 ok("send_slot was called with submit=true",
@@ -270,6 +272,38 @@ ok("M still rejected the diff (DIFF_REJECTED + reason)",
    m2_result and m2_result.content[1].text == "DIFF_REJECTED"
    and m2_result.content[2].text == injected_reason2)
 
+-- ADR-0046 D-C: an UNATTRIBUTED diff must NOT inject into any slot —
+-- no focused_slot fallback. slot_for_name returns nil → send_slot is
+-- never called; the M handler refuses + notifies instead.
+aa.slot_for_name = function(_) return nil end
+send_captures = {}
+queue.clear()
+local m3_result = nil
+queue.enqueue({
+  agent_name = "unattributed",
+  file_path = "/tmp/m3.lua",
+  old_contents = "x",
+  new_contents = "y",
+  tab_name = "tab-m3",
+  callback = function(res) m3_result = res end,
+})
+vim.ui.input = function(_, cb) cb("please rename the variable") end
+ui.open()
+vim.wait(50)
+mf = ui._test_get_mfloat()
+for _, km in ipairs(vim.api.nvim_buf_get_keymap(mf:bufnr("left"), "n")) do
+  if km.lhs == "M" then m_handler = km.callback end
+end
+m_handler()
+vim.wait(250)
+
+ok("ADR-0046 D-C: unattributed diff → send_slot NOT called (no focused fallback)",
+   #send_captures == 0, "send_captures=" .. tostring(#send_captures))
+ok("ADR-0046 D-C: unattributed diff still rejected (DIFF_REJECTED)",
+   m3_result and m3_result.content and m3_result.content[1]
+   and m3_result.content[1].text == "DIFF_REJECTED")
+
+aa.slot_for_name = saved_slot_for_name
 aa.send_slot = saved_send_slot
 
 -- Empty input from the prompt cancels — verify no rejection fires.
