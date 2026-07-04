@@ -1,8 +1,8 @@
 # auto-agents.nvim
 
-> Multi-agent orchestration panel for Neovim. One right-side window holds up to
-> ten slots — slot **0** is an admin REPL, slots **1–5** are main-window agent
-> terminals, slots **6–9** open as `snacks.nvim` floats. Project-local
+> Multi-agent orchestration panel for Neovim. One right-side window holds slot
+> **0** (an admin REPL) plus a **configurable number of agent slots** (default
+> 5, up to 9) — all in the same panel, switched by buffer. Project-local
 > knowledge-base, per-slot resource grants, and one-key navigation.
 
 **Status:** pre-release. M1–M5 are implemented and in daily use. See
@@ -39,9 +39,9 @@ split, and [`PERFORMANCE.md`](./PERFORMANCE.md) for the memory/CPU budget.
 A single right-hand panel that hosts **multiple** agent terminals — Claude
 Code, Codex, Gemini, Copilot, or any shell — switchable by slot, with shared
 project context. Each slot can have its own working directory, its own
-knowledge-base scope, its own grant of paths/env, and its own task list.
-Sub-agents (slots 6–9) pop out as floats so a manager agent can delegate
-without losing the main view.
+knowledge-base scope, its own grant of paths/env, and its own task list. Add as
+many agent slots as you need (up to 9) with `slot add`, so a manager agent and
+its helpers all share one panel.
 
 ## Install
 
@@ -52,7 +52,7 @@ without losing the main view.
   version = "^0.2.0",  -- v0.2.0 is the auto-core consumer release
   dependencies = {
     "yongjohnlee80/auto-core.nvim",  -- foundation library; hard dep as of v0.2.0
-    "folke/snacks.nvim",              -- sub-agent floats + navigation dock
+    "folke/snacks.nvim",              -- navigation dock + playground-terminal floats
   },
   opts = {},  -- agents/KB live in TOML — see below
 }
@@ -69,8 +69,8 @@ without losing the main view.
   delegates to `auto-core.fs.atomic.write`, first shipped in auto-core
   v0.1.58).
 - **[`folke/snacks.nvim`](https://github.com/folke/snacks.nvim)** — required
-  for the sub-agent floats (slots 6–9) and the `:AutoAgentsDock` navigation
-  dock.
+  for the `:AutoAgentsDock` navigation dock and the playground-terminal floats
+  (`T1..T4`).
 
 > **Caret pin (`^0.2.0`)**: future v0.2.x releases auto-include without a
 > manual bump. The `auto-core` family follows an additive-only minor-bump
@@ -98,21 +98,25 @@ KB mid-session, so you can wander the file tree freely.
    editor           │    auto-agents      │
                     │  ┌──────────────┐   │
                     │  │  winbar      │   │
-                    │  │  0 1 2 3 4 5 │   │   slots 0–5: main panel
+                    │  │  0 1 2 3 4 5 │   │   all slots: one right-side panel
                     │  └──────────────┘   │   (single window, swapped buffers)
                     │  ░░░░░░░░░░░░░░░░   │
                     │  ░  agent term  ░   │
                     │  ░░░░░░░░░░░░░░░░   │
                     └─────────────────────┘
-
-                   slots 6–9: snacks floats
 ```
 
 - **Slot 0** — admin REPL (a prompt buffer). Type `help` and hit Enter.
-- **Slots 1–5** — agent terminals in the right panel. One window, many buffers;
-  the winbar shows `0 1 2 3 4 5` with the focused slot highlighted.
-- **Slots 6–9** — sub-agent floats. Useful for ephemeral helpers, code review
-  passes, or anything you want side-by-side rather than tabbed.
+- **Slots 1..N** — agent terminals, **all in the one right-side panel** (single
+  window, swapped buffers). The winbar shows the active slots with the focused
+  one highlighted.
+- **Configurable count.** `N` is `panel.slot_count` — **default 5, range 2–9**.
+  Grow or shrink it live from the admin REPL with `slot add` / `slot remove`
+  (persisted to the TOML). There is **no separate "float" tier** — the old
+  slots-6-9 sub-agent floats were retired in the v0.1.24 flat-slot refactor;
+  every agent now lives in the same panel, and ephemeral helpers are just extra
+  slots. (The four **playground terminals** `T1..T4` below are a different
+  thing — shared shells, not agent slots.)
 
 ## Keymaps & commands
 
@@ -140,8 +144,7 @@ User commands (always available):
 | Command                   | Effect                                                    |
 |---------------------------|-----------------------------------------------------------|
 | `:AutoAgents[!]`          | Toggle the panel. `!` bypasses the host-width guard.      |
-| `:AutoAgentsFocus <N>`    | Focus slot N. Routes 0–5 to the main panel, 6–9 to floats.|
-| `:AutoAgentsSub <N>`      | Toggle a sub-agent float (slots 6–9).                     |
+| `:AutoAgentsFocus <N>`    | Focus slot N (0..`slot_count`) in the right-side panel.   |
 | `:AutoAgentsDock`         | Toggle the rightmost-centered navigation dock.            |
 | `:AutoAgentsDiffQueue`    | Toggle the unified diff queue review panel. See below.    |
 
@@ -489,6 +492,7 @@ that KB.
 | `wiki`     | LLM-wiki / Zettelkasten-flavored — durable, interlinked knowledge that compounds. |
 | `research` | Paper-driven research notebook — papers, hypotheses, experiments, synthesis. |
 | `ops`      | Runbook / SRE — alerts, runbooks, incidents, postmortems.                    |
+| `library`  | Content-addressed document archive — immutable records with a partitioned, content-addressed `raw/` (v0.2.24+). |
 | `general`  | Living KB — minimal seed; structure emerges from real work.                  |
 | `custom`   | You supply the seed `.md`. Everything else (layout, raw immutability) still applies. |
 
