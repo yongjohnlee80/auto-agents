@@ -385,7 +385,7 @@ ok("float closed automatically after queue drained",
    mf_after_drain == nil or not mf_after_drain:is_open())
 ok("queue is empty", #queue.get_pending() == 0)
 
-print("\n[5b] Auto-close also fires when the user empties the queue via the panel keymaps (A / D)")
+print("\n[5a] Auto-close also fires when the user empties the queue via the panel keymaps (A / D)")
 -- IMPORTANT regression contract: pressing A or D in the diff panel
 -- when the queue has exactly one entry MUST drain the queue AND
 -- close the float. This exercises the keymap path (not the
@@ -509,7 +509,7 @@ ok("[non-empty] float stays open after A when other entries remain",
 fire_buffer_keymap(mf_two_after:bufnr("left"), "A")
 vim.wait(100)
 
-print("\n[5a] Treesitter is started on the diff panes for viewing")
+print("\n[5b] Treesitter is started on the diff panes for viewing")
 -- Close any open float, install a mock on vim.treesitter.start, open
 -- the float with a fresh entry, and assert that update_preview
 -- explicitly called treesitter.start for middle + preview with the
@@ -552,7 +552,7 @@ mf:close()
 queue.clear()
 vim.wait(20)
 
-print("\n[5b] Edit mode — E toggle + edit cache + Accept-with-edits")
+print("\n[5c] Edit mode — E toggle + edit cache + Accept-with-edits")
 queue.clear()
 
 -- Two entries so we can verify edits survive a selection swap.

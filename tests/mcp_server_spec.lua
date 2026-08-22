@@ -1,5 +1,13 @@
---- Integration tests for first-party MCP server (SSE over HTTP)
---- Run with: nvim --headless -u NONE -l auto-agents.nvim/unified-diff-queue/tests/mcp_server_spec.lua
+--- Integration tests for the first-party MCP server.
+---
+--- The transport is the vendored WebSocket stack (`auto-agents.mcp.ws-server`).
+--- The original SSE/HTTP bridge this spec was written against was removed by
+--- 87e4da4 (2026-05-13, "swap SSE/HTTP bridge for vendored WebSocket stack");
+--- the SSE-specific sections were pruned and their still-real invariants —
+--- a client can connect, and a tools/call round-trips into the diff queue —
+--- reimplemented against the WebSocket handshake + tools dispatch below.
+---
+--- Run with: nvim --headless -u NONE -l tests/mcp_server_spec.lua
 
 -- Find our own path to derive project roots
 local script_path = debug.getinfo(1).source:sub(2)
@@ -22,7 +30,6 @@ for _, p in ipairs({
 end
 
 local mcp = require("auto-agents.mcp.server")
-local queue = require("auto-agents.diff.queue")
 
 local pass_count = 0
 local fail_count = 0
@@ -42,157 +49,94 @@ ok("server started on port", type(port) == "number" and port > 0)
 mcp.stop()
 ok("server stopped", mcp.state.server == nil)
 
-print("\n[2] Standard MCP Handshake (initialize)")
-port = mcp.start()
-local client_init = vim.loop.new_tcp()
-local init_received = false
-client_init:connect("127.0.0.1", port, function(err)
-  if err then return end
-  client_init:write("GET /sse HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-  client_init:read_start(function(_, data)
-    if not data then return end
-    if data:find("notifications/initialized") then
-      local payload = vim.json.encode({
-        jsonrpc = "2.0",
-        id = "init-test",
-        method = "initialize",
-        params = { protocolVersion = "2024-11-05" }
-      })
-      local post = vim.loop.new_tcp()
-      post:connect("127.0.0.1", port, function()
-        post:write("POST /message HTTP/1.1\r\nContent-Length: " .. #payload .. "\r\n\r\n" .. payload, function() post:close() end)
-      end)
-    end
-    if data:find("auto%-agents%-mcp") then
-      init_received = true
-    end
-  end)
-end)
+-- [2]/[3] reimplement the two invariants the pruned SSE/HTTP sections
+-- ([2] initialize handshake, [3] tools/call openDiff, [4] Streamable HTTP
+-- /mcp) were really guarding — "a client can connect" and "a tools/call
+-- round-trips into the diff queue" — against the WebSocket transport that
+-- replaced them. Both run in-process against the production modules the
+-- ws message loop uses, so they are deterministic (no real sockets, no
+-- 2s polling races) and can never silently pass over a dead transport.
 
--- Wait for async operations
-local start_init = vim.loop.now()
-while not init_received and (vim.loop.now() - start_init < 2000) do
-  vim.wait(100)
+print("\n[2] WebSocket handshake — client connects; deleted SSE/HTTP transport stays gone")
+do
+  local handshake = require("auto-agents.mcp.ws-server.handshake")
+
+  -- POSITIVE — the live "a client can connect" invariant: a well-formed
+  -- RFC 6455 upgrade is accepted with a 101 + Sec-WebSocket-Accept.
+  local upgrade = table.concat({
+    "GET /mcp HTTP/1.1",
+    "Host: 127.0.0.1",
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+    "Sec-WebSocket-Version: 13",
+    "", "",
+  }, "\r\n")
+  local up_ok, up_resp = handshake.process_handshake(upgrade)
+  ok("valid WebSocket upgrade is accepted", up_ok == true, tostring(up_resp))
+  ok("handshake returns 101 Switching Protocols",
+    type(up_resp) == "string" and up_resp:find("101 Switching Protocols", 1, true) ~= nil,
+    tostring(up_resp))
+  ok("handshake returns a Sec-WebSocket-Accept header",
+    type(up_resp) == "string" and up_resp:find("Sec%-WebSocket%-Accept:") ~= nil,
+    tostring(up_resp))
+
+  -- P6 GUARD — the deleted transport must STAY gone. The exact plain-GET
+  -- requests the old spec sent (GET /sse, /message, /mcp with no Upgrade
+  -- header) must be rejected at the handshake, never answered with an
+  -- event-stream — so a silent reintroduction fails loudly right here.
+  for _, path in ipairs({ "/sse", "/message", "/mcp" }) do
+    local plain = "GET " .. path .. " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    local ok_plain, resp_plain = handshake.process_handshake(plain)
+    ok("plain GET " .. path .. " (old transport) is rejected, not upgraded",
+      ok_plain == false
+        and type(resp_plain) == "string"
+        and resp_plain:find("event%-stream") == nil,
+      type(resp_plain) == "string" and resp_plain:match("^[^\r\n]+") or tostring(resp_plain))
+  end
 end
 
-ok("MCP initialize handshake successful", init_received)
-client_init:close()
-mcp.stop()
+print("\n[3] tools/call dispatch — openDiff round-trips into the diff queue")
+do
+  local tools = require("auto-agents.mcp.ws-server.tools.init")
+  tools.register_all()
+  local queue = require("auto-agents.diff.queue")
+  queue.clear()
 
-print("\n[3] Standard MCP tools/call (openDiff)")
-port = mcp.start()
-queue.clear()
+  -- Keep the enqueue path's scheduled UI pop-up out of a headless run:
+  -- stub diff.ui.open() to a no-op so this section stays hermetic.
+  local saved_ui = package.loaded["auto-agents.diff.ui"]
+  package.loaded["auto-agents.diff.ui"] = { open = function() end }
 
-local client = vim.loop.new_tcp()
-local sse_connected = false
-local tool_call_received = false
+  -- Drive the REAL tools/call dispatch (handle_invoke) — what the ws
+  -- message loop calls — not the handler directly. openDiff is a blocking
+  -- tool, so its coroutine yields: a `_deferred` marker is the success
+  -- shape, and the queue is populated synchronously before the yield.
+  local res = tools.handle_invoke({ id = "fake-client" }, {
+    name = "openDiff",
+    arguments = {
+      old_file_path     = "/tmp/old.txt",
+      new_file_path     = "/tmp/new.txt",
+      new_file_contents = "new standard content",
+      tab_name          = "test-tab",
+      _auto_agents_name = "tester-standard",
+    },
+  })
+  ok("tools/call openDiff dispatches as a deferred (blocking) invocation",
+    type(res) == "table" and res._deferred == true, vim.inspect(res))
 
-client:connect("127.0.0.1", port, function(err)
-  if err then return end
+  local pending = queue.get_pending()
+  ok("openDiff enqueued exactly one diff", #pending == 1, "count=" .. tostring(#pending))
+  ok("queued item carries the tools/call contents",
+    pending[1] ~= nil and pending[1].new_contents == "new standard content",
+    pending[1] and tostring(pending[1].new_contents))
+  ok("queued item is attributed to the explicit agent name",
+    pending[1] ~= nil and pending[1].agent_name == "tester-standard",
+    pending[1] and tostring(pending[1].agent_name))
 
-  -- Perform GET /sse
-  client:write("GET /sse HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-
-  client:read_start(function(read_err, data)
-    if read_err or not data then return end
-    
-    if data:find("Content%-Type: text/event%-stream") then
-      sse_connected = true
-    end
-
-    if data:find("notifications/initialized") then
-      -- Finding 2: Standard MCP tools/call shape
-      local payload = vim.json.encode({
-        jsonrpc = "2.0",
-        id = 1,
-        method = "tools/call",
-        params = {
-          name = "openDiff",
-          arguments = {
-            old_file_path = "/tmp/old.txt",
-            new_file_path = "/tmp/new.txt",
-            new_file_contents = "new standard content",
-            tab_name = "test-tab",
-            _auto_agents_name = "tester-standard"
-          }
-        }
-      })
-      
-      local post_client = vim.loop.new_tcp()
-      post_client:connect("127.0.0.1", port, function(post_err)
-        if post_err then return end
-        local request = "POST /message HTTP/1.1\r\n" ..
-                        "Host: 127.0.0.1\r\n" ..
-                        "Content-Length: " .. #payload .. "\r\n" ..
-                        "\r\n" .. payload
-        post_client:write(request, function()
-          post_client:close()
-        end)
-      end)
-    end
-
-    if data:find("FILE_SAVED") or data:find("result") then
-      tool_call_received = true
-    end
-  end)
-end)
-
--- Wait for async operations
-local timeout = 2000
-local start_time = vim.loop.now()
-while (not sse_connected or #queue.get_pending() == 0) and (vim.loop.now() - start_time < timeout) do
-  vim.wait(100)
+  queue.clear()
+  package.loaded["auto-agents.diff.ui"] = saved_ui
 end
-
-ok("SSE connected", sse_connected)
-ok("diff enqueued via standard tools/call", #queue.get_pending() == 1)
-ok("queued item has correct content", queue.get_pending()[1].new_contents == "new standard content")
-
--- Cleanup
-client:close()
-mcp.stop()
-
-print("\n[4] Streamable HTTP /mcp (Unified Endpoint)")
-port = mcp.start()
-local mcp_received = false
-local mcp_post_res = nil
-
-local client_mcp = vim.loop.new_tcp()
-client_mcp:connect("127.0.0.1", port, function(err)
-  if err then return end
-  -- Test GET /mcp (SSE)
-  client_mcp:write("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-  client_mcp:read_start(function(_, data)
-    if data and data:find("notifications/initialized") then
-      mcp_received = true
-      -- Test POST /mcp (Request-Response)
-      local payload = vim.json.encode({
-        jsonrpc = "2.0",
-        id = "mcp-post-test",
-        method = "tools/list"
-      })
-      local post = vim.loop.new_tcp()
-      post:connect("127.0.0.1", port, function()
-        post:write("POST /mcp HTTP/1.1\r\nContent-Length: " .. #payload .. "\r\n\r\n" .. payload)
-        post:read_start(function(_, post_data)
-          if post_data and post_data:find("tools") then
-            mcp_post_res = post_data
-          end
-        end)
-      end)
-    end
-  end)
-end)
-
-local start_mcp = vim.loop.now()
-while (not mcp_received or not mcp_post_res) and (vim.loop.now() - start_mcp < 2000) do
-  vim.wait(100)
-end
-
-ok("Streamable HTTP GET /mcp (SSE) successful", mcp_received)
-ok("Streamable HTTP POST /mcp (Request-Response) successful", mcp_post_res ~= nil)
-client_mcp:close()
-mcp.stop()
 
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
