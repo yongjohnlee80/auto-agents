@@ -76,7 +76,21 @@ local function resolve_slug(arg)
       "no such directory: " .. arg .. " — pass an existing repo path, or the "
       .. "slug directly if the repo is not on this machine")
   end
-  local okr, slug = pcall(store.remote_slug, arg)
+  -- Resolve the COMMON DIR first. `remote_slug` takes a git-dir, not a
+  -- worktree: handed a worktree path it used it as `--git-dir`, silently keyed
+  -- off the wrong thing, and `review.list` answered `count = 0` against a store
+  -- that had the review in it. A worktree and its repo must resolve to the same
+  -- slug or the mailbox reads a different store than the panel writes.
+  local common = arg
+  local res = vim.system({ "git", "-C", arg, "rev-parse", "--git-common-dir" }, {}):wait()
+  if res.code == 0 then
+    local out = vim.trim(res.stdout or "")
+    if out ~= "" then
+      common = out:match("^/") and out or (arg .. "/" .. out)
+      common = vim.fs and vim.fs.normalize(common) or common
+    end
+  end
+  local okr, slug = pcall(store.remote_slug, common)
   if okr and type(slug) == "string" and slug ~= "" then return slug, nil end
   return nil, err_response("invalid_args",
     "could not resolve a slug for " .. arg .. " — pass the slug directly")
@@ -115,25 +129,41 @@ local function h_create(args)
       "cannot resolve $KB_ROOT for the review document")
   end
 
-  local doc = review.new({
-    slug = slug, url = args.url, owner = args.owner, name = args.name,
-    commit = args.commit, base = args.base, reviewer = reviewer,
-    verdict = args.verdict, summary = args.summary,
-  })
-  doc.reviewer_slug = rslug
-  doc.comments = args.comments or {}
+  -- The SHARED envelope constructor (ADR-0067 §2.4, criterion 11): the panel
+  -- and the mailbox must produce equivalent artifacts, which they cannot while
+  -- each builds its own. It also DERIVES repo identity from the slug, which is
+  -- what makes this verb's documented minimal call — repo/commit/reviewer/
+  -- markdown, no url or owner — actually valid.
+  local doc = review.from_draft(
+    { slug = slug, url = args.url, owner = args.owner, name = args.name,
+      reviewer_slug = rslug },
+    args.commit, reviewer,
+    { base = args.base, verdict = args.verdict, summary = args.summary,
+      comments = args.comments or {} })
 
-  local topic = tostring(args.topic or "review")
-    :lower():gsub("[^a-z0-9_-]+", "-"):gsub("%-+", "-"):gsub("^%-", ""):gsub("%-$", "")
-  if topic == "" then topic = "review" end
-  local date = os.date("!%Y-%m-%d")
-
-  local res, err = review.save_pair(slug, doc, function(rev)
-    local dir = ("%s/agents/%s/reviews"):format(kb, rslug)
-    return args.markdown,
-      ("%s/%s-%s-r%d-review.md"):format(dir, date, topic, rev)
-  end)
+  -- The STORE owns the path; we supply the body and a topic.
+  local res, err = review.save_pair(slug, doc, args.markdown,
+    { kb_root = kb, topic = args.topic })
   if not res then return err_response("internal_error", tostring(err)) end
+
+  -- ADR-0067 §2.3: an open diff view must reload, or an agent's review lands on
+  -- disk and the human sees it only after reopening.
+  -- pcall'd because auto-core is a soft dependency here — but a FAILURE IS
+  -- LOGGED rather than swallowed. A silently-dropped publish is invisible: the
+  -- write succeeds, the verb reports success, and the only symptom is a view
+  -- that quietly does not refresh.
+  local ok_pub, puberr = pcall(function()
+    require("auto-core").events.publish("core.review:changed", {
+      slug = slug, commit = args.commit, revision = res.revision,
+      json_path = res.json_path, md_path = res.md_path,
+    })
+  end)
+  if not ok_pub then
+    require("auto-agents.log").warn("mailbox.review",
+      "core.review:changed not published — an open view will not refresh: "
+      .. tostring(puberr))
+  end
+
   return ok_response({
     json_path = res.json_path, md_path = res.md_path, revision = res.revision,
   })
