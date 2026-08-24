@@ -48,11 +48,15 @@ do
   local fake = { commands = { register = function(name, spec)
     handlers[name] = spec.handler; return true
   end } }
-  package.loaded["auto-core"] = package.loaded["auto-core"] or {}
-  local real = package.loaded["auto-core"].mailbox
-  package.loaded["auto-core"].mailbox = fake
+  -- Require the REAL auto-core first. `package.loaded[...] or {}` created an
+  -- empty stub when it had not been loaded yet, which then shadowed the real
+  -- module for the rest of the run — `.events` was nil and the event assertion
+  -- could not have worked whatever production did.
+  local core = require("auto-core")
+  local real = core.mailbox
+  core.mailbox = fake
   local out = rc.register_all()
-  package.loaded["auto-core"].mailbox = real
+  core.mailbox = real
   ok("all four verbs register", #out.registered == 4 and #out.skipped == 0,
     vim.inspect(out))
   ok("and the roster matches what registered",
@@ -63,6 +67,17 @@ local SHA = string.rep("e", 40)
 local SLUG = "own__repo"
 
 io.stdout:write("\n[1] review.create writes a PAIR\n")
+-- Capture the refresh event: an agent's review must reach an OPEN view, or the
+-- human sees it only after reopening.
+local published = {}
+do
+  local core = require("auto-core")
+  local real = core.events.publish
+  core.events.publish = function(topic, payload)
+    if topic == "core.review:changed" then published[#published + 1] = payload end
+    return real(topic, payload)
+  end
+end
 local created = handlers["review.create"]({
   repo = SLUG, commit = SHA, reviewer = "Lector", topic = "sessions",
   markdown = "# Review\n\nprose the JSON cannot carry",
@@ -83,6 +98,27 @@ ok("*** and the JSON cross-references it ***",
 ok("*** a DISPLAY name became a safe path segment ***",
   created.value.md_path:find("/agents/lector/reviews/", 1, true) ~= nil,
   created.value.md_path)
+ok("*** the document name carries the repo component ***",
+  created.value.md_path:find("-repo-", 1, true) ~= nil, created.value.md_path)
+ok("*** a successful create publishes core.review:changed ***",
+  #published == 1 and published[1].revision == 1, vim.inspect(published))
+
+io.stdout:write("\n[1b] the ADVERTISED minimal call works\n")
+do
+  -- repo/commit/reviewer/markdown only — no url, owner or name. This failed
+  -- validation only AFTER reserving a revision and writing a Markdown, because
+  -- identity was never derived from the slug.
+  local SHA2 = string.rep("b", 40)
+  local before = review.max_recorded_revision(SLUG, SHA2)
+  local minimal = handlers["review.create"]({
+    repo = SLUG, commit = SHA2, reviewer = "Lector", markdown = "# minimal" })
+  ok("*** the documented minimal args succeed ***", minimal.ok == true,
+    vim.inspect(minimal))
+  ok("identity was derived from the slug",
+    (review.load(SLUG, SHA2, 1) or {}).repo.owner == "own",
+    vim.inspect((review.load(SLUG, SHA2, 1) or {}).repo))
+  ok("and it did not burn a revision on the way", before == 0)
+end
 
 io.stdout:write("\n[2] an agent cannot produce an UNPAIRED review\n")
 do
