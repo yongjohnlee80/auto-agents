@@ -495,6 +495,17 @@ function M.setup(opts)
     if ok_todos then
       todos_mod.register_all()
       todos_mod.install_assignee_routing()
+      -- ADR-0067 A3: the review.* surface, so an agent writes a review through
+      -- the same validator and the same paired writer a human does. Registered
+      -- beside todos.* because both are thin wrappers over a store that lives
+      -- outside auto-agents; a failure to register costs the verbs, not setup.
+      local ok_rev, rev_mod = pcall(require, "auto-agents.mailbox.review_commands")
+      if ok_rev then
+        rev_mod.register_all()
+      else
+        require("auto-agents.log").warn("init",
+          "review.* mailbox surface unavailable: " .. tostring(rev_mod))
+      end
     else
       require("auto-agents.log").warn("init",
         "todos.* mailbox surface unavailable: " .. tostring(todos_mod))
