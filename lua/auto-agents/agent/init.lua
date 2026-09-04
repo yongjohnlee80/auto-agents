@@ -29,6 +29,16 @@ function M.adapter_for(kind)
   return require(modname)
 end
 
+local CANONICAL_COMMANDS = {
+  claude      = { { "claude" } },
+  codex       = { { "codex" } },
+  antigravity = { { "agy" } },
+  junie       = { { "junie" } },
+  goose       = { { "goose", "session" }, { "goose" } },
+  opencode    = { { "opencode" } },
+  copilot     = { { "gh", "copilot" }, { "copilot" } },
+}
+
 local CANONICAL_BIN = {
   claude      = "claude",
   codex       = "codex",
@@ -39,16 +49,78 @@ local CANONICAL_BIN = {
   copilot     = "copilot",
 }
 
+---Primary canonical command argv for an agent kind.
+---@param kind string|nil
+---@return string[]|nil
+function M.canonical_cmd(kind)
+  local seqs = CANONICAL_COMMANDS[kind]
+  if seqs and seqs[1] then
+    return vim.list_slice(seqs[1])
+  end
+  return nil
+end
+
 ---Canonical binary name for an agent kind, if one is fixed.
+---Retained for backward compatibility; prefer canonical_cmd.
 ---@param kind string|nil
 ---@return string|nil
 function M.canonical_bin(kind)
   return CANONICAL_BIN[kind]
 end
 
+---Check if `cmd` matches a canonical command candidate sequence.
+---Token 1 matches by basename (:t); subsequent tokens match exact equality.
+---@param candidate string[]
+---@param cmd string[]
+---@return boolean
+local function matches_candidate(candidate, cmd)
+  if #cmd < #candidate then return false end
+  local b = vim.fn.fnamemodify(cmd[1], ":t")
+  if b ~= candidate[1] then return false end
+  for i = 2, #candidate do
+    if cmd[i] ~= candidate[i] then
+      return false
+    end
+  end
+  return true
+end
+
+---Check whether `cmd` matches any of the canonical command sequences for `kind`.
+---@param kind string|nil
+---@param cmd string[]|nil
+---@return boolean
+local function matches_kind_default(kind, cmd)
+  if not kind or type(cmd) ~= "table" or #cmd == 0 then return false end
+  local seqs = CANONICAL_COMMANDS[kind]
+  if not seqs then return false end
+  for _, candidate in ipairs(seqs) do
+    if matches_candidate(candidate, cmd) then
+      return true
+    end
+  end
+  return false
+end
+
+---Check whether a `cmd` is exactly equal to one of the bare adapter defaults for `kind`
+---(i.e. matches candidate sequence length exactly, with no additional flags or args).
+---@param kind string|nil
+---@param cmd string[]|nil
+---@return boolean
+local function is_bare_adapter_default(kind, cmd)
+  if not kind or type(cmd) ~= "table" or #cmd == 0 then return false end
+  local seqs = CANONICAL_COMMANDS[kind]
+  if not seqs then return false end
+  for _, candidate in ipairs(seqs) do
+    if #cmd == #candidate and matches_candidate(candidate, cmd) then
+      return true
+    end
+  end
+  return false
+end
+
 ---Check whether a cmd override matches a different known agent kind than `kind`.
 ---Detects stale cmd overrides left behind when an agent's kind changed
----(e.g. Wanda kind=antigravity with cmd=["junie"]).
+---(e.g. Wanda kind=antigravity with cmd=["junie"], or kind=claude with cmd=["gh", "copilot"]).
 ---@param kind string|nil
 ---@param cmd string[]|nil
 ---@return boolean is_mismatched
@@ -57,48 +129,36 @@ function M.is_mismatched_cmd(kind, cmd)
   if not kind or kind == "generic" or type(cmd) ~= "table" or #cmd == 0 then
     return false, nil
   end
-  local bin = cmd[1]
-  if type(bin) ~= "string" or bin == "" then return false, nil end
-  local b = vim.fn.fnamemodify(bin, ":t")
-  for other_kind, canon in pairs(CANONICAL_BIN) do
-    if other_kind ~= kind and b == canon then
+  if matches_kind_default(kind, cmd) then
+    return false, nil
+  end
+  for other_kind, _ in pairs(CANONICAL_COMMANDS) do
+    if other_kind ~= kind and matches_kind_default(other_kind, cmd) then
       return true, other_kind
     end
   end
   return false, nil
 end
 
----Check whether a path argument is a leaked auto-agents runtime permission grant
----(e.g. auto-agents mailbox or auto-agents managed KB directory).
----Legitimate user-configured paths (e.g. /opt/shared-tools) return false.
+---Check whether a path argument is an auto-agents generated runtime per-instance mailbox path
+---(e.g. `<workspace>/.auto-agents/mailbox/<timestamp>-<instance>/<agent>`).
+---User-configured paths (including user-authored mailbox-shaped paths or active KB) return false.
 ---@param path string|nil
 ---@return boolean
 function M.is_leaked_runtime_grant_path(path)
   if type(path) ~= "string" or path == "" then return false end
-  -- 1. Auto-agents mailbox instances (.auto-agents/mailbox/... or .auto-agents-config/mailbox/...)
-  if path:find("%.auto%-agents/mailbox") or path:find("%.auto%-agents%-config/mailbox") then
+  if path:match("%.auto%-agents/mailbox/%d+%-%d+")
+    or path:match("%.auto%-agents%-config/mailbox/%d+%-%d+")
+  then
     return true
-  end
-  -- 2. Auto-agents managed KB root or subdirectories (.auto-agents/kb or .auto-agents-config/kb)
-  if path:find("%.auto%-agents/kb") or path:find("%.auto%-agents%-config/kb") then
-    return true
-  end
-  -- 3. Active configured KB root or subdirectories if auto-agents config is loaded
-  local aa_ok, aa = pcall(require, "auto-agents")
-  local cfg = aa_ok and aa.state and aa.state.config
-  if cfg and cfg.kb and type(cfg.kb.root) == "string" and cfg.kb.root ~= "" then
-    local root = cfg.kb.root
-    if path == root or path:sub(1, #root + 1) == root .. "/" then
-      return true
-    end
   end
   return false
 end
 
----Strip leaked runtime permission flags (e.g. `--add-dir <path>` where `<path>` is a
----generated auto-agents mailbox or KB path) from a cmd table.
----Legitimate user-configured `--add-dir` arguments (e.g. `--add-dir /opt/shared-tools`) are preserved.
----Returns a new list without stale flag pairs, or nil if the resulting list is empty.
+---Strip leaked runtime permission flags (e.g. `--add-dir <path>` where `<path>` is an
+---auto-agents generated runtime instance mailbox path) from a cmd table.
+---User-configured `--add-dir` arguments (including active KB and user mailbox paths) are preserved.
+---Returns a new list without leaked flag pairs, or nil if the resulting list is empty.
 ---@param cmd string[]|nil
 ---@return string[]|nil
 function M.strip_permission_flags(cmd)
@@ -121,37 +181,33 @@ function M.strip_permission_flags(cmd)
   return out
 end
 
----Sanitize an agent's cmd override:
----1. Strips leaked runtime permission flags (`--add-dir <dir>`).
----2. If `cmd` is mismatched cross-kind (e.g. kind=antigravity with cmd=[junie]),
----   clears it to nil and logs a warning.
----3. If `cmd` after stripping matches the adapter's bare default (e.g. ["claude"] for claude),
----   clears it to nil so the adapter generates argv cleanly.
+---Sanitize an agent's cmd override on config load or write:
+---1. If `cmd` is mismatched cross-kind (e.g. kind=antigravity with cmd=[junie],
+---   or kind=claude with cmd=[gh, copilot]), clears it to nil and logs a warning.
+---2. If `cmd` matches the adapter's bare default (e.g. ["claude"] for claude,
+---   ["gh", "copilot"] for copilot, ["agy"] for antigravity), clears it to nil
+---   so the adapter generates argv cleanly.
+---3. Preserves all other user overrides verbatim (including user-configured --add-dir).
 ---@param kind string|nil
 ---@param cmd string[]|nil
 ---@param agent_name string|nil
 ---@return string[]|nil sanitized_cmd
 function M.sanitize_cmd(kind, cmd, agent_name)
   if type(cmd) ~= "table" or #cmd == 0 then return nil end
-  local cleaned = M.strip_permission_flags(cmd)
-  if not cleaned then return nil end
 
-  local mismatched, other_kind = M.is_mismatched_cmd(kind, cleaned)
+  local mismatched, other_kind = M.is_mismatched_cmd(kind, cmd)
   if mismatched then
     require("auto-agents.log").warn("agent",
       string.format("clearing stale cmd override '%s' for agent '%s' (kind=%s != %s)",
-        cleaned[1] or "?", agent_name or "?", tostring(kind), tostring(other_kind)))
+        table.concat(cmd, " "), agent_name or "?", tostring(kind), tostring(other_kind)))
     return nil
   end
 
-  if #cleaned == 1 and kind and CANONICAL_BIN[kind] then
-    local b = vim.fn.fnamemodify(cleaned[1], ":t")
-    if b == CANONICAL_BIN[kind] then
-      return nil
-    end
+  if is_bare_adapter_default(kind, cmd) then
+    return nil
   end
 
-  return cleaned
+  return vim.list_slice(cmd)
 end
 
 ---Resolve the command argv for a kind+spec pair. Always returns a shallow copy

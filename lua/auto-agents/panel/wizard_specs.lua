@@ -153,7 +153,7 @@ function M.agent(mode, slot)
       prompt = "cmd (override binary + flags)",
       default = function(values)
         if existing and existing.cmd and existing.kind == values.kind then
-          return default("cmd", "")
+          return table.concat(existing.cmd, " ")
         end
         return ""
       end,

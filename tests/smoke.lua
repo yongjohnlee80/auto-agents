@@ -2644,7 +2644,18 @@ do
 
   pcall(vim.fn.delete, tmp_kb, "rf")
 
-  -- 29c. agent.is_mismatched_cmd, is_leaked_runtime_grant_path, strip_permission_flags, and sanitize_cmd
+  -- 29c. agent.canonical_cmd, is_mismatched_cmd, and sanitize_cmd
+  ok("29c: canonical_cmd returns multi-token default for copilot",
+    vim.deep_equal(agent.canonical_cmd("copilot"), { "gh", "copilot" }))
+  ok("29c: canonical_cmd returns multi-token default for goose",
+    vim.deep_equal(agent.canonical_cmd("goose"), { "goose", "session" }))
+  ok("29c: canonical_cmd returns single-token default for antigravity",
+    vim.deep_equal(agent.canonical_cmd("antigravity"), { "agy" }))
+  ok("29c: canonical_cmd returns single-token default for claude",
+    vim.deep_equal(agent.canonical_cmd("claude"), { "claude" }))
+  ok("29c: canonical_cmd returns nil for generic",
+    agent.canonical_cmd("generic") == nil)
+
   local is_mis, mis_kind = agent.is_mismatched_cmd("antigravity", { "junie" })
   ok("29c: is_mismatched_cmd detects antigravity with junie",
     is_mis == true and mis_kind == "junie")
@@ -2656,68 +2667,104 @@ do
   local is_mis_gen, _ = agent.is_mismatched_cmd("generic", { "junie" })
   ok("29c: is_mismatched_cmd permits generic kind with any binary", is_mis_gen == false)
 
-  -- Provenance check: distinguish leaked auto-agents paths from user paths
-  ok("29c: is_leaked_runtime_grant_path detects auto-agents mailbox path",
+  -- Must-Fix 2: Copilot multi-token command cross-kind mismatch detection
+  local mis_copilot, mis_copilot_kind = agent.is_mismatched_cmd("claude", { "gh", "copilot" })
+  ok("29c: is_mismatched_cmd detects claude with copilot argv sequence ['gh', 'copilot']",
+    mis_copilot == true and mis_copilot_kind == "copilot")
+  local mis_copilot_path, _ = agent.is_mismatched_cmd("claude", { "/usr/bin/gh", "copilot" })
+  ok("29c: is_mismatched_cmd detects claude with full path ['/usr/bin/gh', 'copilot']",
+    mis_copilot_path == true)
+  local mis_copilot_single, _ = agent.is_mismatched_cmd("claude", { "copilot" })
+  ok("29c: is_mismatched_cmd detects claude with bare ['copilot']",
+    mis_copilot_single == true)
+  local mis_copilot_sub, _ = agent.is_mismatched_cmd("claude", { "gh", "copilot", "suggest" })
+  ok("29c: is_mismatched_cmd detects claude with copilot subcommand ['gh', 'copilot', 'suggest']",
+    mis_copilot_sub == true)
+  local copilot_own, _ = agent.is_mismatched_cmd("copilot", { "gh", "copilot" })
+  ok("29c: is_mismatched_cmd permits copilot with own default sequence ['gh', 'copilot']",
+    copilot_own == false)
+  local copilot_own_sub, _ = agent.is_mismatched_cmd("copilot", { "gh", "copilot", "suggest" })
+  ok("29c: is_mismatched_cmd permits copilot with custom subcommand ['gh', 'copilot', 'suggest']",
+    copilot_own_sub == false)
+  local copilot_mis_claude, mis_claude_kind = agent.is_mismatched_cmd("copilot", { "claude" })
+  ok("29c: is_mismatched_cmd detects copilot with claude",
+    copilot_mis_claude == true and mis_claude_kind == "claude")
+
+  -- Provenance check: distinguish generated auto-agents instance mailbox paths from user paths
+  ok("29c: is_leaked_runtime_grant_path detects auto-agents generated instance mailbox path",
     agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456/wanda") == true)
-  ok("29c: is_leaked_runtime_grant_path detects auto-agents config mailbox path",
-    agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/mailbox/123/juliet") == true)
-  ok("29c: is_leaked_runtime_grant_path detects auto-agents kb path",
-    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/kb") == true)
+  ok("29c: is_leaked_runtime_grant_path detects auto-agents config generated mailbox path",
+    agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/mailbox/123-456/juliet") == true)
+  ok("29c: is_leaked_runtime_grant_path preserves user mailbox-shaped path",
+    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/custom-box") == false)
+  ok("29c: is_leaked_runtime_grant_path preserves active KB root path",
+    agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/kb") == false)
   ok("29c: is_leaked_runtime_grant_path preserves user directory /opt/shared-tools",
     agent.is_leaked_runtime_grant_path("/opt/shared-tools") == false)
   ok("29c: is_leaked_runtime_grant_path preserves user directory /home/johno/custom-libs",
     agent.is_leaked_runtime_grant_path("/home/johno/custom-libs") == false)
 
-  -- strip_permission_flags only strips leaked runtime grants; preserves user --add-dir
-  local leaked_mb = "/home/johno/proj/.auto-agents/mailbox/123/james-cook"
-  local leaked_kb = "/home/johno/proj/.auto-agents/kb"
-  local stripped = agent.strip_permission_flags({ "claude", "--add-dir", leaked_mb, "--add-dir", leaked_kb })
-  ok("29c: strip_permission_flags strips leaked runtime grant pairs",
+  -- strip_permission_flags helper preserves user paths, strips only generated instance mailboxes
+  local leaked_instance_mb = "/home/johno/proj/.auto-agents/mailbox/1788481884-642128/james-cook"
+  local stripped = agent.strip_permission_flags({ "claude", "--add-dir", leaked_instance_mb })
+  ok("29c: strip_permission_flags strips leaked generated instance mailbox",
     vim.deep_equal(stripped, { "claude" }), vim.inspect(stripped))
 
-  local user_add_dir = { "agy", "--add-dir", "/opt/shared-tools" }
-  local user_preserved = agent.strip_permission_flags(user_add_dir)
-  ok("29c: strip_permission_flags PRESERVES user-configured --add-dir /opt/shared-tools",
-    vim.deep_equal(user_preserved, user_add_dir), vim.inspect(user_preserved))
+  -- Must-Fix 1 positive controls: sanitize_cmd preserves user-authored active-KB, mailbox-shaped, and custom paths
+  local active_kb_path = "/home/johno/.config/nvim/.auto-agents-config/kb"
+  local user_mb_path = "/home/johno/proj/.auto-agents/mailbox/custom-box"
 
-  local user_custom_add_dir = { "agy", "--custom", "--add-dir", "/opt/shared-tools" }
-  local user_custom_preserved = agent.strip_permission_flags(user_custom_add_dir)
-  ok("29c: strip_permission_flags PRESERVES user-configured flags and --add-dir",
-    vim.deep_equal(user_custom_preserved, user_custom_add_dir))
+  local sanitized_active_kb = agent.sanitize_cmd("antigravity", { "agy", "--add-dir", active_kb_path }, "wanda")
+  ok("29c: sanitize_cmd PRESERVES user-authored active-KB --add-dir",
+    vim.deep_equal(sanitized_active_kb, { "agy", "--add-dir", active_kb_path }),
+    vim.inspect(sanitized_active_kb))
 
-  local mixed = { "claude", "--verbose", "--add-dir", "/opt/shared-tools", "--add-dir", leaked_mb }
-  local mixed_stripped = agent.strip_permission_flags(mixed)
-  ok("29c: strip_permission_flags strips leaked grant while keeping user --add-dir",
-    vim.deep_equal(mixed_stripped, { "claude", "--verbose", "--add-dir", "/opt/shared-tools" }),
-    vim.inspect(mixed_stripped))
+  local sanitized_user_mb = agent.sanitize_cmd("antigravity", { "agy", "--add-dir", user_mb_path }, "wanda")
+  ok("29c: sanitize_cmd PRESERVES user-authored mailbox-shaped --add-dir",
+    vim.deep_equal(sanitized_user_mb, { "agy", "--add-dir", user_mb_path }),
+    vim.inspect(sanitized_user_mb))
 
-  local stripped_empty = agent.strip_permission_flags({ "--add-dir", leaked_mb })
-  ok("29c: strip_permission_flags returns nil when empty after stripping",
-    stripped_empty == nil)
-
-  local sanitized_mismatched = agent.sanitize_cmd("antigravity", { "junie" }, "wanda")
-  ok("29c: sanitize_cmd clears cross-kind mismatched cmd to nil",
-    sanitized_mismatched == nil)
-  local sanitized_bare = agent.sanitize_cmd("claude", { "claude", "--add-dir", leaked_mb }, "jarvis")
-  ok("29c: sanitize_cmd clears stripped bare canonical binary to nil",
-    sanitized_bare == nil)
-  local sanitized_custom = agent.sanitize_cmd("claude", { "claude", "--verbose", "--add-dir", leaked_mb }, "jarvis")
-  ok("29c: sanitize_cmd retains custom flags after stripping leaked flags",
-    vim.deep_equal(sanitized_custom, { "claude", "--verbose" }), vim.inspect(sanitized_custom))
   local sanitized_user_dir = agent.sanitize_cmd("antigravity", { "agy", "--add-dir", "/opt/shared-tools" }, "wanda")
-  ok("29c: sanitize_cmd PRESERVES configured user --add-dir without other flags",
+  ok("29c: sanitize_cmd PRESERVES user-configured --add-dir /opt/shared-tools",
     vim.deep_equal(sanitized_user_dir, { "agy", "--add-dir", "/opt/shared-tools" }),
     vim.inspect(sanitized_user_dir))
+
   local sanitized_user_custom = agent.sanitize_cmd("antigravity", { "agy", "--custom", "--add-dir", "/opt/shared-tools" }, "wanda")
-  ok("29c: sanitize_cmd PRESERVES configured user --custom --add-dir",
+  ok("29c: sanitize_cmd PRESERVES user-configured flags and --add-dir",
     vim.deep_equal(sanitized_user_custom, { "agy", "--custom", "--add-dir", "/opt/shared-tools" }))
+
+  -- Cross-kind and bare defaults handling in sanitize_cmd
+  local sanitized_mismatched = agent.sanitize_cmd("antigravity", { "junie" }, "wanda")
+  ok("29c: sanitize_cmd clears cross-kind mismatched cmd (antigravity with junie) to nil",
+    sanitized_mismatched == nil)
+
+  local sanitized_copilot_mis = agent.sanitize_cmd("claude", { "gh", "copilot" }, "jarvis")
+  ok("29c: sanitize_cmd clears cross-kind mismatched cmd (claude with copilot ['gh', 'copilot']) to nil",
+    sanitized_copilot_mis == nil)
+
+  local sanitized_copilot_mis_sub = agent.sanitize_cmd("claude", { "gh", "copilot", "suggest" }, "jarvis")
+  ok("29c: sanitize_cmd clears cross-kind mismatched cmd (claude with copilot ['gh', 'copilot', 'suggest']) to nil",
+    sanitized_copilot_mis_sub == nil)
+
+  local sanitized_copilot_bare = agent.sanitize_cmd("copilot", { "gh", "copilot" }, "copilot")
+  ok("29c: sanitize_cmd clears bare canonical copilot sequence ['gh', 'copilot'] to nil",
+    sanitized_copilot_bare == nil)
+
+  local sanitized_copilot_custom = agent.sanitize_cmd("copilot", { "gh", "copilot", "suggest" }, "copilot")
+  ok("29c: sanitize_cmd PRESERVES custom copilot command ['gh', 'copilot', 'suggest']",
+    vim.deep_equal(sanitized_copilot_custom, { "gh", "copilot", "suggest" }))
+
+  local sanitized_bare_claude = agent.sanitize_cmd("claude", { "claude" }, "jarvis")
+  ok("29c: sanitize_cmd clears bare canonical claude binary to nil",
+    sanitized_bare_claude == nil)
+
   local sanitized_generic = agent.sanitize_cmd("generic", { "opencode", "--flag" }, "zen")
   ok("29c: sanitize_cmd retains custom command for generic kind",
     vim.deep_equal(sanitized_generic, { "opencode", "--flag" }))
 
   -- 29d. wizard_specs.agent("edit", slot) kind change handling
   aa.state.config.agents.bootstrap = {
-    { slot = 4, name = "wanda", kind = "junie", cmd = { "junie" }, model = "gpt-4" }
+    { slot = 4, name = "wanda", kind = "copilot", cmd = { "gh", "copilot" }, model = "gpt-4" }
   }
   local edit_spec = specs.agent("edit", 4)
   local cmd_step = nil
@@ -2726,21 +2773,21 @@ do
   end
   ok("29d: cmd step exists in agent edit spec", cmd_step ~= nil)
 
-  local def_changed = cmd_step.default({ kind = "antigravity" })
-  local ph_changed = cmd_step.placeholder({ kind = "antigravity" })
-  ok("29d: default returns empty string when kind changed", def_changed == "")
-  ok("29d: placeholder warns about kind change",
-    ph_changed:find("cleared: kind changed from junie", 1, true) ~= nil, ph_changed)
+  local def_changed = cmd_step.default({ kind = "claude" })
+  local ph_changed = cmd_step.placeholder({ kind = "claude" })
+  ok("29d: default returns empty string when kind changed from copilot to claude", def_changed == "")
+  ok("29d: placeholder warns about kind change from copilot",
+    ph_changed:find("cleared: kind changed from copilot", 1, true) ~= nil, ph_changed)
 
-  local def_same = cmd_step.default({ kind = "junie" })
-  local ph_same = cmd_step.placeholder({ kind = "junie" })
-  ok("29d: default preserves existing cmd when kind unchanged", def_same == "junie")
-  ok("29d: placeholder shows current cmd when kind unchanged", ph_same == "junie")
+  local def_same = cmd_step.default({ kind = "copilot" })
+  local ph_same = cmd_step.placeholder({ kind = "copilot" })
+  ok("29d: default preserves existing cmd when kind unchanged", def_same == "gh copilot")
+  ok("29d: placeholder shows current cmd when kind unchanged", ph_same == "gh copilot")
 
-  -- on_complete with kind change and blank cmd
+  -- on_complete with kind change from copilot to claude and blank cmd
   edit_spec.on_complete({
     slot = 4,
-    kind = "antigravity",
+    kind = "claude",
     name = "wanda",
     title = "Wanda",
     cmd = nil,
@@ -2749,27 +2796,12 @@ do
   for _, e in ipairs(aa.state.config.agents.bootstrap) do
     if e.slot == 4 then entry4 = e; break end
   end
-  ok("29d: on_complete clears cmd to nil on kind change when blank",
-    entry4 ~= nil and entry4.cmd == nil and entry4.kind == "antigravity")
+  ok("29d: on_complete clears cmd to nil on kind change from copilot to claude",
+    entry4 ~= nil and entry4.cmd == nil and entry4.kind == "claude")
   ok("29d: on_complete does not preserve stale model across kind change",
     entry4 ~= nil and entry4.model == nil)
 
-  -- on_complete with kind change and explicitly re-entered custom cmd
-  edit_spec.on_complete({
-    slot = 4,
-    kind = "antigravity",
-    name = "wanda",
-    title = "Wanda",
-    cmd = { "agy", "--custom" },
-  }, function(_) end)
-  entry4 = nil
-  for _, e in ipairs(aa.state.config.agents.bootstrap) do
-    if e.slot == 4 then entry4 = e; break end
-  end
-  ok("29d: on_complete preserves explicitly re-entered custom cmd on kind change",
-    entry4 ~= nil and vim.deep_equal(entry4.cmd, { "agy", "--custom" }))
-
-  -- 29e. config.store.normalize and write cleans leaked flags & mismatches while preserving user --add-dir
+  -- 29e. config.store.normalize and write: positive controls for active-KB and mailbox paths
   local toml_sample = [==[
 [project]
 cwd = "/tmp/test"
@@ -2777,14 +2809,14 @@ cwd = "/tmp/test"
 [[agents]]
 slot = 1
 kind = "claude"
-name = "jarvis"
-cmd = ["claude", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/jarvis", "--add-dir", "/tmp/repo/.auto-agents/kb"]
+name = "copilot-mismatch"
+cmd = ["gh", "copilot"]
 
 [[agents]]
 slot = 2
 kind = "antigravity"
 name = "wanda"
-cmd = ["junie", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/stale"]
+cmd = ["junie"]
 
 [[agents]]
 slot = 3
@@ -2794,71 +2826,176 @@ cmd = ["opencode", "--flag"]
 
 [[agents]]
 slot = 4
-kind = "claude"
-name = "custom-claude"
-cmd = ["claude", "--verbose", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/c"]
+kind = "copilot"
+name = "copilot-custom"
+cmd = ["gh", "copilot", "suggest"]
 
 [[agents]]
 slot = 5
 kind = "antigravity"
-name = "wanda-custom-dir"
-cmd = ["agy", "--add-dir", "/opt/shared-tools"]
+name = "wanda-active-kb"
+cmd = ["agy", "--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb"]
 
 [[agents]]
 slot = 6
 kind = "antigravity"
-name = "wanda-custom-flags-dir"
-cmd = ["agy", "--custom", "--add-dir", "/opt/shared-tools"]
+name = "wanda-user-mailbox"
+cmd = ["agy", "--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"]
+
+[[agents]]
+slot = 7
+kind = "antigravity"
+name = "wanda-custom-dir"
+cmd = ["agy", "--add-dir", "/opt/shared-tools"]
 ]==]
   local normalized = store._normalize(toml_sample)
-  ok("29e: normalize parses all 6 agents", #normalized.agents == 6)
+  ok("29e: normalize parses all 7 agents", #normalized.agents == 7)
   local a1 = normalized.agents[1]
-  ok("29e: normalize clears stripped bare canonical binary to nil (slot 1)",
-    a1.name == "jarvis" and a1.cmd == nil)
+  ok("29e: normalize clears cross-kind copilot cmd for claude (slot 1)",
+    a1.name == "copilot-mismatch" and a1.cmd == nil)
   local a2 = normalized.agents[2]
-  ok("29e: normalize clears cross-kind mismatched cmd to nil (slot 2)",
+  ok("29e: normalize clears cross-kind junie cmd for antigravity (slot 2)",
     a2.name == "wanda" and a2.cmd == nil)
   local a3 = normalized.agents[3]
   ok("29e: normalize retains generic custom cmd (slot 3)",
     a3.name == "zen" and vim.deep_equal(a3.cmd, { "opencode", "--flag" }))
   local a4 = normalized.agents[4]
-  ok("29e: normalize retains custom flags while stripping leaked flags (slot 4)",
-    a4.name == "custom-claude" and vim.deep_equal(a4.cmd, { "claude", "--verbose" }))
+  ok("29e: normalize retains copilot custom subcommand (slot 4)",
+    a4.name == "copilot-custom" and vim.deep_equal(a4.cmd, { "gh", "copilot", "suggest" }))
   local a5 = normalized.agents[5]
-  ok("29e: normalize PRESERVES user-configured --add-dir /opt/shared-tools (slot 5)",
-    a5.name == "wanda-custom-dir" and vim.deep_equal(a5.cmd, { "agy", "--add-dir", "/opt/shared-tools" }))
+  ok("29e: normalize PRESERVES user-authored active-KB --add-dir (slot 5)",
+    a5.name == "wanda-active-kb"
+      and vim.deep_equal(a5.cmd, { "agy", "--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb" }))
   local a6 = normalized.agents[6]
-  ok("29e: normalize PRESERVES user-configured flags and --add-dir (slot 6)",
-    a6.name == "wanda-custom-flags-dir"
-      and vim.deep_equal(a6.cmd, { "agy", "--custom", "--add-dir", "/opt/shared-tools" }))
+  ok("29e: normalize PRESERVES user-authored mailbox-shaped --add-dir (slot 6)",
+    a6.name == "wanda-user-mailbox"
+      and vim.deep_equal(a6.cmd, { "agy", "--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box" }))
+  local a7 = normalized.agents[7]
+  ok("29e: normalize PRESERVES user-configured --add-dir /opt/shared-tools (slot 7)",
+    a7.name == "wanda-custom-dir" and vim.deep_equal(a7.cmd, { "agy", "--add-dir", "/opt/shared-tools" }))
 
-  -- store.write sanitization roundtrip: strips leaked flags, preserves user --add-dir
+  -- store.write positive load-and-write controls
   local tmp_toml = vim.fn.tempname() .. "_store29.toml"
   local write_ok, write_err = store.write(tmp_toml, {
     project = { cwd = "/tmp/test" },
     agents = {
       { slot = 1, kind = "antigravity", name = "wanda", cmd = { "junie" } },
-      { slot = 2, kind = "claude", name = "jarvis", cmd = { "claude", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/jarvis" } },
-      { slot = 3, kind = "claude", name = "custom", cmd = { "claude", "--custom", "--add-dir", "/tmp/repo/.auto-agents/kb" } },
-      { slot = 4, kind = "antigravity", name = "user-override", cmd = { "agy", "--add-dir", "/opt/shared-tools" } },
-      { slot = 5, kind = "antigravity", name = "user-custom-override", cmd = { "agy", "--custom", "--add-dir", "/opt/shared-tools" } },
+      { slot = 2, kind = "claude", name = "copilot-stale", cmd = { "gh", "copilot" } },
+      { slot = 3, kind = "copilot", name = "copilot-bare", cmd = { "gh", "copilot" } },
+      { slot = 4, kind = "copilot", name = "copilot-custom", cmd = { "gh", "copilot", "suggest" } },
+      { slot = 5, kind = "antigravity", name = "user-active-kb", cmd = { "agy", "--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb" } },
+      { slot = 6, kind = "antigravity", name = "user-mailbox-box", cmd = { "agy", "--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box" } },
+      { slot = 7, kind = "antigravity", name = "user-override", cmd = { "agy", "--add-dir", "/opt/shared-tools" } },
     }
   })
   ok("29e: store.write succeeds", write_ok == true, tostring(write_err))
   local f_read = io.open(tmp_toml, "r")
   local saved_raw = f_read and f_read:read("*a") or ""
   if f_read then f_read:close() end
-  ok("29e: saved TOML does NOT contain leaked mailbox path",
-    saved_raw:find(".auto-agents/mailbox", 1, true) == nil, saved_raw)
-  ok("29e: saved TOML does NOT contain leaked kb path",
-    saved_raw:find(".auto-agents/kb", 1, true) == nil, saved_raw)
+
   ok("29e: saved TOML does NOT contain mismatched junie command for antigravity",
     saved_raw:find('"junie"', 1, true) == nil, saved_raw)
+  ok("29e: saved TOML does NOT contain mismatched copilot command for claude",
+    saved_raw:find('"gh", "copilot"', 1, true) == nil or saved_raw:find('copilot%-stale'), saved_raw)
+  ok("29e: saved TOML PRESERVES user-authored active-KB --add-dir",
+    saved_raw:find('"--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb"', 1, true) ~= nil, saved_raw)
+  ok("29e: saved TOML PRESERVES user-authored mailbox-shaped --add-dir",
+    saved_raw:find('"--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"', 1, true) ~= nil, saved_raw)
   ok("29e: saved TOML PRESERVES user-configured --add-dir /opt/shared-tools",
     saved_raw:find('"--add-dir", "/opt/shared-tools"', 1, true) ~= nil, saved_raw)
-  ok("29e: saved TOML preserves legitimate --custom flag",
-    saved_raw:find("--custom", 1, true) ~= nil, saved_raw)
+  ok("29e: saved TOML PRESERVES custom copilot subcommand",
+    saved_raw:find('"suggest"', 1, true) ~= nil, saved_raw)
   pcall(vim.fn.delete, tmp_toml)
+
+  -- 29f. Explicit previewable migration (:AutoAgentsMigrateCmd / migrate_cmd.lua)
+  local migrate_cmd = require("auto-agents.config.migrate_cmd")
+
+  ok("29f: migrate_cmd.is_generated_instance_mailbox_path identifies generated instance mailbox",
+    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/1788481884-642128/wanda") == true)
+  ok("29f: migrate_cmd.is_generated_instance_mailbox_path identifies config generated mailbox",
+    migrate_cmd.is_generated_instance_mailbox_path("/root/.auto-agents-config/mailbox/999-888/juliet") == true)
+  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves user mailbox directory",
+    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/custom-box") == false)
+  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves active KB directory",
+    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents-config/kb") == false)
+
+  local generated_mb = "/proj/.auto-agents/mailbox/1788481884-642128/wanda"
+  local stripped_res, stripped_ch = migrate_cmd.strip_generated_runtime_flags({
+    "agy", "--verbose", "--add-dir", generated_mb, "--add-dir", "/opt/shared-tools"
+  })
+  ok("29f: strip_generated_runtime_flags strips generated instance while keeping user path",
+    stripped_ch == true and vim.deep_equal(stripped_res, { "agy", "--verbose", "--add-dir", "/opt/shared-tools" }))
+
+  -- Dry-run vs apply migration on a temp TOML file
+  local mig_tmp = vim.fn.tempname() .. "_mig29.toml"
+  local mig_f = io.open(mig_tmp, "w")
+  if mig_f then
+    mig_f:write([==[
+[project]
+cwd = "/tmp/test"
+
+[[agents]]
+slot = 1
+kind = "antigravity"
+name = "wanda-legacy"
+cmd = ["junie", "--add-dir", "/proj/.auto-agents/mailbox/123-456/wanda"]
+
+[[agents]]
+slot = 2
+kind = "claude"
+name = "jarvis-legacy"
+cmd = ["claude", "--add-dir", "/proj/.auto-agents/mailbox/123-456/jarvis"]
+
+[[agents]]
+slot = 3
+kind = "antigravity"
+name = "wanda-authored-kb"
+cmd = ["agy", "--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb"]
+
+[[agents]]
+slot = 4
+kind = "antigravity"
+name = "wanda-authored-mb"
+cmd = ["agy", "--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"]
+]==])
+    mig_f:close()
+  end
+
+  -- Dry run
+  local dry_summary = migrate_cmd.migrate({ apply = false, config_path = mig_tmp })
+  ok("29f: migrate dry-run identifies 2 legacy changes", #dry_summary.changes == 2)
+  ok("29f: migrate dry-run does NOT flag authored active-KB or mailbox-shaped paths",
+    #dry_summary.changes == 2
+      and dry_summary.changes[1].slot == 1
+      and dry_summary.changes[2].slot == 2)
+
+  local dry_read = io.open(mig_tmp, "r")
+  local dry_content = dry_read and dry_read:read("*a") or ""
+  if dry_read then dry_read:close() end
+  ok("29f: migrate dry-run does NOT modify file on disk",
+    dry_content:find("123-456", 1, true) ~= nil)
+
+  local lines_formatted = migrate_cmd.format_summary(dry_summary, function(_) end)
+  ok("29f: format_summary generates report lines", #lines_formatted > 0)
+
+  -- Apply
+  local apply_summary = migrate_cmd.migrate({ apply = true, config_path = mig_tmp })
+  ok("29f: migrate apply succeeds", #apply_summary.changes == 2 and #apply_summary.errors == 0)
+
+  local applied_read = io.open(mig_tmp, "r")
+  local applied_content = applied_read and applied_read:read("*a") or ""
+  if applied_read then applied_read:close() end
+
+  ok("29f: migrate apply stripped leaked instance mailbox from disk",
+    applied_content:find("123-456", 1, true) == nil)
+  ok("29f: migrate apply cleared mismatched junie cmd on wanda-legacy",
+    applied_content:find('"junie"', 1, true) == nil)
+  ok("29f: migrate apply PRESERVED user-authored active-KB --add-dir",
+    applied_content:find('"--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb"', 1, true) ~= nil)
+  ok("29f: migrate apply PRESERVES user-authored mailbox-shaped --add-dir",
+    applied_content:find('"--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"', 1, true) ~= nil)
+
+  pcall(vim.fn.delete, mig_tmp)
 
   -- restore
   aa.state.config.agents.bootstrap = saved_bootstrap
