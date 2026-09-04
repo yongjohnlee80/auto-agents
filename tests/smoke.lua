@@ -2644,7 +2644,7 @@ do
 
   pcall(vim.fn.delete, tmp_kb, "rf")
 
-  -- 29c. agent.is_mismatched_cmd, strip_permission_flags, and sanitize_cmd
+  -- 29c. agent.is_mismatched_cmd, is_leaked_runtime_grant_path, strip_permission_flags, and sanitize_cmd
   local is_mis, mis_kind = agent.is_mismatched_cmd("antigravity", { "junie" })
   ok("29c: is_mismatched_cmd detects antigravity with junie",
     is_mis == true and mis_kind == "junie")
@@ -2656,22 +2656,61 @@ do
   local is_mis_gen, _ = agent.is_mismatched_cmd("generic", { "junie" })
   ok("29c: is_mismatched_cmd permits generic kind with any binary", is_mis_gen == false)
 
-  local stripped = agent.strip_permission_flags({ "claude", "--add-dir", "/tmp/mb", "--add-dir", "/tmp/kb" })
-  ok("29c: strip_permission_flags strips all --add-dir pairs",
+  -- Provenance check: distinguish leaked auto-agents paths from user paths
+  ok("29c: is_leaked_runtime_grant_path detects auto-agents mailbox path",
+    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456/wanda") == true)
+  ok("29c: is_leaked_runtime_grant_path detects auto-agents config mailbox path",
+    agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/mailbox/123/juliet") == true)
+  ok("29c: is_leaked_runtime_grant_path detects auto-agents kb path",
+    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/kb") == true)
+  ok("29c: is_leaked_runtime_grant_path preserves user directory /opt/shared-tools",
+    agent.is_leaked_runtime_grant_path("/opt/shared-tools") == false)
+  ok("29c: is_leaked_runtime_grant_path preserves user directory /home/johno/custom-libs",
+    agent.is_leaked_runtime_grant_path("/home/johno/custom-libs") == false)
+
+  -- strip_permission_flags only strips leaked runtime grants; preserves user --add-dir
+  local leaked_mb = "/home/johno/proj/.auto-agents/mailbox/123/james-cook"
+  local leaked_kb = "/home/johno/proj/.auto-agents/kb"
+  local stripped = agent.strip_permission_flags({ "claude", "--add-dir", leaked_mb, "--add-dir", leaked_kb })
+  ok("29c: strip_permission_flags strips leaked runtime grant pairs",
     vim.deep_equal(stripped, { "claude" }), vim.inspect(stripped))
-  local stripped_empty = agent.strip_permission_flags({ "--add-dir", "/tmp/mb" })
+
+  local user_add_dir = { "agy", "--add-dir", "/opt/shared-tools" }
+  local user_preserved = agent.strip_permission_flags(user_add_dir)
+  ok("29c: strip_permission_flags PRESERVES user-configured --add-dir /opt/shared-tools",
+    vim.deep_equal(user_preserved, user_add_dir), vim.inspect(user_preserved))
+
+  local user_custom_add_dir = { "agy", "--custom", "--add-dir", "/opt/shared-tools" }
+  local user_custom_preserved = agent.strip_permission_flags(user_custom_add_dir)
+  ok("29c: strip_permission_flags PRESERVES user-configured flags and --add-dir",
+    vim.deep_equal(user_custom_preserved, user_custom_add_dir))
+
+  local mixed = { "claude", "--verbose", "--add-dir", "/opt/shared-tools", "--add-dir", leaked_mb }
+  local mixed_stripped = agent.strip_permission_flags(mixed)
+  ok("29c: strip_permission_flags strips leaked grant while keeping user --add-dir",
+    vim.deep_equal(mixed_stripped, { "claude", "--verbose", "--add-dir", "/opt/shared-tools" }),
+    vim.inspect(mixed_stripped))
+
+  local stripped_empty = agent.strip_permission_flags({ "--add-dir", leaked_mb })
   ok("29c: strip_permission_flags returns nil when empty after stripping",
     stripped_empty == nil)
 
   local sanitized_mismatched = agent.sanitize_cmd("antigravity", { "junie" }, "wanda")
   ok("29c: sanitize_cmd clears cross-kind mismatched cmd to nil",
     sanitized_mismatched == nil)
-  local sanitized_bare = agent.sanitize_cmd("claude", { "claude", "--add-dir", "/tmp/mb" }, "jarvis")
+  local sanitized_bare = agent.sanitize_cmd("claude", { "claude", "--add-dir", leaked_mb }, "jarvis")
   ok("29c: sanitize_cmd clears stripped bare canonical binary to nil",
     sanitized_bare == nil)
-  local sanitized_custom = agent.sanitize_cmd("claude", { "claude", "--verbose", "--add-dir", "/tmp/mb" }, "jarvis")
+  local sanitized_custom = agent.sanitize_cmd("claude", { "claude", "--verbose", "--add-dir", leaked_mb }, "jarvis")
   ok("29c: sanitize_cmd retains custom flags after stripping leaked flags",
     vim.deep_equal(sanitized_custom, { "claude", "--verbose" }), vim.inspect(sanitized_custom))
+  local sanitized_user_dir = agent.sanitize_cmd("antigravity", { "agy", "--add-dir", "/opt/shared-tools" }, "wanda")
+  ok("29c: sanitize_cmd PRESERVES configured user --add-dir without other flags",
+    vim.deep_equal(sanitized_user_dir, { "agy", "--add-dir", "/opt/shared-tools" }),
+    vim.inspect(sanitized_user_dir))
+  local sanitized_user_custom = agent.sanitize_cmd("antigravity", { "agy", "--custom", "--add-dir", "/opt/shared-tools" }, "wanda")
+  ok("29c: sanitize_cmd PRESERVES configured user --custom --add-dir",
+    vim.deep_equal(sanitized_user_custom, { "agy", "--custom", "--add-dir", "/opt/shared-tools" }))
   local sanitized_generic = agent.sanitize_cmd("generic", { "opencode", "--flag" }, "zen")
   ok("29c: sanitize_cmd retains custom command for generic kind",
     vim.deep_equal(sanitized_generic, { "opencode", "--flag" }))
@@ -2730,7 +2769,7 @@ do
   ok("29d: on_complete preserves explicitly re-entered custom cmd on kind change",
     entry4 ~= nil and vim.deep_equal(entry4.cmd, { "agy", "--custom" }))
 
-  -- 29e. config.store.normalize and write cleans leaked flags & mismatches
+  -- 29e. config.store.normalize and write cleans leaked flags & mismatches while preserving user --add-dir
   local toml_sample = [==[
 [project]
 cwd = "/tmp/test"
@@ -2739,13 +2778,13 @@ cwd = "/tmp/test"
 slot = 1
 kind = "claude"
 name = "jarvis"
-cmd = ["claude", "--add-dir", "/tmp/old-mb", "--add-dir", "/tmp/old-kb"]
+cmd = ["claude", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/jarvis", "--add-dir", "/tmp/repo/.auto-agents/kb"]
 
 [[agents]]
 slot = 2
 kind = "antigravity"
 name = "wanda"
-cmd = ["junie", "--add-dir", "/tmp/stale"]
+cmd = ["junie", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/stale"]
 
 [[agents]]
 slot = 3
@@ -2757,10 +2796,22 @@ cmd = ["opencode", "--flag"]
 slot = 4
 kind = "claude"
 name = "custom-claude"
-cmd = ["claude", "--verbose", "--add-dir", "/tmp/mb"]
+cmd = ["claude", "--verbose", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/c"]
+
+[[agents]]
+slot = 5
+kind = "antigravity"
+name = "wanda-custom-dir"
+cmd = ["agy", "--add-dir", "/opt/shared-tools"]
+
+[[agents]]
+slot = 6
+kind = "antigravity"
+name = "wanda-custom-flags-dir"
+cmd = ["agy", "--custom", "--add-dir", "/opt/shared-tools"]
 ]==]
   local normalized = store._normalize(toml_sample)
-  ok("29e: normalize parses all 4 agents", #normalized.agents == 4)
+  ok("29e: normalize parses all 6 agents", #normalized.agents == 6)
   local a1 = normalized.agents[1]
   ok("29e: normalize clears stripped bare canonical binary to nil (slot 1)",
     a1.name == "jarvis" and a1.cmd == nil)
@@ -2773,25 +2824,38 @@ cmd = ["claude", "--verbose", "--add-dir", "/tmp/mb"]
   local a4 = normalized.agents[4]
   ok("29e: normalize retains custom flags while stripping leaked flags (slot 4)",
     a4.name == "custom-claude" and vim.deep_equal(a4.cmd, { "claude", "--verbose" }))
+  local a5 = normalized.agents[5]
+  ok("29e: normalize PRESERVES user-configured --add-dir /opt/shared-tools (slot 5)",
+    a5.name == "wanda-custom-dir" and vim.deep_equal(a5.cmd, { "agy", "--add-dir", "/opt/shared-tools" }))
+  local a6 = normalized.agents[6]
+  ok("29e: normalize PRESERVES user-configured flags and --add-dir (slot 6)",
+    a6.name == "wanda-custom-flags-dir"
+      and vim.deep_equal(a6.cmd, { "agy", "--custom", "--add-dir", "/opt/shared-tools" }))
 
-  -- store.write sanitization roundtrip
+  -- store.write sanitization roundtrip: strips leaked flags, preserves user --add-dir
   local tmp_toml = vim.fn.tempname() .. "_store29.toml"
   local write_ok, write_err = store.write(tmp_toml, {
     project = { cwd = "/tmp/test" },
     agents = {
       { slot = 1, kind = "antigravity", name = "wanda", cmd = { "junie" } },
-      { slot = 2, kind = "claude", name = "jarvis", cmd = { "claude", "--add-dir", "/tmp/dir" } },
-      { slot = 3, kind = "claude", name = "custom", cmd = { "claude", "--custom", "--add-dir", "/tmp/dir" } },
+      { slot = 2, kind = "claude", name = "jarvis", cmd = { "claude", "--add-dir", "/tmp/repo/.auto-agents/mailbox/123/jarvis" } },
+      { slot = 3, kind = "claude", name = "custom", cmd = { "claude", "--custom", "--add-dir", "/tmp/repo/.auto-agents/kb" } },
+      { slot = 4, kind = "antigravity", name = "user-override", cmd = { "agy", "--add-dir", "/opt/shared-tools" } },
+      { slot = 5, kind = "antigravity", name = "user-custom-override", cmd = { "agy", "--custom", "--add-dir", "/opt/shared-tools" } },
     }
   })
   ok("29e: store.write succeeds", write_ok == true, tostring(write_err))
   local f_read = io.open(tmp_toml, "r")
   local saved_raw = f_read and f_read:read("*a") or ""
   if f_read then f_read:close() end
-  ok("29e: saved TOML does NOT contain leaked --add-dir",
-    saved_raw:find("--add-dir", 1, true) == nil, saved_raw)
+  ok("29e: saved TOML does NOT contain leaked mailbox path",
+    saved_raw:find(".auto-agents/mailbox", 1, true) == nil, saved_raw)
+  ok("29e: saved TOML does NOT contain leaked kb path",
+    saved_raw:find(".auto-agents/kb", 1, true) == nil, saved_raw)
   ok("29e: saved TOML does NOT contain mismatched junie command for antigravity",
     saved_raw:find('"junie"', 1, true) == nil, saved_raw)
+  ok("29e: saved TOML PRESERVES user-configured --add-dir /opt/shared-tools",
+    saved_raw:find('"--add-dir", "/opt/shared-tools"', 1, true) ~= nil, saved_raw)
   ok("29e: saved TOML preserves legitimate --custom flag",
     saved_raw:find("--custom", 1, true) ~= nil, saved_raw)
   pcall(vim.fn.delete, tmp_toml)

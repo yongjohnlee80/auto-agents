@@ -68,8 +68,37 @@ function M.is_mismatched_cmd(kind, cmd)
   return false, nil
 end
 
----Strip leaked runtime permission flags (e.g. `--add-dir <path>`) from a cmd table.
----Returns a new list without those flag pairs, or nil if the resulting list is empty.
+---Check whether a path argument is a leaked auto-agents runtime permission grant
+---(e.g. auto-agents mailbox or auto-agents managed KB directory).
+---Legitimate user-configured paths (e.g. /opt/shared-tools) return false.
+---@param path string|nil
+---@return boolean
+function M.is_leaked_runtime_grant_path(path)
+  if type(path) ~= "string" or path == "" then return false end
+  -- 1. Auto-agents mailbox instances (.auto-agents/mailbox/... or .auto-agents-config/mailbox/...)
+  if path:find("%.auto%-agents/mailbox") or path:find("%.auto%-agents%-config/mailbox") then
+    return true
+  end
+  -- 2. Auto-agents managed KB root or subdirectories (.auto-agents/kb or .auto-agents-config/kb)
+  if path:find("%.auto%-agents/kb") or path:find("%.auto%-agents%-config/kb") then
+    return true
+  end
+  -- 3. Active configured KB root or subdirectories if auto-agents config is loaded
+  local aa_ok, aa = pcall(require, "auto-agents")
+  local cfg = aa_ok and aa.state and aa.state.config
+  if cfg and cfg.kb and type(cfg.kb.root) == "string" and cfg.kb.root ~= "" then
+    local root = cfg.kb.root
+    if path == root or path:sub(1, #root + 1) == root .. "/" then
+      return true
+    end
+  end
+  return false
+end
+
+---Strip leaked runtime permission flags (e.g. `--add-dir <path>` where `<path>` is a
+---generated auto-agents mailbox or KB path) from a cmd table.
+---Legitimate user-configured `--add-dir` arguments (e.g. `--add-dir /opt/shared-tools`) are preserved.
+---Returns a new list without stale flag pairs, or nil if the resulting list is empty.
 ---@param cmd string[]|nil
 ---@return string[]|nil
 function M.strip_permission_flags(cmd)
@@ -79,7 +108,7 @@ function M.strip_permission_flags(cmd)
   local changed = false
   while i <= #cmd do
     local arg = cmd[i]
-    if arg == "--add-dir" then
+    if arg == "--add-dir" and i < #cmd and M.is_leaked_runtime_grant_path(cmd[i + 1]) then
       changed = true
       i = i + 2
     else
