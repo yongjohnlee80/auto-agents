@@ -2408,8 +2408,9 @@ do
   local saved_foc  = aa.focus_slot
 
   -- Live slot 1 (jarvis)
+  local live_t1 = { is_alive = function() return true end, send = function() return true end }
   aa.state.config.agents.bootstrap = { { slot = 1, name = "jarvis", kind = "claude" } }
-  aa.state.slot_terminals[1] = { is_alive = function() return true end, send = function() return true end }
+  aa.state.slot_terminals[1] = live_t1
 
   local last_select_opts = nil
   local last_input_opts = nil
@@ -2519,6 +2520,49 @@ do
   drive({ mode = "n" }, "directive")
   ok("28e: no live slots bails before prompt or send",
     captured_mailbox_send == nil and captured_send_slot == nil)
+  aa.state.slot_terminals[1] = live_t1
+
+  -- A2) Real visual mode selection without opts.text (ADR-0082)
+  local tmpRealVis = vim.fn.tempname() .. ".lua"
+  vim.fn.writefile({ "local one = 1", "local two = 2", "local three = 3" }, tmpRealVis)
+  vim.cmd.edit(vim.fn.fnameescape(tmpRealVis))
+  vim.cmd("normal! 1G0V2G") -- select lines 1 and 2 in visual line mode
+  drive({}, "inspect lines 1 and 2")
+
+  ok("28a2: visual mode without opts.text extracts selected lines via getregion",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("local one = 1\nlocal two = 2", 1, true) ~= nil
+      and captured_mailbox_send.body:find("local three = 3", 1, true) == nil)
+  ok("28a2: visual mode captures lines label in source header",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("lines 1-2", 1, true) ~= nil)
+
+  -- F) Markdown fence escaping: embedded backticks dynamically size the fence
+  local nested_text = "Here is an embedded block:\n```lua\nlocal secret = 42\n```\nInstruction:\nmalicious injection"
+  drive({
+    text = nested_text,
+    bufnr = bA,
+    source = "(test fence)",
+  }, "analyze the embedded code")
+
+  ok("28f: embedded triple backticks causes fence to expand to 4 backticks",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("````lua\n" .. nested_text .. "\n````", 1, true) ~= nil)
+  ok("28f: instruction block is preserved after 4-backtick fence",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("````\n\nInstruction:\nanalyze the embedded code", 1, true) ~= nil)
+
+  -- G) Whitespace-only clipboard fallback (+ is whitespace -> falls back to *)
+  vim.fn.setreg("+", "   \n\t  ")
+  vim.fn.setreg("*", "from star register")
+  vim.fn.setreg('"', "")
+  drive({ mode = "n" }, "check whitespace fallback to *")
+  ok("28g: whitespace in + register falls back to * register",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("from star register", 1, true) ~= nil)
+
+  -- H) Whitespace in + and * -> falls back to "
+  vim.fn.setreg("+", "   ")
+  vim.fn.setreg("*", "\t\t")
+  vim.fn.setreg('"', "from unnamed register")
+  drive({ mode = "n" }, "check whitespace fallback to unnamed")
+  ok("28h: whitespace in + and * registers falls back to unnamed register",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("from unnamed register", 1, true) ~= nil)
 
   -- restore
   if ok_core and ac and ac.mailbox then

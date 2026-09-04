@@ -2044,10 +2044,13 @@ local function _extract_forward_payload(opts)
     end
   else
     -- Normal mode: read clipboard (+ > * > ")
+    local function _is_valid_text(t)
+      return t and t ~= "" and not t:match("^%s*$")
+    end
     local clip = vim.fn.getreg("+")
-    if not clip or clip == "" then clip = vim.fn.getreg("*") end
-    if not clip or clip == "" then clip = vim.fn.getreg('"') end
-    if clip and clip ~= "" and not clip:match("^%s*$") then
+    if not _is_valid_text(clip) then clip = vim.fn.getreg("*") end
+    if not _is_valid_text(clip) then clip = vim.fn.getreg('"') end
+    if _is_valid_text(clip) then
       text = clip
       source_info = "(clipboard)"
     end
@@ -2070,18 +2073,30 @@ local function _extract_forward_payload(opts)
 end
 
 ---ADR-0082 — build deterministic prompt body for forwarding text.
+---Dynamically sizes markdown fence delimiter to prevent early termination
+---when forwarded text contains embedded backtick sequences.
 ---@param payload table
 ---@param instruction string?
 ---@return string
 local function _build_forward_text_body(payload, instruction)
+  local max_ticks = 0
+  if payload.text then
+    for ticks in payload.text:gmatch("`+") do
+      if #ticks > max_ticks then
+        max_ticks = #ticks
+      end
+    end
+  end
+  local fence = string.rep("`", math.max(3, max_ticks + 1))
+
   local lines = {}
   lines[#lines + 1] = "Please work on the forwarded text below per the instruction."
   lines[#lines + 1] = ""
   lines[#lines + 1] = "Source: " .. payload.source
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "```" .. (payload.filetype or "")
+  lines[#lines + 1] = fence .. (payload.filetype or "")
   lines[#lines + 1] = payload.text
-  lines[#lines + 1] = "```"
+  lines[#lines + 1] = fence
   lines[#lines + 1] = ""
   if instruction and instruction ~= "" then
     lines[#lines + 1] = "Instruction:"
