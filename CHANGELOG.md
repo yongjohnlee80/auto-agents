@@ -2,6 +2,14 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.61] — 2026-09-05 — Clear stale command overrides on kind change & enforce spawn argv immutability
+
+- **Agent Kind Change Sanitization:** When changing an agent's `kind` (e.g. Copilot to Claude), clear stale custom `cmd` overrides unless explicitly re-specified. In wizard editing, warn when an existing command belonged to a different kind and clear it when kind changes.
+- **Spawn Argv Immutability:** Resolved command argv is now shallow-copied before permission flag injection (`--add-dir`), preventing runtime instance mailbox grants from accumulating into in-memory or persisted configuration across agent restarts.
+- **Strict Instance Mailbox Boundary:** Path matching for generated mailbox detection now strictly requires an exact instance directory segment (`^%d+%-%d+$`), preserving user-authored directories such as `mailbox/123-456-notes`.
+- **Previewable Command Migration:** Added `:AutoAgentsMigrateCmd` (with dry-run inspection and `--apply`) to safely strip accumulated legacy runtime instance mailbox flags and stale cross-kind commands from project configurations, strictly isolating in-memory bootstrap updates to the active project configuration.
+- **`tests/smoke.lua [29]`** — 71 assertions covering command copying, argv immutability, canonical multi-token commands (`gh copilot`, `goose session`), wizard clearing, store normalization/writing, and scoped migration lifecycle. Suite 439 passed / 0 failed.
+
 ## [v0.2.60] — 2026-09-04 — `<leader>af` forward-text-to-agent picker
 
 Adds `M.forward_text_picker(opts?)` — an operator-push picker that forwards a selected section of text (visual mode) or clipboard content (normal mode) to a live agent slot with an optional instruction.
