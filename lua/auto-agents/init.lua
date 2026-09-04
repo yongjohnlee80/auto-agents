@@ -670,6 +670,9 @@ local function resolve_slot_spec(slot)
   for _, entry in ipairs(bootstrap) do
     if entry.slot == slot then
       local kind = entry.kind or "generic"
+      if entry.cmd ~= nil then
+        entry.cmd = agent.sanitize_cmd(kind, entry.cmd, entry.name)
+      end
       return {
         kind = kind,
         name = entry.name,
@@ -886,6 +889,7 @@ local function build_agent_env(spec, cwd)
       local perms = require("auto-agents.permissions")
       local extra_argv = perms.argv_for_kind(spec.kind, dirs)
       if #extra_argv > 0 and type(spec.cmd) == "table" then
+        spec.cmd = vim.list_slice(spec.cmd)
         for _, a in ipairs(extra_argv) do
           spec.cmd[#spec.cmd + 1] = a
         end
@@ -905,6 +909,9 @@ local function build_agent_env(spec, cwd)
   if next(env) == nil then return nil end
   return env
 end
+
+M._resolve_slot_spec = resolve_slot_spec
+M._build_agent_env = build_agent_env
 
 ---Ensure the main panel window exists (open it if not) and return
 ---its winid.
@@ -1029,10 +1036,11 @@ local function ensure_main_slot_terminal(slot, winid)
   local cwd = require("auto-agents.cwd").resolve(cfg.terminal, build_cwd_ctx(cfg))
   -- M5: explicit `resource cwd` grant > first path grant > cwd.resolve default.
   cwd = require("auto-agents.resources").cwd_for(slot, cwd)
+  local env = build_agent_env(spec, cwd)
   term = require("auto-agents.terminal").new(cfg, {
     cmd = spec.cmd,
     cwd = cwd,
-    env = build_agent_env(spec, cwd),
+    env = env,
     on_exit = function(code)
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
       pcall(function() require("auto-agents.status.observer").detach(slot) end)

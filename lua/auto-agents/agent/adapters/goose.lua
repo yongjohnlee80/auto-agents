@@ -28,7 +28,7 @@ local M = {}
 ---@param spec table  -- bootstrap entry: { slot, kind, name, ..., cmd?, model?, provider?, api_base? }
 ---@return string[]
 function M.cmd(spec)
-  if spec and spec.cmd then return spec.cmd end
+  if spec and spec.cmd then return vim.list_slice(spec.cmd) end
   return { "goose", "session" }
 end
 

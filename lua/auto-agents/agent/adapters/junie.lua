@@ -15,7 +15,7 @@ local M = {}
 ---@param spec table  -- bootstrap entry: { slot, kind, name, title, ..., cmd?, model? }
 ---@return string[]
 function M.cmd(spec)
-  if spec and spec.cmd then return spec.cmd end
+  if spec and spec.cmd then return vim.list_slice(spec.cmd) end
   local argv = { "junie" }
   if spec and spec.model and spec.model ~= "" then
     argv[#argv + 1] = "--model"

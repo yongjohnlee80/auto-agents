@@ -151,8 +151,20 @@ function M.agent(mode, slot)
     {
       field = "cmd",
       prompt = "cmd (override binary + flags)",
-      default = default("cmd", ""),
-      placeholder = (existing and existing.cmd and table.concat(existing.cmd, " ")) or "(blank → adapter default)",
+      default = function(values)
+        if existing and existing.cmd and existing.kind == values.kind then
+          return default("cmd", "")
+        end
+        return ""
+      end,
+      placeholder = function(values)
+        if existing and existing.cmd and existing.kind == values.kind then
+          return table.concat(existing.cmd, " ")
+        elseif existing and existing.cmd and existing.kind ~= values.kind then
+          return "(cleared: kind changed from " .. tostring(existing.kind) .. " → adapter default)"
+        end
+        return "(blank → adapter default)"
+      end,
       parse = parse_cmd,
     },
     {
@@ -396,6 +408,20 @@ function M.agent(mode, slot)
     banner = title,
     steps = steps,
     on_complete = function(values, emit)
+      -- When an agent type changes, clear its custom cmd override unless the
+      -- user explicitly re-entered one (which values.cmd captures).
+      local cmd = values.cmd
+      local agent_mod = require("auto-agents.agent")
+      if existing and existing.kind and values.kind ~= existing.kind then
+        if cmd == nil then
+          cmd = nil
+        else
+          cmd = agent_mod.sanitize_cmd(values.kind, cmd, values.name)
+        end
+      elseif cmd ~= nil then
+        cmd = agent_mod.sanitize_cmd(values.kind, cmd, values.name)
+      end
+
       local entry = {
         slot = values.slot,
         kind = values.kind or "generic",
@@ -403,22 +429,17 @@ function M.agent(mode, slot)
         title = values.title,
         role = values.role,
         cwd = values.cwd,
-        cmd = values.cmd,
+        cmd = cmd,
         allowed_paths = values.allowed_paths,
         manager = values.manager,
         kb_scope = values.kb_scope or "shared",
         bottom_margin = values.bottom_margin,
         diff_review = values.diff_review == true or nil,  -- omit when false to keep TOML clean
-        -- Per-kind connection settings. The wizard only prompts when
-        -- relevant (MODEL_KINDS / PROVIDER_KINDS / API_BASE_KINDS); other
-        -- kinds get nil here. Below, we preserve `model` from the
-        -- existing entry on edit so :AutoAgentsModel state survives an
-        -- agent edit on non-MODEL_KINDS slots.
         model = values.model,
         provider = values.provider,
         api_base = values.api_base,
       }
-      if not MODEL_KINDS[values.kind] and existing and existing.model then
+      if not MODEL_KINDS[values.kind] and existing and existing.model and existing.kind == values.kind then
         entry.model = existing.model
       end
       -- Preserve any tasks list from the existing entry on edit.

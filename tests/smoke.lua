@@ -2577,6 +2577,230 @@ do
   aa.state.config.agents.bootstrap = saved_cfg
 end
 
+-- ──── 29. Fix agent kind changes: clear stale command override and keep spawn argv immutable ────
+print("\n[29] Agent kind changes + spawn argv immutability + cmd sanitization")
+do
+  local agent = require("auto-agents.agent")
+  local store = require("auto-agents.config.store")
+  local specs = require("auto-agents.panel.wizard_specs")
+
+  -- 29a. agent.cmd_for returns a shallow copy; adapters return copies.
+  -- Mutating returned table does not affect input spec.cmd.
+  local original_cmd = { "agy", "--custom" }
+  local spec_input = { name = "wanda", cmd = original_cmd }
+  local res_argv = agent.cmd_for("antigravity", spec_input)
+  ok("29a: cmd_for returns table matching spec.cmd",
+    vim.deep_equal(res_argv, original_cmd))
+  table.insert(res_argv, "--mutated-flag")
+  ok("29a: mutating cmd_for return value does not mutate input spec.cmd",
+    #original_cmd == 2 and #spec_input.cmd == 2 and original_cmd[3] == nil,
+    vim.inspect(original_cmd))
+
+  for _, k in ipairs(agent.kinds()) do
+    local adapter = agent.adapter_for(k)
+    local sample_cmd = { "bin", "--flag" }
+    local r = adapter.cmd({ cmd = sample_cmd })
+    table.insert(r, "--mutation")
+    ok("29a: adapter " .. k .. " returns copy of spec.cmd",
+      #sample_cmd == 2 and sample_cmd[3] == nil, vim.inspect(sample_cmd))
+  end
+
+  -- 29b. build_agent_env does not mutate caller's or bootstrap's spec.cmd when appending grants.
+  -- Multiple simulated spawns do not accumulate `--add-dir`.
+  local saved_bootstrap = aa.state.config.agents.bootstrap
+  local saved_kb = aa.state.config.kb
+  local tmp_kb = vim.fn.tempname() .. "_kb29"
+  vim.fn.mkdir(tmp_kb, "p")
+  aa.state.config.kb = { root = tmp_kb, type = "coding" }
+
+  local initial_cmd = { "agy", "--verbose" }
+  aa.state.config.agents.bootstrap = {
+    { slot = 4, name = "wanda", kind = "antigravity", cmd = initial_cmd, kb_scope = "shared" }
+  }
+
+  local spec_resolved = aa._resolve_slot_spec(4)
+  ok("29b: resolve_slot_spec returns copy of cmd",
+    vim.deep_equal(spec_resolved.cmd, initial_cmd) and spec_resolved.cmd ~= initial_cmd)
+
+  local env1 = aa._build_agent_env(spec_resolved, tmp_kb)
+  ok("29b: build_agent_env returns env table", type(env1) == "table")
+  ok("29b: spec_resolved.cmd received --add-dir grants",
+    vim.tbl_contains(spec_resolved.cmd, "--add-dir"))
+  ok("29b: initial bootstrap entry cmd was NOT mutated by build_agent_env",
+    #initial_cmd == 2 and initial_cmd[3] == nil, vim.inspect(initial_cmd))
+  ok("29b: bootstrap[1].cmd in state was NOT mutated",
+    #aa.state.config.agents.bootstrap[1].cmd == 2,
+    vim.inspect(aa.state.config.agents.bootstrap[1].cmd))
+
+  -- Simulate 5 consecutive spawns/restarts
+  for i = 1, 5 do
+    local spec_i = aa._resolve_slot_spec(4)
+    aa._build_agent_env(spec_i, tmp_kb)
+  end
+  ok("29b: bootstrap entry cmd has not accumulated --add-dir after 5 spawns",
+    #aa.state.config.agents.bootstrap[1].cmd == 2
+      and not vim.tbl_contains(aa.state.config.agents.bootstrap[1].cmd, "--add-dir"),
+    vim.inspect(aa.state.config.agents.bootstrap[1].cmd))
+
+  pcall(vim.fn.delete, tmp_kb, "rf")
+
+  -- 29c. agent.is_mismatched_cmd, strip_permission_flags, and sanitize_cmd
+  local is_mis, mis_kind = agent.is_mismatched_cmd("antigravity", { "junie" })
+  ok("29c: is_mismatched_cmd detects antigravity with junie",
+    is_mis == true and mis_kind == "junie")
+  local is_mis_path, mis_kind_path = agent.is_mismatched_cmd("antigravity", { "/usr/local/bin/junie" })
+  ok("29c: is_mismatched_cmd detects full path binary basename mismatch",
+    is_mis_path == true and mis_kind_path == "junie")
+  local is_mis_canon, _ = agent.is_mismatched_cmd("antigravity", { "agy" })
+  ok("29c: is_mismatched_cmd accepts own canonical binary", is_mis_canon == false)
+  local is_mis_gen, _ = agent.is_mismatched_cmd("generic", { "junie" })
+  ok("29c: is_mismatched_cmd permits generic kind with any binary", is_mis_gen == false)
+
+  local stripped = agent.strip_permission_flags({ "claude", "--add-dir", "/tmp/mb", "--add-dir", "/tmp/kb" })
+  ok("29c: strip_permission_flags strips all --add-dir pairs",
+    vim.deep_equal(stripped, { "claude" }), vim.inspect(stripped))
+  local stripped_empty = agent.strip_permission_flags({ "--add-dir", "/tmp/mb" })
+  ok("29c: strip_permission_flags returns nil when empty after stripping",
+    stripped_empty == nil)
+
+  local sanitized_mismatched = agent.sanitize_cmd("antigravity", { "junie" }, "wanda")
+  ok("29c: sanitize_cmd clears cross-kind mismatched cmd to nil",
+    sanitized_mismatched == nil)
+  local sanitized_bare = agent.sanitize_cmd("claude", { "claude", "--add-dir", "/tmp/mb" }, "jarvis")
+  ok("29c: sanitize_cmd clears stripped bare canonical binary to nil",
+    sanitized_bare == nil)
+  local sanitized_custom = agent.sanitize_cmd("claude", { "claude", "--verbose", "--add-dir", "/tmp/mb" }, "jarvis")
+  ok("29c: sanitize_cmd retains custom flags after stripping leaked flags",
+    vim.deep_equal(sanitized_custom, { "claude", "--verbose" }), vim.inspect(sanitized_custom))
+  local sanitized_generic = agent.sanitize_cmd("generic", { "opencode", "--flag" }, "zen")
+  ok("29c: sanitize_cmd retains custom command for generic kind",
+    vim.deep_equal(sanitized_generic, { "opencode", "--flag" }))
+
+  -- 29d. wizard_specs.agent("edit", slot) kind change handling
+  aa.state.config.agents.bootstrap = {
+    { slot = 4, name = "wanda", kind = "junie", cmd = { "junie" }, model = "gpt-4" }
+  }
+  local edit_spec = specs.agent("edit", 4)
+  local cmd_step = nil
+  for _, s in ipairs(edit_spec.steps) do
+    if s.field == "cmd" then cmd_step = s; break end
+  end
+  ok("29d: cmd step exists in agent edit spec", cmd_step ~= nil)
+
+  local def_changed = cmd_step.default({ kind = "antigravity" })
+  local ph_changed = cmd_step.placeholder({ kind = "antigravity" })
+  ok("29d: default returns empty string when kind changed", def_changed == "")
+  ok("29d: placeholder warns about kind change",
+    ph_changed:find("cleared: kind changed from junie", 1, true) ~= nil, ph_changed)
+
+  local def_same = cmd_step.default({ kind = "junie" })
+  local ph_same = cmd_step.placeholder({ kind = "junie" })
+  ok("29d: default preserves existing cmd when kind unchanged", def_same == "junie")
+  ok("29d: placeholder shows current cmd when kind unchanged", ph_same == "junie")
+
+  -- on_complete with kind change and blank cmd
+  edit_spec.on_complete({
+    slot = 4,
+    kind = "antigravity",
+    name = "wanda",
+    title = "Wanda",
+    cmd = nil,
+  }, function(_) end)
+  local entry4 = nil
+  for _, e in ipairs(aa.state.config.agents.bootstrap) do
+    if e.slot == 4 then entry4 = e; break end
+  end
+  ok("29d: on_complete clears cmd to nil on kind change when blank",
+    entry4 ~= nil and entry4.cmd == nil and entry4.kind == "antigravity")
+  ok("29d: on_complete does not preserve stale model across kind change",
+    entry4 ~= nil and entry4.model == nil)
+
+  -- on_complete with kind change and explicitly re-entered custom cmd
+  edit_spec.on_complete({
+    slot = 4,
+    kind = "antigravity",
+    name = "wanda",
+    title = "Wanda",
+    cmd = { "agy", "--custom" },
+  }, function(_) end)
+  entry4 = nil
+  for _, e in ipairs(aa.state.config.agents.bootstrap) do
+    if e.slot == 4 then entry4 = e; break end
+  end
+  ok("29d: on_complete preserves explicitly re-entered custom cmd on kind change",
+    entry4 ~= nil and vim.deep_equal(entry4.cmd, { "agy", "--custom" }))
+
+  -- 29e. config.store.normalize and write cleans leaked flags & mismatches
+  local toml_sample = [==[
+[project]
+cwd = "/tmp/test"
+
+[[agents]]
+slot = 1
+kind = "claude"
+name = "jarvis"
+cmd = ["claude", "--add-dir", "/tmp/old-mb", "--add-dir", "/tmp/old-kb"]
+
+[[agents]]
+slot = 2
+kind = "antigravity"
+name = "wanda"
+cmd = ["junie", "--add-dir", "/tmp/stale"]
+
+[[agents]]
+slot = 3
+kind = "generic"
+name = "zen"
+cmd = ["opencode", "--flag"]
+
+[[agents]]
+slot = 4
+kind = "claude"
+name = "custom-claude"
+cmd = ["claude", "--verbose", "--add-dir", "/tmp/mb"]
+]==]
+  local normalized = store._normalize(toml_sample)
+  ok("29e: normalize parses all 4 agents", #normalized.agents == 4)
+  local a1 = normalized.agents[1]
+  ok("29e: normalize clears stripped bare canonical binary to nil (slot 1)",
+    a1.name == "jarvis" and a1.cmd == nil)
+  local a2 = normalized.agents[2]
+  ok("29e: normalize clears cross-kind mismatched cmd to nil (slot 2)",
+    a2.name == "wanda" and a2.cmd == nil)
+  local a3 = normalized.agents[3]
+  ok("29e: normalize retains generic custom cmd (slot 3)",
+    a3.name == "zen" and vim.deep_equal(a3.cmd, { "opencode", "--flag" }))
+  local a4 = normalized.agents[4]
+  ok("29e: normalize retains custom flags while stripping leaked flags (slot 4)",
+    a4.name == "custom-claude" and vim.deep_equal(a4.cmd, { "claude", "--verbose" }))
+
+  -- store.write sanitization roundtrip
+  local tmp_toml = vim.fn.tempname() .. "_store29.toml"
+  local write_ok, write_err = store.write(tmp_toml, {
+    project = { cwd = "/tmp/test" },
+    agents = {
+      { slot = 1, kind = "antigravity", name = "wanda", cmd = { "junie" } },
+      { slot = 2, kind = "claude", name = "jarvis", cmd = { "claude", "--add-dir", "/tmp/dir" } },
+      { slot = 3, kind = "claude", name = "custom", cmd = { "claude", "--custom", "--add-dir", "/tmp/dir" } },
+    }
+  })
+  ok("29e: store.write succeeds", write_ok == true, tostring(write_err))
+  local f_read = io.open(tmp_toml, "r")
+  local saved_raw = f_read and f_read:read("*a") or ""
+  if f_read then f_read:close() end
+  ok("29e: saved TOML does NOT contain leaked --add-dir",
+    saved_raw:find("--add-dir", 1, true) == nil, saved_raw)
+  ok("29e: saved TOML does NOT contain mismatched junie command for antigravity",
+    saved_raw:find('"junie"', 1, true) == nil, saved_raw)
+  ok("29e: saved TOML preserves legitimate --custom flag",
+    saved_raw:find("--custom", 1, true) ~= nil, saved_raw)
+  pcall(vim.fn.delete, tmp_toml)
+
+  -- restore
+  aa.state.config.agents.bootstrap = saved_bootstrap
+  aa.state.config.kb = saved_kb
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

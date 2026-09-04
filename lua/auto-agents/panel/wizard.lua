@@ -69,7 +69,10 @@ local function compose_question(step, values)
   local default = step.default
   if type(default) == "function" then default = default(values) end
   local placeholder = step.placeholder
-    or (default ~= nil and default ~= "" and tostring(default) or nil)
+  if type(placeholder) == "function" then placeholder = placeholder(values) end
+  if not placeholder or placeholder == "" then
+    placeholder = (default ~= nil and default ~= "" and tostring(default) or nil)
+  end
   local hint = ""
   if step.choices and #step.choices > 0 then
     hint = " (" .. table.concat(step.choices, "|") .. ")"

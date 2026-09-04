@@ -122,13 +122,25 @@ local function normalize(content)
       "failed to parse TOML: " .. tostring(data))
     return { project = nil, kb = nil, agents = {} }
   end
+  local raw_agents = data.agents or {}
+  local agents = {}
+  local agent_mod = require("auto-agents.agent")
+  for _, a in ipairs(raw_agents) do
+    local clone = vim.deepcopy(a)
+    if clone.cmd ~= nil then
+      clone.cmd = agent_mod.sanitize_cmd(clone.kind, clone.cmd, clone.name)
+    end
+    agents[#agents + 1] = clone
+  end
   return {
     project = data.project,
     kb = data.kb,
     panel = data.panel,
-    agents = data.agents or {},
+    agents = agents,
   }
 end
+
+M._normalize = normalize
 
 ---Load the active config for the session. Tries project file first,
 ---then global, then returns nil.
@@ -168,11 +180,21 @@ end
 ---@return boolean ok
 ---@return string|nil err
 function M.write(path, data)
+  local raw_agents = data.agents or {}
+  local clean_agents = {}
+  local agent_mod = require("auto-agents.agent")
+  for _, a in ipairs(raw_agents) do
+    local clone = vim.deepcopy(a)
+    if clone.cmd ~= nil then
+      clone.cmd = agent_mod.sanitize_cmd(clone.kind, clone.cmd, clone.name)
+    end
+    clean_agents[#clean_agents + 1] = clone
+  end
   local payload = {
     project = data.project,
     kb = data.kb,
     panel = data.panel,
-    agents = data.agents or {},
+    agents = clean_agents,
   }
   local encoded = toml.encode(payload, {
     section_order = SECTION_ORDER,

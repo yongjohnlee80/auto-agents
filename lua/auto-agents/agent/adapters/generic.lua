@@ -9,7 +9,7 @@ local M = {}
 ---@param spec table
 ---@return string[]
 function M.cmd(spec)
-  if spec and spec.cmd then return spec.cmd end
+  if spec and spec.cmd then return vim.list_slice(spec.cmd) end
   return { vim.o.shell }
 end
 

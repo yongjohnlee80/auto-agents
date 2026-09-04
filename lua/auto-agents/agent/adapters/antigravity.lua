@@ -29,7 +29,7 @@ local M = {}
 ---@param spec table  -- bootstrap entry: { slot, kind, name, title, ..., cmd? }
 ---@return string[]
 function M.cmd(spec)
-  if spec and spec.cmd then return spec.cmd end
+  if spec and spec.cmd then return vim.list_slice(spec.cmd) end
   -- agy has no --model flag (see `agy --help`); spec.model is
   -- silently ignored for antigravity slots.
   return { "agy" }
