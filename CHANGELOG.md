@@ -2,7 +2,7 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## [v0.2.60] — 2026-09-04 — ADR-0082: `<leader>af` forward-text-to-agent picker
+## [v0.2.60] — 2026-09-04 — `<leader>af` forward-text-to-agent picker
 
 Adds `M.forward_text_picker(opts?)` — an operator-push picker that forwards a selected section of text (visual mode) or clipboard content (normal mode) to a live agent slot with an optional instruction.
 

@@ -518,7 +518,7 @@ end, { desc = "Toggle unified diff queue" })
 vim.api.nvim_create_user_command("AutoAgentsForwardText", function()
   require("auto-agents").forward_text_picker()
 end, {
-  desc = "Forward selected text or clipboard to an agent (ADR-0082)",
+  desc = "Forward selected text or clipboard to an agent",
 })
 
 -- :AutoAgentsAdoptResumedAgent <slot>
