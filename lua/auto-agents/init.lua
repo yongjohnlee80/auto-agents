@@ -1965,6 +1965,217 @@ function M.send_buffer_picker(bufnr)
   end)
 end
 
+---ADR-0082 — extract visual selection or clipboard text payload for forward_text_picker.
+---@param opts table?
+---@return table|nil payload
+local function _extract_forward_payload(opts)
+  opts = opts or {}
+  local text = opts.text
+  local bufnr = opts.bufnr or vim.api.nvim_get_current_buf()
+  local mode = opts.mode or vim.fn.mode()
+  local ft = (bufnr and vim.api.nvim_buf_is_valid(bufnr)) and (vim.bo[bufnr].filetype or "") or ""
+  if ft == "" and bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    local bname = vim.api.nvim_buf_get_name(bufnr)
+    if bname and bname ~= "" then
+      ft = vim.filetype.match({ buf = bufnr, filename = bname }) or ""
+    end
+  end
+  local source_info = nil
+  local lines_label = nil
+
+  if text and text ~= "" then
+    -- Explicitly provided text (e.g. from tests or caller)
+    source_info = opts.source or "(provided text)"
+    lines_label = opts.lines_label
+  elseif mode:match("^[vV\22]") then
+    -- Visual mode: capture selection region
+    local s_pos = vim.fn.getpos("v")
+    local e_pos = vim.fn.getpos(".")
+    local sel_type = mode
+    -- Exit visual mode
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+
+    local s_line, s_col = s_pos[2], s_pos[3]
+    local e_line, e_col = e_pos[2], e_pos[3]
+    if s_line > e_line or (s_line == e_line and s_col > e_col) then
+      s_line, e_line = e_line, s_line
+      s_col, e_col = e_col, s_col
+      s_pos, e_pos = e_pos, s_pos
+    end
+
+    if s_line > 0 and e_line > 0 and vim.api.nvim_buf_is_valid(bufnr) then
+      if vim.fn.exists("*getregion") == 1 then
+        local ok, region = pcall(vim.fn.getregion, s_pos, e_pos, { type = sel_type })
+        if ok and region and #region > 0 then
+          text = table.concat(region, "\n")
+        end
+      end
+      if not text or text == "" then
+        local lines = vim.api.nvim_buf_get_lines(bufnr, s_line - 1, e_line, false)
+        if #lines > 0 then
+          if sel_type == "V" then
+            text = table.concat(lines, "\n")
+          elseif sel_type == "\22" then
+            local res = {}
+            local c1 = math.min(s_col, e_col)
+            local c2 = math.max(s_col, e_col)
+            for _, l in ipairs(lines) do
+              res[#res + 1] = string.sub(l, c1, c2)
+            end
+            text = table.concat(res, "\n")
+          else
+            if #lines == 1 then
+              lines[1] = string.sub(lines[1], s_col, e_col)
+            else
+              lines[1] = string.sub(lines[1], s_col)
+              lines[#lines] = string.sub(lines[#lines], 1, e_col)
+            end
+            text = table.concat(lines, "\n")
+          end
+        end
+      end
+      lines_label = s_line == e_line and string.format("line %d", s_line) or string.format("lines %d-%d", s_line, e_line)
+      local name = vim.api.nvim_buf_get_name(bufnr)
+      if name and name ~= "" then
+        source_info = vim.fn.fnamemodify(name, ":p") .. " (" .. lines_label .. ")"
+      else
+        source_info = "(unnamed buffer, " .. lines_label .. ")"
+      end
+    end
+  else
+    -- Normal mode: read clipboard (+ > * > ")
+    local clip = vim.fn.getreg("+")
+    if not clip or clip == "" then clip = vim.fn.getreg("*") end
+    if not clip or clip == "" then clip = vim.fn.getreg('"') end
+    if clip and clip ~= "" and not clip:match("^%s*$") then
+      text = clip
+      source_info = "(clipboard)"
+    end
+  end
+
+  if not text or text == "" or text:match("^%s*$") then
+    return nil
+  end
+
+  local clean = text:gsub("[\r\n%s]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  local snippet = clean:sub(1, 20)
+
+  return {
+    text        = text,
+    snippet     = snippet,
+    source      = source_info or "(selection)",
+    filetype    = ft,
+    lines_label = lines_label,
+  }
+end
+
+---ADR-0082 — build deterministic prompt body for forwarding text.
+---@param payload table
+---@param instruction string?
+---@return string
+local function _build_forward_text_body(payload, instruction)
+  local lines = {}
+  lines[#lines + 1] = "Please work on the forwarded text below per the instruction."
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Source: " .. payload.source
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "```" .. (payload.filetype or "")
+  lines[#lines + 1] = payload.text
+  lines[#lines + 1] = "```"
+  lines[#lines + 1] = ""
+  if instruction and instruction ~= "" then
+    lines[#lines + 1] = "Instruction:"
+    lines[#lines + 1] = instruction
+  else
+    lines[#lines + 1] = "(no additional instruction given)"
+  end
+  return table.concat(lines, "\n")
+end
+
+---ADR-0082 — `<leader>af` operator forward-text to agent picker:
+---Forward selected text (visual mode) or clipboard (normal mode) to a live agent
+---slot with an optional instruction. Displays prompt with a 15-20 char preview,
+---toggles the agent panel into view if not already open, focuses the agent,
+---and sends the structured payload to the agent via mailbox.
+---@param opts table?  -- optional overrides for testing/programmatic use
+function M.forward_text_picker(opts)
+  opts = opts or {}
+  local payload = _extract_forward_payload(opts)
+  if not payload then
+    require("auto-agents.log").notify("clipboard is empty or no text selected",
+      { level = "warn", component = "forward_text" })
+    return
+  end
+
+  local items = _refresh_picker_items()
+  if #items == 0 then
+    require("auto-agents.log").notify("no live agent slots to target",
+      { level = "warn", component = "forward_text" })
+    return
+  end
+
+  local prompt_title = string.format("Forward to an agent [%s]:", payload.snippet)
+
+  vim.ui.select(items, {
+    prompt = prompt_title,
+    format_item = function(item) return item.label end,
+  }, function(choice)
+    if not choice then return end
+
+    vim.ui.input({ prompt = "Instructions: " }, function(instruction)
+      if instruction == nil then return end  -- user cancelled
+
+      -- Toggle on agent panel to view if not already so
+      local already_open = M._panel and M._panel:_is_open()
+      if not already_open then
+        M.open()
+      end
+      -- Focus target slot
+      if type(choice.slot) == "number" then
+        M.focus_slot(choice.slot)
+      end
+
+      local body = _build_forward_text_body(payload, instruction)
+      if not body then
+        require("auto-agents.log").notify("failed to build forward-text prompt",
+          { level = "error", component = "forward_text" })
+        return
+      end
+
+      -- Try to send via auto-core.mailbox.send
+      local agent_name = choice.entry and choice.entry.name
+      local to_addr = agent_name and ("agent:" .. agent_name) or ("slot:" .. tostring(choice.slot))
+
+      local ok_core, ac = pcall(require, "auto-core")
+      local delivered = false
+      if ok_core and ac and ac.mailbox and ac.mailbox.send then
+        local res, send_err = ac.mailbox.send({
+          to      = to_addr,
+          from    = "nvim",
+          kind    = "message",
+          subject = "[forward] " .. payload.snippet,
+          body    = body,
+        })
+        if res then
+          delivered = true
+        else
+          require("auto-agents.log").warn("forward_text",
+            "mailbox.send failed for " .. to_addr .. ": " .. tostring(send_err))
+        end
+      end
+
+      -- Fallback if mailbox send not delivered (e.g. headless/test harness without mailbox router)
+      if not delivered then
+        local sent = M.send_slot(choice.slot, body, { submit = true })
+        if not sent then
+          require("auto-agents.log").notify("forward_text delivery failed for slot " .. tostring(choice.slot),
+            { level = "error", component = "forward_text" })
+        end
+      end
+    end)
+  end)
+end
+
 ---Resolve an agent slot from its name. Returns nil if no bootstrap
 ---entry matches. Public-facing wrapper around the same lookup used by
 ---resolve_status_slot — handy for consumers that have an agent_name

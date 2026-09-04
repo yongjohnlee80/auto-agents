@@ -515,6 +515,12 @@ vim.keymap.set("n", "<F11>", function()
   end
 end, { desc = "Toggle unified diff queue" })
 
+vim.api.nvim_create_user_command("AutoAgentsForwardText", function()
+  require("auto-agents").forward_text_picker()
+end, {
+  desc = "Forward selected text or clipboard to an agent (ADR-0082)",
+})
+
 -- :AutoAgentsAdoptResumedAgent <slot>
 --
 -- ADR 0023 §3.3 Track C — host-side adopt-on-resume bridge. The

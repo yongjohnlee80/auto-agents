@@ -2396,6 +2396,143 @@ do
   aa.state.config.agents.bootstrap = saved_cfg
 end
 
+-- ──── 28. ADR-0082 — forward_text_picker payload + visual + clipboard + guards ────
+print("\n[28] ADR-0082 — forward_text_picker payload + visual + clipboard + guards")
+do
+  local saved_cfg  = aa.state.config.agents.bootstrap
+  local saved_t1   = aa.state.slot_terminals[1]
+  local saved_sel  = vim.ui.select
+  local saved_inp  = vim.ui.input
+  local saved_send = aa.send_slot
+  local saved_open = aa.open
+  local saved_foc  = aa.focus_slot
+
+  -- Live slot 1 (jarvis)
+  aa.state.config.agents.bootstrap = { { slot = 1, name = "jarvis", kind = "claude" } }
+  aa.state.slot_terminals[1] = { is_alive = function() return true end, send = function() return true end }
+
+  local last_select_opts = nil
+  local last_input_opts = nil
+  local captured_send_slot = nil
+  local captured_mailbox_send = nil
+  local opened_panel = false
+  local focused_slot = nil
+
+  aa.open = function(force) opened_panel = true end
+  aa.focus_slot = function(slot) focused_slot = slot end
+  aa.send_slot = function(slot, body, opts)
+    captured_send_slot = { slot = slot, body = body, opts = opts }
+    return true
+  end
+
+  local ok_core, ac = pcall(require, "auto-core")
+  local orig_mb_send = ok_core and ac and ac.mailbox and ac.mailbox.send
+  if ok_core and ac and ac.mailbox then
+    ac.mailbox.send = function(opts)
+      captured_mailbox_send = opts
+      return { ok = true }
+    end
+  end
+
+  local function reset_captures()
+    last_select_opts = nil
+    last_input_opts = nil
+    captured_send_slot = nil
+    captured_mailbox_send = nil
+    opened_panel = false
+    focused_slot = nil
+  end
+
+  local function drive(opts, instruction)
+    reset_captures()
+    vim.ui.select = function(items, s_opts, cb)
+      last_select_opts = s_opts
+      cb(items[1])
+    end
+    vim.ui.input = function(i_opts, cb)
+      last_input_opts = i_opts
+      cb(instruction)
+    end
+    aa.forward_text_picker(opts)
+  end
+
+  -- A) Visual mode selection from a named file buffer
+  local tmpA = vim.fn.tempname() .. ".lua"
+  vim.fn.writefile({ "function add(a, b)", "  return a + b", "end" }, tmpA)
+  vim.cmd.edit(vim.fn.fnameescape(tmpA))
+  local bA = vim.api.nvim_get_current_buf()
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+  drive({
+    text = "function add(a, b)\n  return a + b\nend",
+    bufnr = bA,
+    source = vim.fn.fnamemodify(tmpA, ":p") .. " (lines 1-3)",
+  }, "refactor to arrow function")
+
+  ok("28a: select prompt title contains 'Forward to an agent [' and snippet",
+    last_select_opts ~= nil and last_select_opts.prompt:find("Forward to an agent [function add(a, b)", 1, true) ~= nil,
+    last_select_opts and last_select_opts.prompt or "nil")
+  ok("28a: mailbox send captures to=agent:jarvis and from=nvim",
+    captured_mailbox_send ~= nil and captured_mailbox_send.to == "agent:jarvis" and captured_mailbox_send.from == "nvim",
+    captured_mailbox_send and vim.inspect(captured_mailbox_send) or "nil")
+  ok("28a: subject contains snippet prefix",
+    captured_mailbox_send ~= nil and captured_mailbox_send.subject:find("[forward] function add(a, b)", 1, true) ~= nil)
+  ok("28a: body contains source file path and line numbers",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find(tmpA, 1, true) ~= nil
+      and captured_mailbox_send.body:find("lines 1-3", 1, true) ~= nil)
+  ok("28a: body contains fenced code block with filetype lua",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("```lua\nfunction add(a, b)", 1, true) ~= nil)
+  ok("28a: body contains instruction",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("Instruction:\nrefactor to arrow function", 1, true) ~= nil)
+  ok("28a: body never starts with '[' (codex-safe)",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:sub(1, 1) ~= "[")
+  ok("28a: agent panel was opened and slot 1 focused",
+    opened_panel == true and focused_slot == 1)
+
+  -- B) Empty instruction → placeholder
+  drive({
+    text = "local x = 42",
+    bufnr = bA,
+  }, "")
+  ok("28b: empty instruction renders placeholder in body",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("(no additional instruction given)", 1, true) ~= nil)
+
+  -- C) Normal mode / clipboard fallback
+  vim.fn.setreg("+", "const apiSecret = 'xyz123';")
+  drive({ mode = "n" }, "explain this token")
+  ok("28c: clipboard mode captures register content",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("const apiSecret = 'xyz123';", 1, true) ~= nil)
+  ok("28c: clipboard source label is (clipboard)",
+    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("Source: (clipboard)", 1, true) ~= nil)
+
+  -- D) Empty clipboard → early warning, no send
+  vim.fn.setreg("+", "")
+  vim.fn.setreg("*", "")
+  vim.fn.setreg('"', "")
+  drive({ mode = "n" }, "directive")
+  ok("28d: empty clipboard does not prompt or send",
+    last_select_opts == nil and captured_mailbox_send == nil and captured_send_slot == nil)
+
+  -- E) No live slots → no send
+  vim.fn.setreg("+", "some code")
+  aa.state.slot_terminals[1] = nil
+  drive({ mode = "n" }, "directive")
+  ok("28e: no live slots bails before prompt or send",
+    captured_mailbox_send == nil and captured_send_slot == nil)
+
+  -- restore
+  if ok_core and ac and ac.mailbox then
+    ac.mailbox.send = orig_mb_send
+  end
+  aa.open = saved_open
+  aa.focus_slot = saved_foc
+  vim.ui.select = saved_sel
+  vim.ui.input = saved_inp
+  aa.send_slot = saved_send
+  aa.state.slot_terminals[1] = saved_t1
+  aa.state.config.agents.bootstrap = saved_cfg
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then

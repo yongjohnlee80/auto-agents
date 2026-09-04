@@ -147,6 +147,7 @@ User commands (always available):
 | `:AutoAgentsFocus <N>`    | Focus slot N (0..`slot_count`) in the right-side panel.   |
 | `:AutoAgentsDock`         | Toggle the rightmost-centered navigation dock.            |
 | `:AutoAgentsDiffQueue`    | Toggle the unified diff queue review panel. See below.    |
+| `:AutoAgentsForwardText`  | Forward selected text or clipboard to an agent (ADR-0082).|
 
 For an example wiring (with dynamic `which-key` descriptions per slot), see
 [`examples/lazy-spec.lua`](./examples/lazy-spec.lua) — or the maintainer's live

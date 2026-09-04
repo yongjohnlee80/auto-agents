@@ -2,6 +2,17 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.60] — 2026-09-04 — ADR-0082: `<leader>af` forward-text-to-agent picker
+
+Adds `M.forward_text_picker(opts?)` — an operator-push picker that forwards a selected section of text (visual mode) or clipboard content (normal mode) to a live agent slot with an optional instruction.
+
+- **Visual Selection & Clipboard Fallback:** In visual mode (`v`, `V`, `\22`), extracts the exact selection region via `vim.fn.getregion` (or fallback lines/col slicing) and captures buffer context (file path, line range, filetype). In normal mode, reads system clipboard registers (`+` > `*` > `"`), warning early if clipboard is empty.
+- **Snippet Confirmation:** Displays the agent selection picker titled `"Forward to an agent [<snippet>]:"` with the first 15–20 characters of the text for immediate operator verification.
+- **Panel Visibility & Focus:** Automatically opens/un-hides the right-hand agent panel if closed (`M.open()`) and focuses the selected agent slot (`M.focus_slot(slot)`).
+- **Structured Mailbox Delivery:** Formats a clean, fenced markdown body with source references and user instructions, delivered directly to the agent via `auto-core.mailbox.send` (`kind="message"`), which automatically triggers auto-core's router wake hook to nudge the agent.
+- **Command:** User command `:AutoAgentsForwardText`.
+- **`tests/smoke.lua [28]`** — 13 assertions covering visual selection, named file source lines, clipboard fallback, empty clipboard guard, no live slots guard, panel unhiding/focus, and mailbox message creation. Suite 339 passed / 0 failed.
+
 ## [v0.2.58] — 2026-06-25 — ADR-0045: `<leader>ab` send-buffer-to-agent picker
 
 Adds `M.send_buffer_picker(bufnr?)` — an operator-push that hands the current
