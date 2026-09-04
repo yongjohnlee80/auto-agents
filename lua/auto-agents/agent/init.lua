@@ -147,9 +147,9 @@ end
 ---@return boolean
 function M.is_leaked_runtime_grant_path(path)
   if type(path) ~= "string" or path == "" then return false end
-  if path:match("%.auto%-agents/mailbox/%d+%-%d+")
-    or path:match("%.auto%-agents%-config/mailbox/%d+%-%d+")
-  then
+  local seg = path:match("%.auto%-agents/mailbox/([^/]+)")
+    or path:match("%.auto%-agents%-config/mailbox/([^/]+)")
+  if seg and seg:match("^%d+%-%d+$") then
     return true
   end
   return false

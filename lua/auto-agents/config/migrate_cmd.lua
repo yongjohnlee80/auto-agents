@@ -28,9 +28,9 @@ local toml = require("auto-agents.vendor.toml")
 ---@return boolean
 function M.is_generated_instance_mailbox_path(path)
   if type(path) ~= "string" or path == "" then return false end
-  if path:match("%.auto%-agents/mailbox/%d+%-%d+")
-    or path:match("%.auto%-agents%-config/mailbox/%d+%-%d+")
-  then
+  local seg = path:match("%.auto%-agents/mailbox/([^/]+)")
+    or path:match("%.auto%-agents%-config/mailbox/([^/]+)")
+  if seg and seg:match("^%d+%-%d+$") then
     return true
   end
   return false
@@ -176,14 +176,21 @@ function M.migrate(opts)
     end
   end
 
-  -- If apply mode, also update in-memory bootstrap entries if live session matches
+  -- If apply mode, also update in-memory bootstrap entries ONLY if the migrated file
+  -- is the active project configuration file for the current session.
   if apply then
     local aa_ok, aa = pcall(require, "auto-agents")
     if aa_ok and aa.state and aa.state.config and aa.state.config.agents and aa.state.config.agents.bootstrap then
+      local active_path = (aa.state.session_project_key and store.active_path(aa.state.session_project_key))
+        or store.global_path()
       for _, change in ipairs(summary.changes) do
-        for _, live in ipairs(aa.state.config.agents.bootstrap) do
-          if (change.slot and live.slot == change.slot) or (change.name and live.name == change.name) then
-            live.cmd = change.after
+        if change.file == active_path then
+          for _, live in ipairs(aa.state.config.agents.bootstrap) do
+            if change.slot and live.slot == change.slot
+              and (not change.name or live.name == change.name)
+            then
+              live.cmd = change.after
+            end
           end
         end
       end

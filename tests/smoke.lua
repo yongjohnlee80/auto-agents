@@ -2697,6 +2697,10 @@ do
     agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/mailbox/123-456/juliet") == true)
   ok("29c: is_leaked_runtime_grant_path preserves user mailbox-shaped path",
     agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/custom-box") == false)
+  ok("29c: is_leaked_runtime_grant_path preserves user directory with instance prefix mailbox/123-456-notes",
+    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456-notes") == false)
+  ok("29c: is_leaked_runtime_grant_path preserves files inside mailbox/123-456-notes",
+    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456-notes/notes.txt") == false)
   ok("29c: is_leaked_runtime_grant_path preserves active KB root path",
     agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/kb") == false)
   ok("29c: is_leaked_runtime_grant_path preserves user directory /opt/shared-tools",
@@ -2893,10 +2897,18 @@ cmd = ["agy", "--add-dir", "/opt/shared-tools"]
   local saved_raw = f_read and f_read:read("*a") or ""
   if f_read then f_read:close() end
 
+  local decoded_saved = store._normalize(saved_raw)
+  local saved_wanda = nil
+  local saved_stale = nil
+  for _, a in ipairs(decoded_saved.agents) do
+    if a.name == "wanda" then saved_wanda = a end
+    if a.name == "copilot-stale" then saved_stale = a end
+  end
+
   ok("29e: saved TOML does NOT contain mismatched junie command for antigravity",
-    saved_raw:find('"junie"', 1, true) == nil, saved_raw)
+    saved_wanda ~= nil and saved_wanda.cmd == nil, vim.inspect(saved_wanda))
   ok("29e: saved TOML does NOT contain mismatched copilot command for claude",
-    saved_raw:find('"gh", "copilot"', 1, true) == nil or saved_raw:find('copilot%-stale'), saved_raw)
+    saved_stale ~= nil and saved_stale.cmd == nil, vim.inspect(saved_stale))
   ok("29e: saved TOML PRESERVES user-authored active-KB --add-dir",
     saved_raw:find('"--add-dir", "/home/johno/.config/nvim/.auto-agents-config/kb"', 1, true) ~= nil, saved_raw)
   ok("29e: saved TOML PRESERVES user-authored mailbox-shaped --add-dir",
@@ -2918,6 +2930,16 @@ cmd = ["agy", "--add-dir", "/opt/shared-tools"]
     migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/custom-box") == false)
   ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves active KB directory",
     migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents-config/kb") == false)
+  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves mailbox/123-456-notes with instance prefix",
+    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/123-456-notes") == false)
+  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves file inside mailbox/123-456-notes",
+    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/123-456-notes/notes.txt") == false)
+
+  local notes_res, notes_ch = migrate_cmd.strip_generated_runtime_flags({
+    "agy", "--add-dir", "/proj/.auto-agents/mailbox/123-456-notes"
+  })
+  ok("29f: strip_generated_runtime_flags PRESERVES mailbox/123-456-notes",
+    notes_ch == false and vim.deep_equal(notes_res, { "agy", "--add-dir", "/proj/.auto-agents/mailbox/123-456-notes" }))
 
   local generated_mb = "/proj/.auto-agents/mailbox/1788481884-642128/wanda"
   local stripped_res, stripped_ch = migrate_cmd.strip_generated_runtime_flags({
@@ -2996,6 +3018,54 @@ cmd = ["agy", "--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"]
     applied_content:find('"--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"', 1, true) ~= nil)
 
   pcall(vim.fn.delete, mig_tmp)
+
+  -- Two-config test: migrating an inactive project must NOT mutate the active session in-memory bootstrap
+  local active_proj_file = vim.fn.tempname() .. "_active_proj.toml"
+  local inactive_proj_file = vim.fn.tempname() .. "_inactive_proj.toml"
+
+  local active_cmd_initial = { "agy", "--custom-active" }
+  aa.state.session_project_key = "test_active_key"
+  local orig_active_path = store.active_path
+  store.active_path = function(key)
+    if key == "test_active_key" then return active_proj_file, "project" end
+    return orig_active_path(key)
+  end
+
+  aa.state.config.agents.bootstrap = {
+    { slot = 1, name = "main", kind = "antigravity", cmd = active_cmd_initial }
+  }
+
+  local inact_f = io.open(inactive_proj_file, "w")
+  if inact_f then
+    inact_f:write([==[
+[project]
+cwd = "/tmp/inactive"
+
+[[agents]]
+slot = 1
+kind = "antigravity"
+name = "main"
+cmd = ["junie"]
+]==])
+    inact_f:close()
+  end
+
+  local inact_summary = migrate_cmd.migrate({ apply = true, config_path = inactive_proj_file })
+  ok("29f: migrate on inactive project succeeds", #inact_summary.changes == 1)
+
+  local inact_read = io.open(inactive_proj_file, "r")
+  local inact_content = inact_read and inact_read:read("*a") or ""
+  if inact_read then inact_read:close() end
+  ok("29f: inactive project TOML on disk had mismatched cmd cleared",
+    inact_content:find('"junie"', 1, true) == nil)
+
+  ok("29f: active in-memory bootstrap slot 1 cmd is NOT mutated by inactive project migration",
+    vim.deep_equal(aa.state.config.agents.bootstrap[1].cmd, active_cmd_initial),
+    vim.inspect(aa.state.config.agents.bootstrap[1].cmd))
+
+  store.active_path = orig_active_path
+  pcall(vim.fn.delete, active_proj_file)
+  pcall(vim.fn.delete, inactive_proj_file)
 
   -- restore
   aa.state.config.agents.bootstrap = saved_bootstrap
