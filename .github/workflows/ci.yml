@@ -70,6 +70,13 @@ jobs:
             git -C "$siblings/$2/main" checkout "$3"
           }
           clone_sibling https://github.com/yongjohnlee80/auto-core.nvim auto-core.nvim c4083102029acb9672741efa7234707897d54be7
+          # review_commands_spec requires worktree.store / worktree.review, and
+          # resolves them through the same sibling `pick()` as auto-core. Found
+          # by CI: my first dependency survey read smoke.lua per repo and
+          # generalised from it, so a dep only the OTHER spec files use was
+          # invisible. Enumerated properly now — a grep for every external
+          # require across tests/*.lua returns exactly auto-core and worktree.
+          clone_sibling https://github.com/yongjohnlee80/worktree.nvim worktree.nvim 1aedccca735b42b43b68f4e4f246669075ce03ae
           clone https://github.com/nvim-lua/plenary.nvim plenary.nvim 74b06c6c75e4eeb3108ec01852001636d85a932b
 
       # The suite has clipboard assertions (28c/28g) that call setreg("+", ...)
