@@ -64,6 +64,35 @@ end
 -- ───────────────────────── 1. setup ────────────────────────────────
 print("\n[1] setup()")
 local aa = require("auto-agents")
+
+-- M.version must MATCH the release being cut, not merely be a semver.
+--
+-- It had drifted THREE releases when this cell was written: the string said
+-- "0.2.58" while v0.2.59, v0.2.60 and v0.2.61 all shipped. Nothing failed,
+-- because nothing was checking — a bump that forgets the changelog, or a
+-- changelog that forgets the bump, was invisible here. Consumers can
+-- feature-detect on this value, so a tag whose code reports a different
+-- version is a defective release, and a stale self-reported version is worse
+-- than none because it invites exactly the check it cannot support.
+--
+-- Anchored to the CHANGELOG's newest heading rather than to a hard-coded
+-- minor line. auto-core learned that the hard way: its equivalent assertion
+-- was pinned to `^0%.1%.%d+$`, which did not merely fail to catch a stale
+-- version, it ENFORCED one for ten releases. Ported from auto-core's
+-- smoke [1] after that repo's gate caught the same omission in v0.2.16 and
+-- this repo had no such gate to catch it here.
+ok("M.version is semver and MATCHES the CHANGELOG's newest entry", (function()
+  if type(aa.version) ~= "string"
+    or aa.version:match("^%d+%.%d+%.%d+$") == nil then return false end
+  local root = vim.fn.fnamemodify(
+    vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"), ":h:h")
+  local lines = vim.fn.readfile(root .. "/CHANGELOG.md")
+  for _, line in ipairs(lines) do
+    local v = line:match("^## %[v(%d+%.%d+%.%d+)%]")
+    if v then return v == aa.version, v end   -- the FIRST heading is newest
+  end
+  return false, "no version heading found in CHANGELOG.md"
+end)(), "module=" .. tostring(aa.version))
 local setup_ok, err = pcall(aa.setup, {
   panel = {
     side = "right",
