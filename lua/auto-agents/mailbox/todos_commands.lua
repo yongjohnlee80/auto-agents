@@ -1,4 +1,4 @@
----auto-agents.mailbox.todos_commands — register the 13 mailbox
+---auto-agents.mailbox.todos_commands — register the 15 mailbox
 ---verbs that expose `auto-core.todo` to peer agents (ADR-0031 §5).
 ---
 ---Each verb is a thin wrapper around the corresponding Lua API in
@@ -7,7 +7,7 @@
 ---/ `addressbook` / `commands_list` / `diff_queue` etc. surface in
 ---`commands_list` output.
 ---
----Verb roster (13 total):
+---Verb roster (15 total):
 ---
 ---  Read:
 ---    todos.list       — list tasks (optional status filter)
@@ -29,6 +29,21 @@
 ---    todos.refresh    — full reconciliation pass
 ---    todos.set_dir    — point this workspace at a different .todo-list/
 ---    todos.import     — bulk import from a KB-format source
+---
+---  Automation (ADR-0035):
+---    todos.fire          — run a task's automation now (bypass flags
+---                          are refused from the mailbox)
+---    todos.automation_set — configure a task's automation block
+---                          (bash_enabled=true requires an explicit ack)
+---
+---This roster and the counts above are ASSERTED against `SPECS` by
+---`tests/smoke.lua` [24l]. They were wrong from v0.2.49 (when ADR-0035
+---added `todos.fire` and `todos.automation_set`) through v0.2.62 —
+---fourteen tags — because the header enumerated 13 and stopped two
+---entries above them, ten lines from the table it describes. A README
+---then inherited the wrong count from it. A documented count with
+---nothing checking it against the thing it counts is a claim, not a
+---fact; the cell is the cheapest possible guard. (gold-man, #11 r0.)
 ---
 ---**Side effect**: `todos.assign` (and direct `auto-core.todo.assign`
 ---calls) emit `core.todo.assignee:changed`; this module subscribes

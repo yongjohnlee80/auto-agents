@@ -2159,6 +2159,116 @@ do
     ok_str == true)
 end
 
+-- ────── 24l. the todos roster doc-comment vs SPECS (bug 2026-09-05) ──────
+--
+-- The module's header comment said "13 mailbox verbs" and enumerated
+-- thirteen, stopping two entries above `todos.fire` and
+-- `todos.automation_set`. SPECS has fifteen. The comment sat ten lines from
+-- the table it describes and was wrong from v0.2.49 (when ADR-0035 added
+-- the two) through v0.2.62 — fourteen tags — and auto-agents' README then
+-- inherited the count from it.
+--
+-- Nothing could have caught it, because nothing compared the two. A count
+-- in a doc comment is a claim about a table; this cell makes it a fact.
+--
+-- THE SOURCE IS READ FROM THE LOADED MODULE, not from a path built out of
+-- project_root. Neovim searches runtimepath BEFORE package.path, so a
+-- config-shaped checkout can have `require` resolve one copy while a
+-- hand-built path reads another — the comment and the table would then come
+-- from different files and the cell would be asserting nothing. Taking the
+-- path off a function IN the SPECS table guarantees they are the same file.
+print("\n[24l] todos roster doc-comment vs SPECS (bug 2026-09-05)")
+do
+  local todos_mod = require("auto-agents.mailbox.todos_commands")
+  local specs = todos_mod._SPECS
+
+  local src
+  do
+    local probe = specs and specs["todos.list"] and specs["todos.list"].handler
+    local info = type(probe) == "function" and debug.getinfo(probe, "S") or nil
+    src = info and info.source or ""
+    src = src:sub(1, 1) == "@" and src:sub(2) or nil
+  end
+  ok("24l: located the module source via a SPECS handler, not a built path",
+    src ~= nil and src:match("todos_commands%.lua$") ~= nil, tostring(src))
+
+  local text = ""
+  if src then
+    local fh = io.open(src, "r")
+    if fh then text = fh:read("*a") or ""; fh:close() end
+  end
+  -- A cell that reads an empty file agrees with every claim in it.
+  ok("24l: read the module source (non-empty)", #text > 0, "#text=" .. #text)
+
+  -- The header is everything before the first non-`---` line.
+  local header = text:match("^(%-%-%-.-\n)[^%-]") or text:match("^(.-\n)\n")
+  local header_lines = {}
+  for line in (header or ""):gmatch("[^\n]+") do
+    if line:sub(1, 3) ~= "---" then break end
+    header_lines[#header_lines + 1] = line
+  end
+  local head = table.concat(header_lines, "\n")
+  ok("24l: header block isolated", #header_lines > 10, "#lines=" .. #header_lines)
+
+  -- ── the table side
+  local spec_names, n_specs = {}, 0
+  for name in pairs(specs or {}) do
+    spec_names[name] = true
+    n_specs = n_specs + 1
+  end
+  ok("24l: SPECS is non-empty", n_specs > 0, "n=" .. tostring(n_specs))
+
+  -- ── the comment side: every `todos.<verb>` the header enumerates
+  local doc_names, n_doc = {}, 0
+  for name in head:gmatch("todos%.[a-z_]+") do
+    if not doc_names[name] then
+      doc_names[name] = true
+      n_doc = n_doc + 1
+    end
+  end
+
+  -- (a) no verb in the table is missing from the header. THIS is the half
+  --     that catches the shipped bug: fire and automation_set existed and
+  --     the header did not mention them.
+  local missing = {}
+  for name in pairs(spec_names) do
+    if not doc_names[name] then missing[#missing + 1] = name end
+  end
+  table.sort(missing)
+  ok("24l: every SPECS verb is enumerated in the header",
+    #missing == 0, "undocumented: " .. table.concat(missing, ", "))
+
+  -- (b) and no verb in the header is absent from the table — the reverse
+  --     rot, a header describing a verb that was renamed or removed. Guarded
+  --     in BOTH directions because either one alone leaves a way for the two
+  --     to disagree while the cell stays green.
+  local phantom = {}
+  for name in pairs(doc_names) do
+    if not spec_names[name] then phantom[#phantom + 1] = name end
+  end
+  table.sort(phantom)
+  ok("24l: every header verb exists in SPECS",
+    #phantom == 0, "phantom: " .. table.concat(phantom, ", "))
+
+  -- (c) every COUNT the header states equals the table size. The header
+  --     claims it twice ("register the N mailbox verbs" and "Verb roster (N
+  --     total)"), and both were wrong, so both are checked — and the cell
+  --     fails if it finds NO count to check, because a header that stopped
+  --     stating one would otherwise pass this silently.
+  local counts = {}
+  for n in head:gmatch("register the (%d+) mailbox") do counts[#counts + 1] = tonumber(n) end
+  for n in head:gmatch("Verb roster %((%d+) total%)") do counts[#counts + 1] = tonumber(n) end
+  ok("24l: the header states at least two verb counts",
+    #counts >= 2, "found " .. #counts)
+  local wrong = {}
+  for _, n in ipairs(counts) do
+    if n ~= n_specs then wrong[#wrong + 1] = tostring(n) end
+  end
+  ok("24l: every stated count equals #SPECS",
+    #wrong == 0,
+    "#SPECS=" .. tostring(n_specs) .. " stated=" .. table.concat(wrong, ", "))
+end
+
 -- ─────────────── 25. ADR-0039 Batches A+B+C ───────────────
 print("\n[25] ADR-0039 A+B+C — scope-local options, queue drain, legacy diff retirement, durable writes")
 do
