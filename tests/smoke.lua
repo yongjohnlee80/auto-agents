@@ -1744,6 +1744,48 @@ do
     vim.fn.isdirectory(opt_out_stale) == 1,
     "opt_out_stale missing: " .. opt_out_stale)
 
+  -- ── the >= boundary, deterministically ──────────────────────────
+  -- Widening max_age above from 1 s to 1 h fixed a flake and lost
+  -- something with it: at 1 s the cell was incidentally probing
+  -- `(now - mtime) >= max_age`, badly, which is exactly why it flaked.
+  -- At an hour nothing exercises that edge, so it gets its own cell that
+  -- does not race (gold-man, r0 O2).
+  --
+  -- mtimes are SET, not waited for, via fs_utime, so no wall-clock time
+  -- passes inside the window. The 2-second inset on the "inside" fixture
+  -- is margin against the clock ticking between the os.time() here and
+  -- the one prune takes: a 1-second drift must not be able to flip
+  -- either fixture across the line.
+  do
+    local bnd_root = vim.fn.tempname() .. "_phase6-boundary-root"
+    local max_age  = 3600
+    local now      = os.time()
+    local function plant(id, age)
+      local d = mb_path.mailbox_dir(id, bnd_root)
+      vim.fn.mkdir(d .. "/inbox", "p")
+      vim.uv.fs_utime(d, now - age, now - age)
+      return d
+    end
+    -- EXACTLY at the threshold: `>=` deletes this, `>` would keep it.
+    local at_boundary = plant("agent:at-boundary:4444444444-4444", max_age)
+    -- Two seconds inside it: kept under either operator, which is what
+    -- makes the pair specific to the boundary rather than to pruning.
+    local inside      = plant("agent:inside:5555555555-5555", max_age - 2)
+
+    -- force=true: an explicit root with no live registration is refused
+    -- by design (the safety rail that stops a stray root being wiped).
+    local res = core.mailbox.prune({
+      root = bnd_root, max_age_seconds = max_age, force = true,
+    })
+    ok("Phase 6: prune is >= — a dir exactly max_age old is removed",
+      vim.fn.isdirectory(at_boundary) == 0,
+      "still present: " .. at_boundary .. " / " .. vim.inspect(res))
+    ok("Phase 6: a dir just inside max_age is kept",
+      vim.fn.isdirectory(inside) == 1,
+      "missing: " .. inside .. " / " .. vim.inspect(res))
+    pcall(vim.fn.delete, bnd_root, "rf")
+  end
+
   -- Teardown.
   vim.env.AUTO_AGENTS_MAILBOX_ROOT = saved_env
   pcall(vim.fn.delete, tmp_mb_root, "rf")
