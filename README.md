@@ -363,9 +363,11 @@ the verb does, which is the shape worth avoiding rather than mirroring.
 Either side *may* register — the registry is shared, and this repo does
 both. Verbs registered here are `wake`, `say`, `send_user`, `peek`,
 `diff_queue`, `refresh_agent_id`, `addressbook`, `commands_list`, plus the
-`todos.*` roster (13 thin wrappers over `auto-core.todo`, ADR-0031 §5) and
-the `review.*` namespace (wrapping `worktree.review`). So "it wraps another
-plugin's Lua API" is not by itself a reason to put a verb in that plugin.
+`todos.*` roster (15 thin wrappers over `auto-core.todo` — ADR-0031 §5's
+thirteen, plus `todos.fire` and `todos.automation_set` from ADR-0035) and
+the `review.*` namespace, four verbs wrapping `worktree.review`. So "it
+wraps another plugin's Lua API" is not by itself a reason to put a verb in
+that plugin.
 
 What matters is that a verb is registered **once**, and that the logic it
 needs lives in exactly one place. `editor.open` belongs in auto-core
