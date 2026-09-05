@@ -2,6 +2,58 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.62] — 2026-09-05 — CI on every PR, two timing-flaky cells, and a version string that had drifted three releases
+
+Patch. No Lua surface changed; this release is the gate, the cells it
+fixed, and a correction to what the module reports about itself.
+
+**The repo's first automated gate.** `tests/run-all.sh` already turns a
+silent abort into a loud failure by treating a missing summary line as a
+hard failure — CI supplies the environment and lets the runner be the
+judge. It immediately found three things the local suite could not:
+the suites resolve auto-core from a SIBLING path rather than a bundled
+copy; `diff_ui_spec` asserts `setreg("+")` and a runner has no clipboard
+provider (fixed on the CI side with xvfb + xclip, leaving the tests
+asserting real behaviour); and `review_commands_spec` needs
+worktree.nvim, which the first dependency survey missed by reading
+`smoke.lua` per repo and generalising from it.
+
+The workflow was then rebuilt from auto-core's CORRECTED shape, because
+the first version was hand-copied from its pre-fix one and would have
+exited 128 on the first push to `main`:
+
+- **The branch-restoring step is deleted, not fixed.** Nothing in this
+  test tree reads the repository's own refs — the git work in
+  `diff_panel_labels_spec` builds synthetic repos in tempdirs. That step
+  was also the ONE thing behaving differently per trigger entry
+  (`actions/checkout` detaches on `pull_request`, checks the branch out
+  on `push`), and an entry whose first firing is the merge cannot be
+  witnessed beforehand. Deleting it removes the defect class rather than
+  the instance.
+- **Concurrency is scoped by EVENT**, so a merge cannot cancel the
+  weekly drift run — on a `schedule` event `github.ref` IS the default
+  branch, and a cancelled run reports nothing rather than failing.
+- **A `drift` job** resolves auto-core at its default branch on schedule
+  and manual dispatch only, so pinning dependencies for reproducibility
+  no longer costs the ability to observe an upstream regression.
+
+**Two smoke cells were timing-flaky, and neither was a CI problem.**
+`[14]`'s deferred CR waited a flat 80 ms against a 30 ms delay; when the
+CR was late it landed after the next case's reset, so ONE slow timer
+reddened three cells. It now waits on the condition. `[21]`'s prune
+fixture set `max_age_seconds = 1` and then did a registration and a full
+`aa.setup` INSIDE that window, against a second-granular mtime — flaky
+everywhere, not just under load. Widened to an hour, and the `>=`
+boundary it had been probing by accident now has its own cell that sets
+mtimes with `fs_utime` instead of racing a clock.
+
+**`M.version` had drifted three releases** — it said `0.2.58` while
+v0.2.59, v0.2.60 and v0.2.61 all shipped. Nothing failed, because
+nothing was checking. Corrected here, and smoke `[1]` now anchors it to
+this file's newest heading, so a bump that forgets the changelog or a
+changelog that forgets the bump fails loudly. Ported from auto-core,
+whose equivalent gate caught exactly this omission one release earlier.
+
 ## [v0.2.61] — 2026-09-05 — Clear stale command overrides on kind change & enforce spawn argv immutability
 
 - **Agent Kind Change Sanitization:** When changing an agent's `kind` (e.g. Copilot to Claude), clear stale custom `cmd` overrides unless explicitly re-specified. In wizard editing, warn when an existing command belonged to a different kind and clear it when kind changes.
