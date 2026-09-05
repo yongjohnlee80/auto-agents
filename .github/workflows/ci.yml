@@ -72,5 +72,16 @@ jobs:
           clone_sibling https://github.com/yongjohnlee80/auto-core.nvim auto-core.nvim c4083102029acb9672741efa7234707897d54be7
           clone https://github.com/nvim-lua/plenary.nvim plenary.nvim 74b06c6c75e4eeb3108ec01852001636d85a932b
 
+      # The suite has clipboard assertions (28c/28g) that call setreg("+", ...)
+      # and read it back. A GitHub runner has NO clipboard provider, so those
+      # writes go nowhere and three cells fail — green locally, red here, for a
+      # reason that is the ENVIRONMENT rather than the code.
+      #
+      # Fixed on the CI side rather than by weakening someone else's tests:
+      # xclip gives nvim a provider, and xvfb-run gives xclip a display. The
+      # suite is unchanged and still asserts the real behaviour.
+      - name: install a clipboard provider (for the setreg("+") assertions)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xclip xvfb
+
       - name: tests/run-all.sh
-        run: ./tests/run-all.sh
+        run: xvfb-run -a ./tests/run-all.sh
