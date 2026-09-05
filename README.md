@@ -335,6 +335,45 @@ Top-level lua `opts` is now small — just runtime settings:
 at multiple paths (a clone, a worktree, a sibling repo) — agents are
 duplicated, but the KB is shared so notes don't fragment.
 
+## Mailbox command surface — and where verbs live
+
+An agent discovers what it can ask the host to do by sending
+`kind = "command"`, `command = "commands_list"` to `nvim`. The reply lists
+every whitelisted verb with its `name`, `owner`, `description` and **arg
+`schema`**, so discovery is actionable rather than a list of names. An
+optional `owner` filter narrows it to one plugin. `addressbook` is its
+sibling: peer discovery vs verb discovery, both backed by a live registry
+so results stay accurate as plugins register and unregister.
+
+**The registry is not here.** This is the part that surprises people
+adding a verb:
+
+| Concern | Lives in |
+|---|---|
+| the registry | `auto-core.mailbox.commands` (`register` / `list` / `handle_message`, incl. schema validation) |
+| dispatch | `auto-core.mailbox.router`, calling `commands.handle_message` |
+| discovery | auto-agents' `commands_list` — a **relay**: it calls `core.mailbox.commands.list()` and forwards the entries, schema included |
+
+So **a verb registered in auto-core (or in any family plugin) is discovered
+and dispatched with no auto-agents change at all.** auto-core's
+`editor.open` was added exactly that way and needed nothing here. Adding a
+matching entry on this side would be a second implementation of whatever
+the verb does, which is the shape worth avoiding rather than mirroring.
+
+Either side *may* register — the registry is shared, and this repo does
+both. Verbs registered here are `wake`, `say`, `send_user`, `peek`,
+`diff_queue`, `refresh_agent_id`, `addressbook`, `commands_list`, plus the
+`todos.*` roster (13 thin wrappers over `auto-core.todo`, ADR-0031 §5) and
+the `review.*` namespace (wrapping `worktree.review`). So "it wraps another
+plugin's Lua API" is not by itself a reason to put a verb in that plugin.
+
+What matters is that a verb is registered **once**, and that the logic it
+needs lives in exactly one place. `editor.open` belongs in auto-core
+because the window-selection logic is auto-core's — registering it here as
+well would mean a second implementation of that logic, which is the shape
+worth avoiding. A thin wrapper with no logic of its own, like `todos.*`,
+carries no such risk.
+
 ## Help
 
 Every admin command is documented in a markdown file under `docs/help/`.
@@ -584,6 +623,114 @@ persist until upstream fixes it.
 Junie's compose-for-terminal renderer does handle SIGWINCH but its
 spawn-time render race remains undiagnosed.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs two jobs, and the split between them is
+the point.
+
+**`lua` — the gate.** Every push to `main` and every pull request. It
+installs a pinned toolchain and hands the verdict to `tests/run-all.sh`.
+Everything is pinned, so a red run means *this change* rather than
+something that moved underneath it:
+
+| Pinned by | What | Why |
+|---|---|---|
+| commit SHA | `actions/checkout` | a tag can be moved to different code under the same name |
+| version **and SHA-256** | Neovim `v0.12.5` | a release asset can be replaced under the same tag and name, so the version alone is not reproducible |
+| commit SHA | `auto-core.nvim`, `worktree.nvim`, `plenary.nvim` | reproducibility; the pin's age is reported (see below) |
+
+**`drift` — the early warning.** The same suite, with **auto-core resolved
+at its default branch** instead of the commit `lua` pins. A regression in
+auto-core reaches its consumers before anyone notices, and a consumer
+pinned to a frozen auto-core is precisely the thing that cannot notice.
+Both properties are wanted and they conflict, so they are split rather
+than traded.
+
+`drift` runs on a **schedule (Mondays, 06:00 UTC) and manual dispatch
+only** — deliberately *not* on push or pull request. On push it would
+redden the merge run for an upstream change unrelated to the PR being
+merged, and would put a code path on the merge that no PR run exercised.
+
+### `tests/run-all.sh` is the whole verdict
+
+CI does not reimplement the gate; it supplies the environment and lets the
+runner be the judge. `run-all.sh` runs every suite and treats a **missing**
+`N passed, M failed` summary line as a hard failure, rather than parsing
+whatever partial PASS lines a suite emitted before it stopped. That
+sentinel is the only thing that catches a C-level crash mid-run, which is
+why running a single suite by hand is **not** a substitute:
+
+```sh
+./tests/run-all.sh                              # the gate
+nvim --headless -u NONE -l tests/smoke.lua      # one suite, while iterating
+```
+
+### A failing `drift` run has an addressee
+
+A red row in the Actions tab is not a signal — nobody is obliged to open
+it, and the one time a drift job caught a real regression in this family,
+it was caught because somebody dispatched it by hand while investigating
+something unrelated. Left to the schedule it would have gone red and sat
+there. So on failure the job opens an **issue**, which has an addressee
+that outlives a run's log retention and records *when* divergence started:
+
+- **One issue per repo**, found by the **`ci-drift` label**, not by title.
+  Title matching breaks the moment somebody edits the title — the next
+  failure opens a duplicate instead of commenting.
+- Reopened and commented rather than duplicated, so a month of Mondays is
+  one thread instead of four issues nobody triages.
+- **Closed automatically on the next green** drift run, with a comment
+  saying the divergence cleared.
+
+A `ci-drift` issue does **not** mean this plugin is broken for its users:
+the gating job pins auto-core and is green. It means auto-core has moved in
+a way this suite does not accept yet, and one of the two has to change
+before the pin is bumped.
+
+### Exercising the notifier, and the pin's age
+
+`workflow_dispatch` takes a **`force_drift_failure`** boolean that fails the
+drift job deliberately:
+
+```sh
+gh workflow run ci.yml --repo yongjohnlee80/auto-agents --ref main \
+  -f force_drift_failure=true
+```
+
+The whole premise of the notifier is that an unread signal is not a signal
+— so an untested notifier is the same bug one layer up, and there has to be
+a way to make it fire without waiting for auto-core to break something.
+
+Proven here, both halves, on the real runner: a forced dispatch opened
+[#10](https://github.com/yongjohnlee80/auto-agents/issues/10)
+and the next green drift run closed it again. The design was piloted
+in
+[auto-finder.nvim](https://github.com/yongjohnlee80/auto-finder.nvim) and
+rolled out unchanged.
+
+The `lua` job also reports **how stale the auto-core pin is**, as routine
+output rather than something discovered while debugging.
+It is
+reported and never acted on: **bumping the pin is a deliberate, reviewed
+change, never automatic.** A gating job that changes under a PR
+reintroduces exactly the mystery failure on unrelated work that pinning was
+adopted to prevent.
+
+Two guards keep that report honest, and both exist because the first
+version was wrong:
+
+- It reads the compare API's **`ahead_by`**, not `behind_by`. For
+  `compare/PIN...main`, `behind_by` is always `0` when the pin is an
+  ancestor — the first version printed `0` on a pin eight commits stale,
+  ran green, and would have called the pin current for as long as the repo
+  existed. An unparseable answer now emits a `::warning` saying staleness
+  was **not determined**, because `0` reads as "current".
+- It **counts the `AUTO_CORE_REF` values in the file** and fails with
+  `::error` if there is more than one. When this design was rolled out
+  across the family, the step arrived carrying the pilot repo's SHA — every
+  copy would have reported the age of a pin it does not use, in a step
+  whose whole job is noticing staleness, with nothing about the copy
+  looking wrong.
 ## Status
 
 - [x] **M1** scaffold, terminal providers (snacks/native/none), per-instance state
