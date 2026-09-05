@@ -792,12 +792,22 @@ ok("send_slot returns true with submit=true", ok_body == true)
 ok("body is sent immediately (1 send so far)",
    #sends == 1 and sends[1] == "\27[200~please revise foo()\27[201~")
 
-vim.wait(80)  -- exceed submit_delay_ms so the deferred CR fires
+-- Wait on the CONDITION, not on a fixed duration. A flat vim.wait(80)
+-- leaves the 30 ms deferred CR only 50 ms of slack, which a loaded CI
+-- runner spends easily. The failure is not contained either: the late
+-- CR lands after the `sends = {}` reset below and contaminates the
+-- no-submit cell, so one slow timer reddens three cells. A bounded
+-- condition-wait still fails when the CR never fires — it only stops
+-- failing when the CR is merely slow.
+vim.wait(2000, function() return #sends >= 2 end, 5)
 
 ok("CR is sent after the deferred delay (2 sends total)", #sends == 2)
 ok("second send is exactly \\r", sends[2] == "\r")
 
 -- Without submit=true, no CR follows. Body still wrapped in bracketed-paste.
+-- The condition-wait above has already drained the previous deferred CR,
+-- so anything observed here belongs to this call. A flat wait is the right
+-- shape for asserting ABSENCE — there is no condition to wait on.
 sends = {}
 aa.send_slot(1, "no-submit prompt")
 vim.wait(80)
@@ -1692,7 +1702,13 @@ do
     live_rec ~= nil and type(live_rec.dir) == "string")
 
   -- Drive auto-agents setup with prune ENABLED (default) and a
-  -- 1-second max_age so the "stale" 8-day-old dir counts as old.
+  -- 1-HOUR max_age. Any threshold between a few seconds and 8 days
+  -- separates these two fixtures; 1 second did not, because the window
+  -- was narrower than the register+setup work running inside it. mtime
+  -- is second-granular and prune tests `(now - mtime) >= max_age`, so a
+  -- single second-boundary crossing was enough to age the "fresh" dir
+  -- out and delete it — flaky everywhere, reliably red under CI load.
+  -- 1 hour puts both fixtures unambiguously on their own side of it.
   -- Disable diff_review_enabled side effects by clearing bootstrap.
   aa.state.config.agents.bootstrap = {}
   pcall(aa.setup, {
@@ -1700,7 +1716,7 @@ do
     agents   = { bootstrap = {} },
     kb       = {},
     term     = { enabled = false },
-    mailbox  = { prune = { enabled = true, max_age_seconds = 1 } },
+    mailbox  = { prune = { enabled = true, max_age_seconds = 3600 } },
   })
 
   ok("Phase 6: prune removed the stale instance dir",
