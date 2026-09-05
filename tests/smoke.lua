@@ -2218,9 +2218,35 @@ do
   end
   ok("24l: SPECS is non-empty", n_specs > 0, "n=" .. tostring(n_specs))
 
-  -- ── the comment side: every `todos.<verb>` the header enumerates
+  -- ── the comment side: every `todos.<verb>` the ROSTER enumerates.
+  -- Scoped to the roster block, not the whole header. gold-man's fourth
+  -- mutation (#11 r1): with the `Automation` roster block deleted but the
+  -- explanatory paragraph still NAMING both verbs, a whole-header scan passed
+  -- 450/0 — so the assertion said "enumerated" while accepting "mentioned
+  -- anywhere". The roster is the lines from `Verb roster (` up to the first
+  -- header line that is prose (a `---` followed by text at column 4); roster
+  -- entries and group headings are indented two or more spaces.
+  local roster_lines, in_roster = {}, false
+  for _, line in ipairs(header_lines) do
+    -- Anchor on the words, not on the "(N total)" suffix: a header that drops
+    -- the count must fail the COUNT arm below, not make the roster invisible
+    -- and fail everything (which is what the first anchor did under M3).
+    if line:find("Verb roster", 1, true) then
+      in_roster = true
+    elseif in_roster then
+      if line == "---" or line:match("^%-%-%-%s%s") then
+        roster_lines[#roster_lines + 1] = line
+      else
+        break
+      end
+    end
+  end
+  local roster = table.concat(roster_lines, "\n")
+  ok("24l: roster block isolated (non-empty, smaller than the header)",
+    #roster > 0 and #roster < #head, "#roster=" .. #roster .. " #head=" .. #head)
+
   local doc_names, n_doc = {}, 0
-  for name in head:gmatch("todos%.[a-z_]+") do
+  for name in roster:gmatch("todos%.[a-z_]+") do
     if not doc_names[name] then
       doc_names[name] = true
       n_doc = n_doc + 1
@@ -2235,7 +2261,7 @@ do
     if not doc_names[name] then missing[#missing + 1] = name end
   end
   table.sort(missing)
-  ok("24l: every SPECS verb is enumerated in the header",
+  ok("24l: every SPECS verb is enumerated in the ROSTER block",
     #missing == 0, "undocumented: " .. table.concat(missing, ", "))
 
   -- (b) and no verb in the header is absent from the table — the reverse
@@ -2247,7 +2273,7 @@ do
     if not spec_names[name] then phantom[#phantom + 1] = name end
   end
   table.sort(phantom)
-  ok("24l: every header verb exists in SPECS",
+  ok("24l: every ROSTER verb exists in SPECS",
     #phantom == 0, "phantom: " .. table.concat(phantom, ", "))
 
   -- (c) every COUNT the header states equals the table size. The header
