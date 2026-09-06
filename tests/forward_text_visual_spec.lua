@@ -66,11 +66,33 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 
 -- The clipboard must NOT be what answers, or a green cell proves nothing about
 -- the selection. Poison it with something no assertion below looks for.
+-- An IN-MEMORY clipboard provider, so the suite does not depend on the host
+-- having one. Verified: with no wl-copy/xclip/xsel on PATH and no DISPLAY —
+-- a bare CI runner — `setreg("+", ...)` silently stores nothing, the picker
+-- warns "clipboard is empty or no text selected", and three cells fail. The
+-- test needed the developer's desktop, which is the same defect class as a
+-- fixture needing the developer's environment. (juliet, VM43, r0 §4.)
+local _clip = { ["+"] = { "" }, ["*"] = { "" } }
+vim.g.clipboard = {
+  name = "in-memory-test",
+  copy = {
+    ["+"] = function(lines) _clip["+"] = lines end,
+    ["*"] = function(lines) _clip["*"] = lines end,
+  },
+  paste = {
+    ["+"] = function() return _clip["+"] end,
+    ["*"] = function() return _clip["*"] end,
+  },
+  cache_enabled = 0,
+}
+
 -- Short enough to survive the prompt's snippet truncation: a longer needle
 -- made the clipboard cell fail while the clipboard was working correctly.
 local CLIP = "CLIPBOARD-NOT-SEL"
 vim.fn.setreg("+", CLIP)
 vim.fn.setreg("*", CLIP)
+assert(vim.fn.getreg("+"):find(CLIP, 1, true),
+  "clipboard fixture did not take — the provider is not in effect")
 
 local function feed(keys)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
