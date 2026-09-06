@@ -542,9 +542,36 @@ vim.keymap.set("n", "<F11>", function()
   end
 end, { desc = "Toggle unified diff queue" })
 
-vim.api.nvim_create_user_command("AutoAgentsForwardText", function()
-  require("auto-agents").forward_text_picker()
+-- `range = true` is load-bearing, not decoration. Typing `:` from visual mode
+-- LEAVES visual mode before the command body runs — measured, a `:user`
+-- command sees mode "n" where a visual keymap sees "V" — so
+-- `_extract_forward_payload`'s visual branch can never fire on this path. The
+-- range is the only surviving evidence that a selection was made.
+--
+-- Without it the command did not merely fall back to the clipboard: Vim
+-- auto-inserts `'<,'>` from visual mode, and the command rejected it outright
+-- with `E481: No range allowed`. So forwarding a selection through the only
+-- entry point that shipped was impossible in both directions.
+vim.api.nvim_create_user_command("AutoAgentsForwardText", function(cmd)
+  local opts = {}
+  -- `cmd.range` is 0 with no range, and 1 or 2 when one was given. A `:`
+  -- command is inherently linewise, so line1/line2 is the honest granularity
+  -- here — a keymap bound in visual mode keeps charwise precision.
+  if (cmd.range or 0) > 0 then
+    local bufnr = vim.api.nvim_get_current_buf()
+    local lines = vim.api.nvim_buf_get_lines(bufnr, cmd.line1 - 1, cmd.line2, false)
+    if #lines > 0 then
+      local name = vim.api.nvim_buf_get_name(bufnr)
+      opts.bufnr = bufnr
+      opts.text = table.concat(lines, "\n")
+      opts.source = ((name ~= "" and vim.fn.fnamemodify(name, ":p")) or "(unnamed buffer)")
+        .. string.format(" (lines %d-%d)", cmd.line1, cmd.line2)
+      opts.lines_label = string.format("lines %d-%d", cmd.line1, cmd.line2)
+    end
+  end
+  require("auto-agents").forward_text_picker(opts)
 end, {
+  range = true,
   desc = "Forward selected text or clipboard to an agent",
 })
 
