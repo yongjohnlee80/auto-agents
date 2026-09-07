@@ -2,6 +2,52 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.63] — 2026-09-07 — the forward-text command could never forward a selection
+
+Patch. One command registration; no Lua surface changed.
+
+`:AutoAgentsForwardText` could not forward a visual selection, and had not been
+able to since ADR-0082 shipped. Reported from a live session: forwarding a
+portion of text to an agent simply did not work.
+
+**Typing `:` from visual mode leaves visual mode before the command body
+runs.** Measured rather than reasoned — a `:user` command sees mode `n` where a
+visual keymap sees `V` — so `_extract_forward_payload`'s visual branch could
+never fire on this path.
+
+And it was worse than falling back to the clipboard. Vim auto-inserts `'<,'>`
+from visual mode, and the command, registered without `range`, rejected it
+outright:
+
+```
+E481: No range allowed
+```
+
+So forwarding a selection through the only entry point that shipped was
+impossible in both directions.
+
+`range = true` plus reading `line1`/`line2` fixes it. A `:` command is
+inherently linewise, so that is the honest granularity here; a keymap bound in
+visual mode (autovim's `<leader>af`) keeps charwise precision. The
+`(cmd.range or 0) > 0` guard is load-bearing — with no range, `line1`/`line2`
+still default to the **cursor line**, so an unguarded read would silently
+forward whatever line the cursor sits on instead of the clipboard.
+
+**Why the suite said otherwise.** `smoke.lua` [28] has a case labelled *"Visual
+mode selection"* that passes `text = "..."` pre-supplied. It drives the
+`opts.text` branch and never enters visual mode, so the capture path it names
+has never run. That is a fixture standing in for a runtime value, pinning the
+author's assumption rather than the real shape — the third instance of that
+exact failure in one session across three repositories, now recorded in
+`shared/conventions/code-review.md` §7.
+
+The new `tests/forward_text_visual_spec.lua` drives real visual selections
+through both entry points a user has, with the clipboard poisoned so a green
+cell cannot pass on the fallback. It configures an **in-memory
+`vim.g.clipboard`**: without a provider, `setreg("+", ...)` silently stores
+nothing, and on a bare CI runner three cells failed for a reason unrelated to
+the code — the test needed the developer's desktop.
+
 ## [v0.2.62] — 2026-09-05 — CI on every PR, two timing-flaky cells, and a version string that had drifted three releases
 
 Patch. No Lua surface changed; this release is the gate, the cells it
