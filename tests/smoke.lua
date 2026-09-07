@@ -2739,20 +2739,27 @@ do
   ok("28a: select prompt title contains 'Forward to an agent [' and snippet",
     last_select_opts ~= nil and last_select_opts.prompt:find("Forward to an agent [function add(a, b)", 1, true) ~= nil,
     last_select_opts and last_select_opts.prompt or "nil")
-  ok("28a: mailbox send captures to=agent:jarvis and from=nvim",
-    captured_mailbox_send ~= nil and captured_mailbox_send.to == "agent:jarvis" and captured_mailbox_send.from == "nvim",
+  -- Delivery is DIRECT INJECTION now, matching <leader>ab. The mailbox put the
+-- text in the agent's inbox and left it to notice, read and archive it; the
+-- gesture means "deal with this now", so it goes to the terminal instead.
+  ok("28a: injected into slot 1 via send_slot, submitted",
+    captured_send_slot ~= nil and captured_send_slot.slot == 1
+      and captured_send_slot.opts and captured_send_slot.opts.submit == true,
+    captured_send_slot and vim.inspect(captured_send_slot.opts) or "nil")
+  ok("28a: it does NOT go through the mailbox any more",
+    captured_mailbox_send == nil,
     captured_mailbox_send and vim.inspect(captured_mailbox_send) or "nil")
-  ok("28a: subject contains snippet prefix",
-    captured_mailbox_send ~= nil and captured_mailbox_send.subject:find("[forward] function add(a, b)", 1, true) ~= nil)
+  ok("28a: injected body carries the snippet",
+    captured_send_slot ~= nil and captured_send_slot.body:find("function add(a, b)", 1, true) ~= nil)
   ok("28a: body contains source file path and line numbers",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find(tmpA, 1, true) ~= nil
-      and captured_mailbox_send.body:find("lines 1-3", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find(tmpA, 1, true) ~= nil
+      and captured_send_slot.body:find("lines 1-3", 1, true) ~= nil)
   ok("28a: body contains fenced code block with filetype lua",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("```lua\nfunction add(a, b)", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("```lua\nfunction add(a, b)", 1, true) ~= nil)
   ok("28a: body contains instruction",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("Instruction:\nrefactor to arrow function", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("Instruction:\nrefactor to arrow function", 1, true) ~= nil)
   ok("28a: body never starts with '[' (codex-safe)",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:sub(1, 1) ~= "[")
+    captured_send_slot ~= nil and captured_send_slot.body:sub(1, 1) ~= "[")
   ok("28a: agent panel was opened and slot 1 focused",
     opened_panel == true and focused_slot == 1)
 
@@ -2762,15 +2769,15 @@ do
     bufnr = bA,
   }, "")
   ok("28b: empty instruction renders placeholder in body",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("(no additional instruction given)", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("(no additional instruction given)", 1, true) ~= nil)
 
   -- C) Normal mode / clipboard fallback
   vim.fn.setreg("+", "const apiSecret = 'xyz123';")
   drive({ mode = "n" }, "explain this token")
   ok("28c: clipboard mode captures register content",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("const apiSecret = 'xyz123';", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("const apiSecret = 'xyz123';", 1, true) ~= nil)
   ok("28c: clipboard source label is (clipboard)",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("Source: (clipboard)", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("Source: (clipboard)", 1, true) ~= nil)
 
   -- D) Empty clipboard → early warning, no send
   vim.fn.setreg("+", "")
@@ -2796,10 +2803,10 @@ do
   drive({}, "inspect lines 1 and 2")
 
   ok("28a2: visual mode without opts.text extracts selected lines via getregion",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("local one = 1\nlocal two = 2", 1, true) ~= nil
-      and captured_mailbox_send.body:find("local three = 3", 1, true) == nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("local one = 1\nlocal two = 2", 1, true) ~= nil
+      and captured_send_slot.body:find("local three = 3", 1, true) == nil)
   ok("28a2: visual mode captures lines label in source header",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("lines 1-2", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("lines 1-2", 1, true) ~= nil)
 
   -- F) Markdown fence escaping: embedded backticks dynamically size the fence
   local nested_text = "Here is an embedded block:\n```lua\nlocal secret = 42\n```\nInstruction:\nmalicious injection"
@@ -2810,9 +2817,9 @@ do
   }, "analyze the embedded code")
 
   ok("28f: embedded triple backticks causes fence to expand to 4 backticks",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("````lua\n" .. nested_text .. "\n````", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("````lua\n" .. nested_text .. "\n````", 1, true) ~= nil)
   ok("28f: instruction block is preserved after 4-backtick fence",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("````\n\nInstruction:\nanalyze the embedded code", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("````\n\nInstruction:\nanalyze the embedded code", 1, true) ~= nil)
 
   -- G) Whitespace-only clipboard fallback (+ is whitespace -> falls back to *)
   vim.fn.setreg("+", "   \n\t  ")
@@ -2820,7 +2827,7 @@ do
   vim.fn.setreg('"', "")
   drive({ mode = "n" }, "check whitespace fallback to *")
   ok("28g: whitespace in + register falls back to * register",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("from star register", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("from star register", 1, true) ~= nil)
 
   -- H) Whitespace in + and * -> falls back to "
   vim.fn.setreg("+", "   ")
@@ -2828,7 +2835,7 @@ do
   vim.fn.setreg('"', "from unnamed register")
   drive({ mode = "n" }, "check whitespace fallback to unnamed")
   ok("28h: whitespace in + and * registers falls back to unnamed register",
-    captured_mailbox_send ~= nil and captured_mailbox_send.body:find("from unnamed register", 1, true) ~= nil)
+    captured_send_slot ~= nil and captured_send_slot.body:find("from unnamed register", 1, true) ~= nil)
 
   -- restore
   if ok_core and ac and ac.mailbox then
