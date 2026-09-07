@@ -38,6 +38,28 @@ vim.o.lines = 60
 vim.o.swapfile = false
 vim.o.hidden = true
 
+-- Isolate every XDG root BEFORE the first auto-agents module load.
+--
+-- config.store resolves its directory as `stdpath("config")
+-- .. "/.auto-agents-config"`, and `save_current()` falls back to
+-- `global.toml` whenever the session cwd has no per-project TOML —
+-- which is exactly the case for a headless run from a worktree. So
+-- section 29d, which drives the `agent edit` wizard's on_complete
+-- (and that calls save_current), wrote its single fabricated `wanda`
+-- row straight into the developer's REAL
+-- ~/.config/nvim/.auto-agents-config/global.toml and erased every
+-- agent configured there. Any project without its own project TOML
+-- then rendered as bare `shell` slots.
+--
+-- Section 29b likewise stamps a runtime-identity sidecar under
+-- `stdpath("data")`, so data/state/cache are sandboxed too rather
+-- than config alone. Same idiom as review_commands_spec.lua.
+local sandbox = vim.fn.tempname() .. "-smoke-xdg"
+vim.env.XDG_CONFIG_HOME = sandbox .. "/config"
+vim.env.XDG_DATA_HOME   = sandbox .. "/data"
+vim.env.XDG_STATE_HOME  = sandbox .. "/state"
+vim.env.XDG_CACHE_HOME  = sandbox .. "/cache"
+
 -- Isolate auto-core's persisted state to a fresh tempdir for the
 -- duration of this smoke run. Without this, the `auto-agents`
 -- namespace can leak `panel.slot_count` (and other values) from a
@@ -59,6 +81,27 @@ local function ok(name, cond, detail)
     fail_count = fail_count + 1
     print(string.format("  FAIL  %s  %s", name, tostring(detail or "")))
   end
+end
+
+-- ──── 0. the isolation above actually took ────
+--
+-- A positive control for the sandbox, not a formality. The suite MUTATES
+-- config through the real code paths (section 29d drives the `agent edit`
+-- wizard's on_complete, which calls store.save_current), so if the XDG
+-- override is ever removed, reordered after the first module load, or
+-- defeated by a future stdpath change, this run writes into the developer's
+-- own agent roster and the only symptom is their agents silently becoming
+-- empty `shell` slots on the next launch. That is a wrong answer arriving
+-- as a green suite, so it gets an assertion rather than a comment.
+print("\n[0] test isolation")
+do
+  local store = require("auto-agents.config.store")
+  local cfg_dir = store.config_dir()
+  ok("config.store writes inside the sandbox, not the real config dir",
+    vim.startswith(cfg_dir, sandbox), cfg_dir)
+  ok("global.toml path is not the developer's own",
+    not vim.startswith(store.global_path(), vim.fn.expand("~/.config/nvim/")),
+    store.global_path())
 end
 
 -- ───────────────────────── 1. setup ────────────────────────────────
