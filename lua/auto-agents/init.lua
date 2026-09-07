@@ -2165,35 +2165,23 @@ function M.forward_text_picker(opts)
         return
       end
 
-      -- Try to send via auto-core.mailbox.send
-      local agent_name = choice.entry and choice.entry.name
-      local to_addr = agent_name and ("agent:" .. agent_name) or ("slot:" .. tostring(choice.slot))
-
-      local ok_core, ac = pcall(require, "auto-core")
-      local delivered = false
-      if ok_core and ac and ac.mailbox and ac.mailbox.send then
-        local res, send_err = ac.mailbox.send({
-          to      = to_addr,
-          from    = "nvim",
-          kind    = "message",
-          subject = "[forward] " .. payload.snippet,
-          body    = body,
-        })
-        if res then
-          delivered = true
-        else
-          require("auto-agents.log").warn("forward_text",
-            "mailbox.send failed for " .. to_addr .. ": " .. tostring(send_err))
-        end
-      end
-
-      -- Fallback if mailbox send not delivered (e.g. headless/test harness without mailbox router)
-      if not delivered then
-        local sent = M.send_slot(choice.slot, body, { submit = true })
-        if not sent then
-          require("auto-agents.log").notify("forward_text delivery failed for slot " .. tostring(choice.slot),
-            { level = "error", component = "forward_text" })
-        end
+      -- INJECT DIRECTLY into the agent's terminal, exactly as
+      -- `send_buffer_picker` (<leader>ab) does. This used to go through
+      -- `auto-core.mailbox.send` with send_slot only as a fallback, which made
+      -- the two forwarding keys behave differently for no reason the user
+      -- could see: `<leader>ab` put the text in front of the agent, while
+      -- `<leader>af` put it in the agent's inbox and left the agent to notice
+      -- it, read it, and archive it (Johno, 2026-09-07).
+      --
+      -- The mailbox is the right transport for agent-to-agent traffic, where
+      -- the recipient may be busy and the message has to wait. It is the wrong
+      -- one for a human handing a selection to an agent they are looking at:
+      -- the whole point of the gesture is "deal with this now", and three
+      -- extra housekeeping steps are pure cost.
+      local sent = M.send_slot(choice.slot, body, { submit = true })
+      if not sent then
+        require("auto-agents.log").notify("forward_text delivery failed for slot " .. tostring(choice.slot),
+          { level = "error", component = "forward_text" })
       end
     end)
   end)
