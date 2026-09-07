@@ -2,6 +2,45 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.2.64] — 2026-09-07 — the smoke suite wrote its fixtures into the real agent roster
+
+Patch. Tests only; no Lua surface changed. **Anyone who has run this suite
+should check their agent roster.**
+
+`tests/smoke.lua` isolated auto-core's persisted state but not the XDG roots.
+`config.store` resolves its directory as `stdpath("config") ..
+"/.auto-agents-config"`, and `save_current()` falls back to `global.toml`
+whenever the session cwd has no per-project TOML — which is exactly a headless
+run from a worktree, since a worktree cwd hashes to a different key than the
+project it belongs to.
+
+Section 29d drives the `agent edit` wizard's `on_complete`, and that calls
+`save_current`. So the run wrote its single fabricated `wanda` row straight
+into the developer's real `~/.config/nvim/.auto-agents-config/global.toml` and
+**erased every agent configured there**. Any project without its own project
+TOML then rendered as bare `shell` slots.
+
+It was reported by a user whose roster was destroyed this way, and the suite
+was green throughout — the damage was entirely outside what any assertion
+looked at.
+
+All four XDG roots are now redirected to a per-run tempdir **before the first
+auto-agents module load**, matching the idiom `review_commands_spec.lua`
+already used. Section 29b also stamps a runtime-identity sidecar under
+`stdpath("data")`, so data, state and cache are sandboxed rather than config
+alone.
+
+**A new section [0] asserts the sandbox actually took**, and is the point
+rather than a formality: the suite mutates config through the real code paths,
+so if the override is ever removed, reordered after the first module load, or
+defeated by a future `stdpath` change, the run silently eats the developer's
+roster again and the only symptom is their agents becoming empty `shell` slots
+on the next launch. A wrong answer arriving as a green suite gets an assertion,
+not a comment.
+
+Verified against a real roster: 8 agents, byte-identical and mtime-unchanged
+across a full patched run.
+
 ## [v0.2.63] — 2026-09-07 — the forward-text command could never forward a selection
 
 Patch. One command registration; no Lua surface changed.
