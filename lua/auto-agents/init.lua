@@ -1828,6 +1828,116 @@ end
 ---paste arbitrary buffer text into the TUI, so it is bounded.
 local SEND_BUFFER_MAX_INLINE_LINES = 1000
 
+---Find a window currently displaying `bufnr`, preferring `preferred`.
+---
+---A buffer can be in several windows or in none, so the window is a SEPARATE
+---question from the buffer and gets a separate answer. `preferred` is the
+---window that was current when the operator pressed the key — the one they
+---were actually looking at — but it is only used if it still shows the target
+---buffer; handing over a window id that displays something else is worse than
+---handing over none, because the recipient would edit the wrong place.
+---@param bufnr integer
+---@param preferred integer?
+---@return integer? winid
+local function _win_for_buf(bufnr, preferred)
+  if not (type(bufnr) == "number" and vim.api.nvim_buf_is_valid(bufnr)) then
+    return nil
+  end
+  if type(preferred) == "number" and vim.api.nvim_win_is_valid(preferred)
+    and vim.api.nvim_win_get_buf(preferred) == bufnr then
+    return preferred
+  end
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == bufnr then return w end
+  end
+  return nil
+end
+
+---Describe the LIVE editor location an agent should edit, for the payload.
+---
+---Johno, 2026-09-08: a path alone loses a race the operator cannot see. They
+---press `<leader>ab` on a buffer with unsaved edits, the agent reads the path,
+---and it gets the pre-edit file — silently, because nothing in the payload
+---said the editor held a newer version. Both keys now hand over the buffer and
+---window ids alongside the path, so the recipient can act on the buffer the
+---operator is looking at instead of the copy on disk.
+---
+---The server address rides along because the ids are meaningless without it:
+---a buffer number identifies a buffer only WITHIN one nvim, and an agent may
+---have more than one in reach. `$NVIM` is already in a spawned agent's
+---environment, but a payload that names its own instance cannot be applied to
+---the wrong one by an agent that has two.
+---@param bufnr integer?
+---@param winid integer?
+---@return table? ref  { bufnr, winid, server }
+local function _live_ref(bufnr, winid)
+  if not (type(bufnr) == "number" and vim.api.nvim_buf_is_valid(bufnr)) then
+    return nil
+  end
+  return {
+    bufnr  = bufnr,
+    winid  = winid,
+    server = (vim.v.servername ~= "" and vim.v.servername) or nil,
+  }
+end
+
+---How the live buffer stands relative to a file on disk. Only the ADVICE
+---differs between these; the ids are the same facts in every case.
+local LIVE_REF_NOTE = {
+  -- The buffer holds edits the file does not. The buffer is the only correct
+  -- target, and the payload says so outright rather than leaving the agent to
+  -- infer it from a warning.
+  ["disk-lags"] = {
+    "(the buffer has unsaved changes, so it does NOT match the file on disk —",
+    " edit the BUFFER through the nvim server above; the path identifies the",
+    " file, it is not where the current text is)",
+  },
+  ["in-sync"] = {
+    "(buffer and file agree right now; either is correct, and the buffer id is",
+    " here so the operator's unsaved work cannot be lost if they type while",
+    " you work)",
+  },
+  -- No file to disagree with: an unnamed buffer, or a path not written yet.
+  -- The contents are inlined above, but they are a SNAPSHOT — the buffer is
+  -- the only place an edit can actually land.
+  ["no-file"] = {
+    "(there is no file on disk yet, so the buffer is the only place an edit can",
+    " land — the contents above are a snapshot of it, not a second copy to",
+    " write back)",
+  },
+  -- `<leader>af`: the excerpt was lifted OUT of this buffer. The line numbers
+  -- in `Source:` are the operator's, and they only mean anything against the
+  -- buffer they were read from.
+  ["selection"] = {
+    "(the excerpt above was read from this buffer at the lines named in Source;",
+    " edit it there rather than guessing where the text lives)",
+  },
+  ["selection-dirty"] = {
+    "(the excerpt above was read from this buffer, which has unsaved changes —",
+    " the file on disk does NOT contain what you were shown, so edit the",
+    " BUFFER through the nvim server above)",
+  },
+}
+
+---Render `_live_ref`'s answer as payload lines.
+---
+---One renderer for both keys: `<leader>ab` and `<leader>af` describe the same
+---thing, and two spellings of "here is the live buffer" would be two things
+---for a recipient to learn.
+---@param ref table?
+---@param kind string?  key into LIVE_REF_NOTE; omit for the ids alone
+---@return string[] lines
+local function _live_ref_lines(ref, kind)
+  if not ref then return {} end
+  local out = {}
+  local loc = "Live buffer: " .. tostring(ref.bufnr)
+  if ref.winid then loc = loc .. "   Window: " .. tostring(ref.winid) end
+  if ref.server then loc = loc .. "   nvim server: " .. ref.server end
+  out[#out + 1] = loc
+  vim.list_extend(out, LIVE_REF_NOTE[kind] or {})
+  return out
+end
+
 ---ADR-0045 — build the deterministic prompt body for `send_buffer_picker`.
 ---Payload model: **file-path reference, but only for a real readable
 ---on-disk file** (Lector review, must-fix #2). When `abspath` names a
@@ -1845,8 +1955,9 @@ local SEND_BUFFER_MAX_INLINE_LINES = 1000
 ---@param abspath string?   -- absolute path, or nil for an unnamed buffer
 ---@param modified boolean  -- buffer has unsaved changes
 ---@param instruction string  -- may be "" (no extra directive)
+---@param ref table?        -- `_live_ref` result: the live buffer/window to edit
 ---@return string|nil body
-local function _build_send_buffer_body(bufnr, abspath, modified, instruction)
+local function _build_send_buffer_body(bufnr, abspath, modified, instruction, ref)
   local lines = {}
   local has_path = abspath ~= nil and abspath ~= ""
   local readable = has_path and vim.fn.filereadable(abspath) == 1
@@ -1857,10 +1968,15 @@ local function _build_send_buffer_body(bufnr, abspath, modified, instruction)
     lines[#lines + 1] = "Please work on this file per the instruction below."
     lines[#lines + 1] = ""
     lines[#lines + 1] = "File: " .. abspath
-    if modified then
-      lines[#lines + 1] = "(note: the editor buffer has unsaved changes — read the"
-      lines[#lines + 1] = " file as-is on disk; ask before assuming the latest edits)"
-    end
+    -- The live buffer, not just the path. The note this replaces told the
+    -- agent to "read the file as-is on disk; ask before assuming the latest
+    -- edits" whenever the buffer was MODIFIED, which turned the operator's own
+    -- unsaved work into an obstacle to route around. With the buffer and
+    -- window ids in hand there is nothing to ask about: the buffer is
+    -- reachable, and when the two disagree it is the authority.
+    local sync_kind = "in-sync"
+    if modified then sync_kind = "disk-lags" end
+    vim.list_extend(lines, _live_ref_lines(ref, sync_kind))
   else
     -- Inline fallback: unnamed buffer, or a named buffer whose path is
     -- not a readable on-disk file yet. Either way a path reference is
@@ -1885,6 +2001,10 @@ local function _build_send_buffer_body(bufnr, abspath, modified, instruction)
       lines[#lines + 1] = "Please work on the (unnamed) buffer contents below per the"
       lines[#lines + 1] = "instruction."
     end
+    -- The ids matter MORE here than in the path branch: with nothing on disk,
+    -- the buffer is the only address an edit can be applied to. The inlined
+    -- contents below are a snapshot for reading.
+    vim.list_extend(lines, _live_ref_lines(ref, "no-file"))
     lines[#lines + 1] = ""
     lines[#lines + 1] = "```" .. ft
     vim.list_extend(lines, content)
@@ -1916,8 +2036,13 @@ end
 ---steals focus). Non-file buffers (terminals / agent panels / prompts)
 ---are rejected. Bound to `<leader>ab` by the autovim consumer config.
 ---@param bufnr integer?  -- defaults to the current buffer at call time
-function M.send_buffer_picker(bufnr)
+---@param winid integer?  -- window showing it; defaults to the current window
+function M.send_buffer_picker(bufnr, winid)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
+  -- The window is captured HERE for the same reason the buffer is: the picker
+  -- is about to take focus, so by the time the payload is built the current
+  -- window is the picker's, not the operator's.
+  winid = winid or vim.api.nvim_get_current_win()
   if not vim.api.nvim_buf_is_valid(bufnr) then
     require("auto-agents.log").notify("no valid buffer to send",
       { level = "warn", component = "send_slot" })
@@ -1950,6 +2075,7 @@ function M.send_buffer_picker(bufnr)
   local abspath = (name ~= nil and name ~= "")
     and vim.fn.fnamemodify(name, ":p") or nil
   local modified = vim.bo[bufnr].modified and true or false
+  local ref = _live_ref(bufnr, _win_for_buf(bufnr, winid))
 
   vim.ui.select(items, {
     prompt = "Send buffer to slot:",
@@ -1958,7 +2084,7 @@ function M.send_buffer_picker(bufnr)
     if not choice then return end
     vim.ui.input({ prompt = "Instructions: " }, function(instruction)
       if instruction == nil then return end  -- user cancelled the input
-      local body = _build_send_buffer_body(bufnr, abspath, modified, instruction)
+      local body = _build_send_buffer_body(bufnr, abspath, modified, instruction, ref)
       if not body then
         require("auto-agents.log").notify("failed to build buffer-send prompt",
           { level = "error", component = "send_slot" })
@@ -1990,6 +2116,13 @@ local function _extract_forward_payload(opts)
   end
   local source_info = nil
   local lines_label = nil
+  -- Where the text came FROM, tracked as a fact rather than inferred later
+  -- from the shape of `source`. The payload has to tell the recipient whether
+  -- there is a buffer to edit, and a string match on "(clipboard)" would be a
+  -- second, weaker copy of the decision made right here (Johno, 2026-09-08:
+  -- "if forwarding to agent with clipboard takes place then should inform
+  -- that the contents are from clipboard rather than the buffer id").
+  local from_clipboard = false
 
   if text and text ~= "" then
     -- Explicitly provided text (e.g. from tests or caller)
@@ -2061,6 +2194,7 @@ local function _extract_forward_payload(opts)
     if _is_valid_text(clip) then
       text = clip
       source_info = "(clipboard)"
+      from_clipboard = true
     end
   end
 
@@ -2071,12 +2205,23 @@ local function _extract_forward_payload(opts)
   local clean = text:gsub("[\r\n%s]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
   local snippet = clean:sub(1, 20)
 
+  -- The clipboard has no buffer behind it, so `ref` stays nil there rather
+  -- than naming the buffer that merely happened to be focused when the
+  -- operator pressed the key — that buffer is not what is being forwarded.
+  local ref = nil
+  if not from_clipboard then
+    ref = _live_ref(bufnr, _win_for_buf(bufnr, opts.winid))
+  end
+
   return {
-    text        = text,
-    snippet     = snippet,
-    source      = source_info or "(selection)",
-    filetype    = ft,
-    lines_label = lines_label,
+    text           = text,
+    snippet        = snippet,
+    source         = source_info or "(selection)",
+    filetype       = ft,
+    lines_label    = lines_label,
+    from_clipboard = from_clipboard,
+    ref            = ref,
+    modified       = (vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].modified) and true or false,
   }
 end
 
@@ -2101,6 +2246,16 @@ local function _build_forward_text_body(payload, instruction)
   lines[#lines + 1] = "Please work on the forwarded text below per the instruction."
   lines[#lines + 1] = ""
   lines[#lines + 1] = "Source: " .. payload.source
+  if payload.from_clipboard then
+    -- Say the negative out loud. Without this the recipient sees a payload
+    -- shaped like every other one and has to notice the ABSENCE of a buffer
+    -- line to work out there is nothing to edit in place.
+    lines[#lines + 1] = "(this came from the clipboard, not from a buffer — there is no buffer"
+    lines[#lines + 1] = " id to edit; the text above is all there is)"
+  else
+    vim.list_extend(lines, _live_ref_lines(payload.ref,
+      payload.modified and "selection-dirty" or "selection"))
+  end
   lines[#lines + 1] = ""
   lines[#lines + 1] = fence .. (payload.filetype or "")
   lines[#lines + 1] = payload.text
@@ -2122,7 +2277,14 @@ end
 ---and sends the structured payload to the agent via mailbox.
 ---@param opts table?  -- optional overrides for testing/programmatic use
 function M.forward_text_picker(opts)
-  opts = opts or {}
+  -- Copied, not mutated: callers (the smoke driver among them) reuse their
+  -- opts table across invocations, and defaulting a field INTO it would make
+  -- the second call inherit the first call's window.
+  opts = vim.tbl_extend("keep", opts or {}, {
+    -- The operator's window, captured before the picker takes focus — same
+    -- reason `send_buffer_picker` captures the buffer there.
+    winid = vim.api.nvim_get_current_win(),
+  })
   local payload = _extract_forward_payload(opts)
   if not payload then
     require("auto-agents.log").notify("clipboard is empty or no text selected",

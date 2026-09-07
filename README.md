@@ -164,7 +164,7 @@ float lets you review each queued change on your own terms.
 ### Layout
 
 ```
-┌─ Agent Diff Queue ────────────────────────────────────────────────┐
+┌─ Agent Edits Queue ───────────────────────────────────────────────┐
 │ Pending Diffs (3) │ Current               │ Proposed              │
 │                   │                       │                       │
 │ ▶ [1] foo.go      │ <old content from     │ <new content the      │

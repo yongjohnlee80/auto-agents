@@ -2601,6 +2601,56 @@ do
   ok("27a: body never starts with '[' (codex-safe)",
     cA ~= nil and cA.body:sub(1, 1) ~= "[")
 
+  -- A2) THE LIVE EDITOR LOCATION (Johno, 2026-09-08). A path alone loses a
+  -- race the operator cannot see: they press the key on a buffer holding
+  -- unsaved edits, the agent reads the path, and it gets the pre-edit file.
+  -- The payload now names the buffer and the window, so the recipient can act
+  -- on what the operator is looking at.
+  --
+  -- The ids are asserted by VALUE. "the body contains 'Live buffer:'" would
+  -- pass just as well with a hard-coded number in it, which is precisely the
+  -- bug that would make the whole feature useless.
+  local winA = vim.api.nvim_get_current_win()
+  ok("27a2: fixture precondition: the test window really shows buffer bA",
+    vim.api.nvim_win_get_buf(winA) == bA)
+  ok("27a2: *** body names the buffer id, by value ***",
+    cA ~= nil and cA.body:find("Live buffer: " .. bA, 1, true) ~= nil,
+    cA and cA.body or "nil")
+  ok("27a2: *** and the window id actually displaying it, by value ***",
+    cA ~= nil and cA.body:find("Window: " .. winA, 1, true) ~= nil,
+    cA and cA.body or "nil")
+  ok("27a2: the ids are accompanied by the nvim server that scopes them",
+    cA ~= nil and (vim.v.servername == ""
+      or cA.body:find("nvim server: " .. vim.v.servername, 1, true) ~= nil),
+    cA and cA.body or "nil")
+  -- A clean buffer must NOT claim the disk is stale — that advice is what
+  -- distinguishes the two states, and it is the half a reader acts on.
+  ok("27a2: a clean buffer says buffer and file agree",
+    cA ~= nil and cA.body:find("buffer and file agree", 1, true) ~= nil
+      and cA.body:find("does NOT match the file on disk", 1, true) == nil)
+
+  -- A window that shows something ELSE must not be handed over: a wrong
+  -- window id is worse than none, because the recipient would edit there.
+  local other = vim.api.nvim_create_buf(true, false)
+  local cA3 = (function()
+    captured = nil
+    vim.ui.input = function(_, cb) cb("check the window") end
+    -- Pass a window that does NOT display bA.
+    local scratch_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(scratch_win, other)
+    aa.send_buffer_picker(bA, scratch_win)
+    return captured
+  end)()
+  ok("27a3: *** a window showing a DIFFERENT buffer is not reported for it ***",
+    cA3 ~= nil and cA3.body:find("Window: " .. vim.api.nvim_get_current_win(), 1, true) == nil,
+    cA3 and cA3.body or "nil")
+  ok("27a3: the buffer id is still reported when no window shows it",
+    cA3 ~= nil and cA3.body:find("Live buffer: " .. bA, 1, true) ~= nil,
+    cA3 and cA3.body or "nil")
+  -- Put bA back in front for the modified-file cells below.
+  vim.cmd.edit(vim.fn.fnameescape(tmpA))
+  bA = vim.api.nvim_get_current_buf()
+
   -- B) named existing MODIFIED file → path mode + unsaved note
   vim.api.nvim_buf_set_lines(bA, 0, 0, false, { "-- dirty" })
   local cB = drive(bA, "")
@@ -2608,6 +2658,20 @@ do
     cB ~= nil and cB.body:find("unsaved changes", 1, true) ~= nil)
   ok("27b: empty instruction → placeholder",
     cB ~= nil and cB.body:find("(no additional instruction given)", 1, true) ~= nil)
+  -- The note this REPLACED told the agent to "read the file as-is on disk;
+  -- ask before assuming the latest edits", which made the operator's own
+  -- unsaved work an obstacle to route around. Both halves are pinned: the
+  -- new instruction is present AND the old one is gone.
+  ok("27b2: *** a dirty buffer directs the edit AT THE BUFFER ***",
+    cB ~= nil and cB.body:find("does NOT match the file on disk", 1, true) ~= nil
+      and cB.body:find("edit the BUFFER", 1, true) ~= nil,
+    cB and cB.body or "nil")
+  ok("27b2: *** and no longer sends the agent to the stale file on disk ***",
+    cB ~= nil and cB.body:find("read the", 1, true) == nil
+      and cB.body:find("ask before assuming", 1, true) == nil,
+    cB and cB.body or "nil")
+  ok("27b2: a dirty buffer still carries its ids",
+    cB ~= nil and cB.body:find("Live buffer: " .. bA, 1, true) ~= nil)
 
   -- C) named buffer whose path is NOT on disk → inline fallback (must-fix #2)
   local tmpC = vim.fn.tempname() .. "-missing.md"  -- never written
@@ -2763,6 +2827,47 @@ do
   ok("28a: agent panel was opened and slot 1 focused",
     opened_panel == true and focused_slot == 1)
 
+  -- A2) THE LIVE EDITOR LOCATION, same contract as `<leader>ab` (Johno,
+  -- 2026-09-08: "both methods should pass the buffer window identifications
+  -- along with the filepath so the edits can take place right on the
+  -- buffer"). The `Source:` line already named the file and the lines; what
+  -- was missing is the address the excerpt can be EDITED at.
+  local winA = vim.api.nvim_get_current_win()
+  ok("28a2: fixture precondition: the test window shows the source buffer",
+    vim.api.nvim_win_get_buf(winA) == bA)
+  ok("28a2: *** a buffer-sourced forward names the buffer id, by value ***",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("Live buffer: " .. bA, 1, true) ~= nil,
+    captured_send_slot and captured_send_slot.body or "nil")
+  ok("28a2: *** and the window id displaying it, by value ***",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("Window: " .. winA, 1, true) ~= nil,
+    captured_send_slot and captured_send_slot.body or "nil")
+  ok("28a2: it points the recipient back at the lines named in Source",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("read from this buffer", 1, true) ~= nil,
+    captured_send_slot and captured_send_slot.body or "nil")
+  ok("28a2: a clean source buffer does not claim the disk is stale",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("unsaved changes", 1, true) == nil)
+
+  -- A3) A DIRTY source buffer. The excerpt the operator selected does not
+  -- exist in the file on disk, so the payload has to say the buffer is the
+  -- only place it can be found.
+  vim.api.nvim_buf_set_lines(bA, 0, 0, false, { "-- dirty" })
+  drive({
+    text = "function add(a, b)\n  return a + b\nend",
+    bufnr = bA,
+    source = vim.fn.fnamemodify(tmpA, ":p") .. " (lines 2-4)",
+  }, "refactor")
+  ok("28a3: *** a dirty source buffer warns the file on disk lacks the excerpt ***",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("has unsaved changes", 1, true) ~= nil
+      and captured_send_slot.body:find("edit the", 1, true) ~= nil,
+    captured_send_slot and captured_send_slot.body or "nil")
+  vim.cmd("silent! edit! " .. vim.fn.fnameescape(tmpA))
+  bA = vim.api.nvim_get_current_buf()
+
   -- B) Empty instruction → placeholder
   drive({
     text = "local x = 42",
@@ -2778,6 +2883,30 @@ do
     captured_send_slot ~= nil and captured_send_slot.body:find("const apiSecret = 'xyz123';", 1, true) ~= nil)
   ok("28c: clipboard source label is (clipboard)",
     captured_send_slot ~= nil and captured_send_slot.body:find("Source: (clipboard)", 1, true) ~= nil)
+
+  -- C2) THE CLIPBOARD CASE, stated as a negative (Johno, 2026-09-08: "if
+  -- forwarding to agent with clipboard takes place then should inform that
+  -- the contents are from clipboard rather than the buffer id").
+  --
+  -- The buffer that happens to be focused when the operator presses the key
+  -- in normal mode is NOT what is being forwarded — clipboard text can have
+  -- come from anywhere — so reporting its id would point the recipient at an
+  -- unrelated file. That is the cell that matters here.
+  ok("28c2: *** clipboard text carries NO buffer id, even with a live buffer focused ***",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("Live buffer:", 1, true) == nil
+      and captured_send_slot.body:find("Window:", 1, true) == nil,
+    captured_send_slot and captured_send_slot.body or "nil")
+  ok("28c2: *** and says so out loud rather than leaving an absence to notice ***",
+    captured_send_slot ~= nil
+      and captured_send_slot.body:find("came from the clipboard, not from a buffer", 1, true) ~= nil,
+    captured_send_slot and captured_send_slot.body or "nil")
+  -- Positive control for the two cells above: the SAME focused buffer does
+  -- get reported when the text genuinely came out of it. Without this pair,
+  -- an implementation that never emitted ids at all would read green.
+  ok("28c2: fixture precondition: a real buffer was focused during the clipboard forward",
+    vim.api.nvim_buf_is_valid(vim.api.nvim_get_current_buf())
+      and vim.bo[vim.api.nvim_get_current_buf()].buftype == "")
 
   -- D) Empty clipboard → early warning, no send
   vim.fn.setreg("+", "")

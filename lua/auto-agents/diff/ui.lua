@@ -6,6 +6,31 @@ local M = {}
 
 local queue = require("auto-agents.diff.queue")
 
+--- The panel's FORMAL name, and the only place it is spelled.
+---
+--- Johno, 2026-09-08: this panel and auto-finder's repos diff were both
+--- called some variant of "diff view", which made a request like "close the
+--- diff view" ambiguous and a keybinding description misleading. They review
+--- different things and now say so: THIS one is the queue of edits agents are
+--- proposing, so it is the **Agent Edits Queue**; auto-finder's, which shows
+--- commits against a base branch, is the **Git Diff View**.
+---
+--- Exported rather than inlined at the float so a consumer naming the panel —
+--- AutoVim's navigation modal does — reads the name from here instead of
+--- keeping a second copy that can drift.
+M.PANEL_TITLE = "Agent Edits Queue"
+
+--- Deliberate shift off centre.
+---
+--- Both panels are near-full-screen and both centred, so opening one over the
+--- other read as a redraw rather than as a different panel. This one sits UP
+--- and LEFT; the Git Diff View sits down and right by the same amount, giving
+--- a visible offset in both axes without either leaving the middle of the
+--- screen. auto-core clamps these to the available margin, so a small
+--- terminal degrades to centred instead of pushing a pane off screen.
+M.PANEL_ROW_OFFSET = -2
+M.PANEL_COL_OFFSET = -6
+
 --- @type AutoCoreMultiFloat?
 local _mfloat = nil
 
@@ -476,9 +501,11 @@ function M.open()
   _mfloat = auto_core.ui.float.multi.new({
     name = "auto_agents_diff_queue",
     outer = {
-      title = " Agent Diff Queue ",
+      title = " " .. M.PANEL_TITLE .. " ",
       width_pct = 0.9,
       height_pct = 0.9,
+      row_offset = M.PANEL_ROW_OFFSET,
+      col_offset = M.PANEL_COL_OFFSET,
     },
     panes = {
       left = { width = 0.2, cursorline = true },
