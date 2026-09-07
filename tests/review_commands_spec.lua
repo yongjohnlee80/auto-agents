@@ -8,8 +8,22 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
+---Resolve a sibling plugin's checkout.
+---
+---`/main` FIRST, deliberately. This list used to lead with
+---`/review-authoring`, a feature worktree that existed while ADR-0067 was
+---being written — so on any machine where that directory survived, the spec
+---silently pinned `auto-core` to a months-old checkout. Here it pinned one
+---with no `auto-core/docstore` at all, and the suite aborted mid-run on
+---`worktree.review: auto-core.docstore.revisions is required` — reported
+---identically on `main`, because the cause is the developer's directory
+---layout rather than anything in the repo.
+---
+---A test may not resolve a dependency through whichever sibling worktree
+---happens to be lying around (`tests-never-touch-the-developer-environment`).
+---`/main` tracks the branch every other suite in this repo builds against.
 local function pick(rel)
-  for _, wt in ipairs({ "/review-authoring", "/main", "" }) do
+  for _, wt in ipairs({ "/main", "" }) do
     local p = plugins_root .. "/" .. rel .. wt
     if vim.fn.isdirectory(p .. "/lua") == 1 then return p end
   end

@@ -81,6 +81,61 @@ vim.wait(50)
 local mf = ui._test_get_mfloat()
 ok("multi-float instance is live", mf ~= nil and mf:is_open())
 
+-- The panel's FORMAL name (Johno, 2026-09-08). This panel and auto-finder's
+-- repos diff were both called some variant of "diff view", which made a
+-- request like "close the diff view" ambiguous. They review different things:
+-- this one is the queue of edits agents propose.
+--
+-- Asserted on the WINDOW, not on the constant: `M.PANEL_TITLE` agreeing with
+-- itself proves nothing, and the reason the constant exists is that a
+-- consumer reads it and expects the panel to match.
+ok("*** the panel's formal name is 'Agent Edits Queue' ***",
+  ui.PANEL_TITLE == "Agent Edits Queue", tostring(ui.PANEL_TITLE))
+ok("*** and the rendered window title carries it ***", (function()
+  local bg = mf and mf:winid("bg")
+  local w = bg or (mf and mf:winid("left"))
+  if not (w and vim.api.nvim_win_is_valid(w)) then return false end
+  -- The title lives on whichever window auto-core drew the border on; check
+  -- every one of the float's windows rather than guessing which.
+  for _, name in ipairs({ "bg", "left", "middle", "preview", "footer" }) do
+    local win = mf:winid(name)
+    if win and vim.api.nvim_win_is_valid(win) then
+      local cfg = vim.api.nvim_win_get_config(win)
+      local t = cfg.title
+      if type(t) == "table" then
+        for _, chunk in ipairs(t) do
+          local text = type(chunk) == "table" and chunk[1] or chunk
+          if type(text) == "string" and text:find("Agent Edits Queue", 1, true) then
+            return true
+          end
+        end
+      elseif type(t) == "string" and t:find("Agent Edits Queue", 1, true) then
+        return true
+      end
+    end
+  end
+  return false
+end)())
+ok("the retired name is gone from the rendered titles", (function()
+  for _, name in ipairs({ "bg", "left", "middle", "preview", "footer" }) do
+    local win = mf:winid(name)
+    if win and vim.api.nvim_win_is_valid(win) then
+      local cfg = vim.api.nvim_win_get_config(win)
+      local t = cfg.title
+      local flat = ""
+      if type(t) == "table" then
+        for _, chunk in ipairs(t) do
+          flat = flat .. tostring(type(chunk) == "table" and chunk[1] or chunk)
+        end
+      else
+        flat = tostring(t)
+      end
+      if flat:find("Agent Diff Queue", 1, true) then return false end
+    end
+  end
+  return true
+end)())
+
 print("\n[2] Window options on diff panes")
 local middle_win = mf:winid("middle")
 local preview_win = mf:winid("preview")
