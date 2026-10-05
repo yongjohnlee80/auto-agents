@@ -68,30 +68,29 @@ local function read_file(path)
 end
 
 local KB_ROOT = "/tmp/instruct-test-kb"
+local KB = { root = KB_ROOT, workspace = "instruct-test" }
 
 print("\n[1] codex + diff_review=true → section + roster column inlined")
 do
   local cwd = fresh_tmpdir()
   set_bootstrap({
-    { slot = 2, kind = "codex", name = "codex-a",  kb_scope = "shared", model = "gpt-5", diff_review = true,  configured = true },
-    { slot = 3, kind = "codex", name = "codex-b",  kb_scope = "shared", model = "gpt-5", diff_review = false, configured = true },
+    { slot = 2, kind = "codex", name = "codex-a",  model = "gpt-5", diff_review = true,  configured = true },
+    { slot = 3, kind = "codex", name = "codex-b",  model = "gpt-5", diff_review = false, configured = true },
     -- claude peer should not be visible in the codex roster (filtered by kind)
-    { slot = 1, kind = "claude", name = "claude-a", kb_scope = "shared", diff_review = true, configured = true },
+    { slot = 1, kind = "claude", name = "claude-a", diff_review = true, configured = true },
   })
-  local spec = { slot = 2, kind = "codex", name = "codex-a", kb_scope = "shared", model = "gpt-5", diff_review = true }
-  local path = instruct.ensure(spec, KB_ROOT, cwd)
+  local spec = { slot = 2, kind = "codex", name = "codex-a", model = "gpt-5", diff_review = true }
+  local path = instruct.ensure(spec, KB, cwd)
   ok("ensure wrote a file", type(path) == "string" and read_file(path) ~= nil, path)
   local content = read_file(path) or ""
   ok("file is AGENTS.md for codex kind", path == cwd .. "/AGENTS.md", path)
   ok("renders diff_review column header",
     content:find("| diff_review |", 1, true) ~= nil, "missing column header")
   ok("renders diff_review ✓ for codex-a row",
-    content:find("| `codex-a` | `shared` | `gpt%-5` | ✓ |") ~= nil
-      or content:find("| `codex-a` | `shared` | `gpt-5` | ✓ |", 1, true) ~= nil,
+    content:find("| `codex-a` | `gpt-5` | ✓ |", 1, true) ~= nil,
     "missing ✓ in codex-a row")
   ok("renders diff_review – for codex-b row",
-    content:find("| `codex-b` | `shared` | `gpt%-5` | – |") ~= nil
-      or content:find("| `codex-b` | `shared` | `gpt-5` | – |", 1, true) ~= nil,
+    content:find("| `codex-b` | `gpt-5` | – |", 1, true) ~= nil,
     "missing – in codex-b row")
   ok("renders Interactive diff review section",
     content:find("### Interactive diff review", 1, true) ~= nil,
@@ -124,11 +123,11 @@ print("\n[2] claude + diff_review=true peer → roster column only, NO section")
 do
   local cwd = fresh_tmpdir()
   set_bootstrap({
-    { slot = 1, kind = "claude", name = "claude-a",       kb_scope = "shared", model = "claude-opus-4-7", diff_review = true,  configured = true },
-    { slot = 5, kind = "claude", name = "claude-b", kb_scope = "shared", model = "claude-opus-4-7", diff_review = false, configured = true },
+    { slot = 1, kind = "claude", name = "claude-a",       model = "claude-opus-4-7", diff_review = true,  configured = true },
+    { slot = 5, kind = "claude", name = "claude-b", model = "claude-opus-4-7", diff_review = false, configured = true },
   })
-  local spec = { slot = 1, kind = "claude", name = "claude-a", kb_scope = "shared", model = "claude-opus-4-7", diff_review = true }
-  local path = instruct.ensure(spec, KB_ROOT, cwd)
+  local spec = { slot = 1, kind = "claude", name = "claude-a", model = "claude-opus-4-7", diff_review = true }
+  local path = instruct.ensure(spec, KB, cwd)
   ok("ensure wrote CLAUDE.md", path == cwd .. "/CLAUDE.md", tostring(path))
   local content = read_file(path) or ""
   ok("renders diff_review column for claude roster",
@@ -145,11 +144,11 @@ print("\n[3] no peers opted in → neither column nor section")
 do
   local cwd = fresh_tmpdir()
   set_bootstrap({
-    { slot = 2, kind = "codex", name = "codex-a", kb_scope = "shared", model = "gpt-5", diff_review = false, configured = true },
-    { slot = 3, kind = "codex", name = "codex-b", kb_scope = "shared", model = "gpt-5",                       configured = true },
+    { slot = 2, kind = "codex", name = "codex-a", model = "gpt-5", diff_review = false, configured = true },
+    { slot = 3, kind = "codex", name = "codex-b", model = "gpt-5",                       configured = true },
   })
-  local spec = { slot = 2, kind = "codex", name = "codex-a", kb_scope = "shared", model = "gpt-5" }
-  local path = instruct.ensure(spec, KB_ROOT, cwd)
+  local spec = { slot = 2, kind = "codex", name = "codex-a", model = "gpt-5" }
+  local path = instruct.ensure(spec, KB, cwd)
   local content = read_file(path) or ""
   ok("no diff_review column in roster when no peer opted in",
     content:find("| diff_review |", 1, true) == nil,
@@ -197,6 +196,67 @@ do
   ok("sidecar JSON round-trip preserves diff_review=true",
     decoded and decoded.diff_review == true,
     decoded and tostring(decoded.diff_review) or "decoded is nil")
+end
+
+print("\n[5] KB v2 managed block (ADR 1791209946 §2.4)")
+do
+  local function block_of(content)
+    return content:match("<!%-%- auto%-agents:begin %-%->(.-)<!%-%- auto%-agents:end %-%->") or ""
+  end
+  local function kb_part(block)
+    return block:match("### Knowledge base\n(.-)\n### ") or ""
+  end
+  set_bootstrap({
+    { slot = 1, kind = "claude", name = "claude-a", model = "claude-opus-4-7", diff_review = true, configured = true },
+    { slot = 5, kind = "claude", name = "claude-b", model = "claude-opus-4-7", configured = true },
+  })
+  local spec = { slot = 1, kind = "claude", name = "claude-a", model = "claude-opus-4-7", diff_review = true }
+
+  -- With a primary that names a workspace.
+  local cwd = fresh_tmpdir()
+  local block = block_of(read_file(instruct.ensure(spec, KB, cwd)) or "")
+  local part = kb_part(block)
+  local bullets = {}
+  for l in part:gmatch("[^\n]+") do bullets[#bullets + 1] = l end
+  ok("KB part is exactly three lines", #bullets == 3, vim.inspect(bullets))
+  ok("line 1: the KB root",
+    (bullets[1] or ""):find("`" .. KB_ROOT .. "`", 1, true) ~= nil
+      and (bullets[1] or ""):find("$AUTO_AGENTS_KB_ROOT", 1, true) ~= nil, bullets[1])
+  ok("line 2: the AutoDoc workspace",
+    (bullets[2] or ""):find("`instruct-test`", 1, true) ~= nil
+      and (bullets[2] or ""):find("$AUTODOC_WORKSPACE", 1, true) ~= nil, bullets[2])
+  ok("line 3: read <root>/AGENTS.md",
+    (bullets[3] or ""):find("Read `" .. KB_ROOT .. "/AGENTS.md`", 1, true) ~= nil, bullets[3])
+  ok("roster has no KB-scope column", block:find("KB scope", 1, true) == nil)
+  ok("roster header is Slot | Name | Model | diff_review",
+    block:find("| Slot | Name | Model | diff_review |", 1, true) ~= nil)
+  ok("no `append to log.md` rule", block:find("log.md", 1, true) == nil)
+  ok("no agents/<your-name>/ folder", block:find("agents/<your-name>", 1, true) == nil)
+  ok("no KB READ/WRITE/SCOPE env vars",
+    block:find("KB_READ", 1, true) == nil and block:find("KB_WRITE", 1, true) == nil
+      and block:find("KB_SCOPE", 1, true) == nil)
+  ok("no KB types", block:find("KB type", 1, true) == nil)
+  ok("mailbox protocol kept", block:find("### Mailbox protocol", 1, true) ~= nil
+    and block:find("$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC", 1, true) ~= nil)
+  ok("todo protocol kept", block:find("### Todo handling", 1, true) ~= nil
+    and block:find("$AUTO_AGENTS_TODOS_CONVENTION_DOC", 1, true) ~= nil
+    and block:find(":AutoAgentsMigrateKbTodos --apply", 1, true) ~= nil)
+  ok("model preference kept", block:find("### Model preference", 1, true) ~= nil)
+
+  -- A primary imported before it was given a workspace.
+  cwd = fresh_tmpdir()
+  part = kb_part(block_of(read_file(instruct.ensure(spec, { root = KB_ROOT }, cwd)) or ""))
+  ok("no workspace: line 2 says none is named",
+    part:find("none named yet", 1, true) ~= nil, part)
+
+  -- No primary.
+  cwd = fresh_tmpdir()
+  block = block_of(read_file(instruct.ensure(spec, nil, cwd)) or "")
+  part = kb_part(block)
+  ok("no primary: the block says to ask the user",
+    part:find("no primary KB", 1, true) ~= nil and part:find("Ask the user", 1, true) ~= nil, part)
+  ok("no primary: no KB root line", block:find("$AUTO_AGENTS_KB_ROOT", 1, true) == nil)
+  ok("no primary: todo protocol still rendered", block:find("### Todo handling", 1, true) ~= nil)
 end
 
 print(string.format("\nResults: %d passed, %d failed", pass, fail))

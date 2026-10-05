@@ -60,6 +60,13 @@ vim.env.XDG_CONFIG_HOME = sandbox .. "/config"
 vim.env.XDG_DATA_HOME   = sandbox .. "/data"
 vim.env.XDG_STATE_HOME  = sandbox .. "/state"
 vim.env.XDG_CACHE_HOME  = sandbox .. "/cache"
+-- An agent-spawned shell carries its KB env; auto-core.kb.root() answers
+-- $AUTO_AGENTS_KB_ROOT before its first-run import, so an inherited value
+-- would both mask the import under test and point at the real KB.
+vim.env.AUTO_AGENTS_KB_ROOT  = nil
+vim.env.AUTO_AGENTS_KB_READ  = nil
+vim.env.AUTO_AGENTS_KB_WRITE = nil
+vim.env.AUTODOC_WORKSPACE    = nil
 
 -- Isolate auto-core's persisted state to a fresh tempdir for the
 -- duration of this smoke run. Without this, the `auto-agents`
@@ -3014,11 +3021,11 @@ do
   local saved_kb = aa.state.config.kb
   local tmp_kb = vim.fn.tempname() .. "_kb29"
   vim.fn.mkdir(tmp_kb, "p")
-  aa.state.config.kb = { root = tmp_kb, type = "coding" }
+  aa.state.config.kb = { root = tmp_kb }
 
   local initial_cmd = { "agy", "--verbose" }
   aa.state.config.agents.bootstrap = {
-    { slot = 4, name = "wanda", kind = "antigravity", cmd = initial_cmd, kb_scope = "shared" }
+    { slot = 4, name = "wanda", kind = "antigravity", cmd = initial_cmd }
   }
 
   local spec_resolved = aa._resolve_slot_spec(4)
@@ -3471,6 +3478,196 @@ cmd = ["junie"]
   pcall(vim.fn.delete, inactive_proj_file)
 
   -- restore
+  aa.state.config.agents.bootstrap = saved_bootstrap
+  aa.state.config.kb = saved_kb
+end
+
+
+-- ───────────── 30. KB v2 — the primary KB at spawn (ADR 1791209946 §7) ─────────────
+-- auto-agents no longer owns a KB. A spawned agent's KB is the project's
+-- primary from auto-core.kb; kb.root() is a shim over auto-core.kb.root()
+-- with the legacy resolution as its fallback, and nothing creates KB folders.
+print("\n[30] KB v2 — primary KB at spawn, kb.root() shim, nothing scaffolds")
+do
+  local core_kb = require("auto-core.kb")
+  local kb = require("auto-agents.kb")
+  local saved_bootstrap = aa.state.config.agents.bootstrap
+  local saved_kb = aa.state.config.kb
+  local saved_core_kb = package.loaded["auto-core.kb"]
+
+  local function put(p, text)
+    vim.fn.mkdir(vim.fn.fnamemodify(p, ":h"), "p")
+    local f = assert(io.open(p, "w")); f:write(text or ""); f:close()
+  end
+  local function slurp(p)
+    local f = io.open(p, "r"); local t = f and f:read("*a") or ""
+    if f then f:close() end
+    return t
+  end
+  local function grants(cmd, dir)
+    for i = 1, #cmd - 1 do
+      if cmd[i] == "--add-dir" and cmd[i + 1] == dir then return true end
+    end
+    return false
+  end
+  local LEGACY_KEYS = { "AUTO_AGENTS_KB_READ", "AUTO_AGENTS_KB_WRITE", "AUTO_AGENTS_KB_SCOPE" }
+  local function no_legacy_env(env)
+    for _, k in ipairs(LEGACY_KEYS) do
+      if env[k] ~= nil then return false, k end
+    end
+    return true
+  end
+  local function spawn(cwd)
+    local spec = aa._resolve_slot_spec(4)
+    return aa._build_agent_env(spec, cwd) or {}, spec
+  end
+  aa.state.config.agents.bootstrap = {
+    { slot = 4, name = "kbv2", kind = "claude", configured = true },
+  }
+
+  -- 30a. kb.root() returns auto-core.kb's root.
+  core_kb._reset_for_tests()
+  local kb_a = vim.fn.tempname() .. "_kb30a"
+  vim.fn.mkdir(kb_a, "p")
+  local set_ok, set_err = core_kb.set_primary(nil, { root = kb_a, workspace = "ws-30" }, { confirmed = true })
+  ok("30a: set_primary for the fixture", set_ok, tostring(set_err))
+  local primary_root = core_kb.primary().root
+  ok("30a: kb.root() answers auto-core.kb's primary", kb.root() == primary_root,
+    tostring(kb.root()) .. " vs " .. tostring(primary_root))
+
+  -- 30a. No primary: the real first-run import calls back into the shim,
+  -- which answers the legacy root without recursing; auto-core records it.
+  core_kb._reset_for_tests()
+  local legacy = vim.fn.tempname() .. "_kb30legacy"
+  vim.fn.mkdir(legacy, "p")
+  aa.state.config.kb = { root_override = legacy }
+  local r_ok, r = pcall(kb.root)
+  ok("30a: no primary → the import (re-entering the shim) answers the legacy root",
+    r_ok and r == vim.fs.normalize(legacy), tostring(r))
+  ok("30a: auto-core recorded the legacy root as the primary once",
+    core_kb.primary() ~= nil and core_kb.primary().root == vim.fs.normalize(legacy),
+    vim.inspect(core_kb.primary()))
+
+  -- 30a. auto-core.kb answers nil (or is absent) → the legacy resolution answers.
+  package.loaded["auto-core.kb"] = { root = function() return nil end, primary = function() return nil end }
+  ok("30a: auto-core.kb answers nil → kb.root() falls back to the legacy root",
+    kb.root() == legacy, tostring(kb.root()))
+  package.loaded["auto-core.kb"] = nil
+  package.preload["auto-core.kb"] = function() error("auto-core.kb absent (fixture)") end
+  ok("30a: auto-core.kb absent → kb.root() falls back to the legacy root",
+    kb.root() == legacy, tostring(kb.root()))
+  package.preload["auto-core.kb"] = nil
+
+  -- 30a. Never recurses, even against an auto-core.kb WITHOUT its own guard:
+  -- this stub calls back into the shim unconditionally.
+  local calls = 0
+  package.loaded["auto-core.kb"] = {
+    root = function()
+      calls = calls + 1
+      if calls > 50 then error("recursed") end
+      return require("auto-agents.kb").root()
+    end,
+  }
+  local nr_ok, nr = pcall(kb.root)
+  ok("30a: an unguarded auto-core.kb callback does not recurse (one call, legacy answer)",
+    nr_ok and nr == legacy and calls == 1, string.format("ok=%s r=%s calls=%d", tostring(nr_ok), tostring(nr), calls))
+  package.loaded["auto-core.kb"] = saved_core_kb
+
+  -- 30b. Spawn WITH a primary.
+  core_kb._reset_for_tests()
+  local kbdir = vim.fn.tempname() .. "_kb30b"
+  put(kbdir .. "/KB_OPERATIONS.md", "---\nrevision: 1\n---\n")
+  put(kbdir .. "/conventions/todo-handling.md", "---\nrevision: 4\n---\n")
+  core_kb.set_primary(nil, { root = kbdir, workspace = "ws-30b" }, { confirmed = true })
+  local root_b = core_kb.primary().root
+  local cwd_b = vim.fn.tempname() .. "_cwd30b"
+  vim.fn.mkdir(cwd_b, "p")
+  local env, spec = spawn(cwd_b)
+  ok("30b: AUTO_AGENTS_KB_ROOT is the primary's root", env.AUTO_AGENTS_KB_ROOT == root_b,
+    tostring(env.AUTO_AGENTS_KB_ROOT))
+  ok("30b: AUTODOC_WORKSPACE is the primary's workspace", env.AUTODOC_WORKSPACE == "ws-30b",
+    tostring(env.AUTODOC_WORKSPACE))
+  ok("30b: AUTODOC_KB_OPERATIONS_DOC points at <root>/KB_OPERATIONS.md",
+    env.AUTODOC_KB_OPERATIONS_DOC == root_b .. "/KB_OPERATIONS.md", tostring(env.AUTODOC_KB_OPERATIONS_DOC))
+  ok("30b: the todo convention resolves at <root>/conventions/",
+    env.AUTO_AGENTS_TODOS_CONVENTION_DOC == root_b .. "/conventions/todo-handling.md",
+    tostring(env.AUTO_AGENTS_TODOS_CONVENTION_DOC))
+  ok("30b: no KB READ/WRITE/SCOPE env", no_legacy_env(env))
+  ok("30b: --add-dir grants the KB root", grants(spec.cmd, root_b), vim.inspect(spec.cmd))
+  local n_kb_grants = 0
+  for i = 1, #spec.cmd - 1 do
+    if spec.cmd[i] == "--add-dir" and vim.startswith(spec.cmd[i + 1], root_b) then n_kb_grants = n_kb_grants + 1 end
+  end
+  ok("30b: exactly one KB grant (no scoped sub-directories)", n_kb_grants == 1, vim.inspect(spec.cmd))
+  local instr = slurp(cwd_b .. "/CLAUDE.md")
+  ok("30b: the managed block names the root and the workspace",
+    instr:find("- KB root: `" .. root_b .. "`", 1, true) ~= nil
+      and instr:find("`ws-30b`", 1, true) ~= nil, instr:sub(1, 200))
+  local created = {}
+  for _, rel in ipairs({ "shared", "agents", "raw", "index.md", "log.md", "AGENTS.md", "KB_RULES.md" }) do
+    if vim.uv.fs_stat(kbdir .. "/" .. rel) then created[#created + 1] = rel end
+  end
+  ok("30b: spawning created nothing in the KB", #created == 0, vim.inspect(created))
+
+  -- 30b. Convention fallbacks: conventions/ wins over shared/conventions/;
+  -- shared/conventions/ (pre-migration) alone; then the bundled seed.
+  put(kbdir .. "/shared/conventions/todo-handling.md", "---\nrevision: 4\n---\n")
+  env = spawn(cwd_b)
+  ok("30b: both present → <root>/conventions/ wins",
+    env.AUTO_AGENTS_TODOS_CONVENTION_DOC == root_b .. "/conventions/todo-handling.md",
+    tostring(env.AUTO_AGENTS_TODOS_CONVENTION_DOC))
+  vim.fn.delete(kbdir .. "/conventions", "rf")
+  env = spawn(cwd_b)
+  ok("30b: convention falls back to <root>/shared/conventions/",
+    env.AUTO_AGENTS_TODOS_CONVENTION_DOC == root_b .. "/shared/conventions/todo-handling.md",
+    tostring(env.AUTO_AGENTS_TODOS_CONVENTION_DOC))
+  vim.fn.delete(kbdir .. "/shared", "rf")
+  vim.fn.delete(kbdir .. "/KB_OPERATIONS.md")
+  env = spawn(cwd_b)
+  ok("30b: convention falls back to the bundled seed",
+    type(env.AUTO_AGENTS_TODOS_CONVENTION_DOC) == "string"
+      and env.AUTO_AGENTS_TODOS_CONVENTION_DOC:match("/kb%-seeds/_todo%-handling%.md$") ~= nil,
+    tostring(env.AUTO_AGENTS_TODOS_CONVENTION_DOC))
+  ok("30b: no KB_OPERATIONS.md → no AUTODOC_KB_OPERATIONS_DOC", env.AUTODOC_KB_OPERATIONS_DOC == nil)
+
+  -- 30b. An imported primary has no workspace yet.
+  core_kb._reset_for_tests()
+  core_kb.set_primary(nil, { root = kbdir }, { confirmed = true })
+  env = spawn(cwd_b)
+  ok("30b: primary without a workspace → no AUTODOC_WORKSPACE, root still set",
+    env.AUTODOC_WORKSPACE == nil and env.AUTO_AGENTS_KB_ROOT == root_b, vim.inspect(env.AUTODOC_WORKSPACE))
+
+  -- 30c. Spawn WITHOUT a primary (the legacy root does not exist, so the
+  -- import records nothing).
+  core_kb._reset_for_tests()
+  local phantom = vim.fn.tempname() .. "_kb30phantom"
+  aa.state.config.kb = { root_override = phantom }
+  local cwd_c = vim.fn.tempname() .. "_cwd30c"
+  vim.fn.mkdir(cwd_c, "p")
+  local env_c, spec_c = spawn(cwd_c)
+  ok("30c: no primary recorded", core_kb.primary() == nil, vim.inspect(core_kb.primary()))
+  ok("30c: no AUTO_AGENTS_KB_ROOT", env_c.AUTO_AGENTS_KB_ROOT == nil, tostring(env_c.AUTO_AGENTS_KB_ROOT))
+  ok("30c: no AUTODOC_* env", env_c.AUTODOC_WORKSPACE == nil and env_c.AUTODOC_KB_OPERATIONS_DOC == nil)
+  ok("30c: no KB READ/WRITE/SCOPE env", no_legacy_env(env_c))
+  ok("30c: no --add-dir for a KB", not grants(spec_c.cmd, phantom), vim.inspect(spec_c.cmd))
+  ok("30c: the todo convention still arrives (bundled seed)",
+    type(env_c.AUTO_AGENTS_TODOS_CONVENTION_DOC) == "string", tostring(env_c.AUTO_AGENTS_TODOS_CONVENTION_DOC))
+  local instr_c = slurp(cwd_c .. "/CLAUDE.md")
+  ok("30c: the managed block says to ask the user",
+    instr_c:find("no primary KB", 1, true) ~= nil and instr_c:find("Ask the user", 1, true) ~= nil)
+  ok("30c: the legacy KB folder was not created", vim.fn.isdirectory(phantom) == 0)
+
+  -- 30d. A project with no primary but an existing legacy KB: the first
+  -- spawn runs auto-core's import, so the KB carries over to v0.3.0.
+  core_kb._reset_for_tests()
+  aa.state.config.kb = { root_override = legacy }
+  local env_d = spawn(cwd_c)
+  ok("30d: first spawn imports the existing legacy KB as the primary",
+    env_d.AUTO_AGENTS_KB_ROOT == vim.fs.normalize(legacy)
+      and core_kb.primary() ~= nil and core_kb.primary().root == vim.fs.normalize(legacy),
+    tostring(env_d.AUTO_AGENTS_KB_ROOT))
+
+  core_kb._reset_for_tests()
   aa.state.config.agents.bootstrap = saved_bootstrap
   aa.state.config.kb = saved_kb
 end
