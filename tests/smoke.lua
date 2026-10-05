@@ -1426,165 +1426,62 @@ do
   pcall(vim.fn.delete, out)
 end
 
--- ─────────── 19. library KB type — seed + scaffold (v0.2.24+) ──────────
--- The library type ships:
---   - kb-seeds/library.md            → <kb_root>/AGENTS.md
---   - kb-seeds/_library-rules.md     → <kb_root>/RULES.md (per-type, NEW)
---   - kb-seeds/library-templates/*   → <kb_root>/_templates/ (per-type bundle, NEW)
---   - LAYOUTS.library                → archive/ + draft/ + incidents/ + redacted/
---                                      + shared/{conventions,glossary,synthesis}/
--- Plus the universal KB_RULES.md and the existing per-kind layout
--- machinery continue to apply.
-print("\n[19] library KB type — seed + scaffold (v0.2.24+)")
+-- ─────────── 19. KB v2 — auto-agents scaffolds nothing (ADR 1791209946 §7) ──────────
+-- v0.2.24's library type and every other KB type, seed, template and the
+-- scaffold (ensure_layout) are gone; the KB scaffold lives in AutoDoc.
+-- Only the todo-handling seed stays, unchanged. The admin `kb` verb shows
+-- the primary KB and answers the retired subverbs without touching disk.
+print("\n[19] KB v2 — no scaffold, no KB types, one todo seed, `kb` shows the primary")
 do
-  local kb_types = require("auto-agents.kb.types")
-  local kb_init  = require("auto-agents.kb")
-
-  -- library is in BUILTIN and has a layout.
-  local function contains(t, v)
-    for _, x in ipairs(t) do if x == v then return true end end
-    return false
+  local kb = require("auto-agents.kb")
+  for _, fn in ipairs({ "ensure_layout", "log", "resolve" }) do
+    ok("19a: auto-agents.kb has no " .. fn .. "()", kb[fn] == nil)
   end
-  ok("library is registered in BUILTIN", contains(kb_types.BUILTIN, "library"))
-
-  local layout = kb_types.layout("library")
-  ok("library layout has description", type(layout.description) == "string"
-     and layout.description ~= "")
-
-  -- Layout shape — shared/ subdirs include conventions; extras include
-  -- archive/ + draft/ + incidents/ + redacted/ + _templates/.
-  local function layout_contains(field, value)
-    for _, x in ipairs(layout[field] or {}) do if x == value then return true end end
-    return false
-  end
-  ok("library shared_subdirs include 'conventions'",
-     layout_contains("shared_subdirs", "conventions"))
-  ok("library extra_dirs include 'archive'",
-     layout_contains("extra_dirs", "archive"))
-  ok("library extra_dirs include 'draft'",
-     layout_contains("extra_dirs", "draft"))
-  ok("library extra_dirs include 'incidents'",
-     layout_contains("extra_dirs", "incidents"))
-  ok("library extra_dirs include 'redacted'",
-     layout_contains("extra_dirs", "redacted"))
-  ok("library extra_dirs include '_templates'",
-     layout_contains("extra_dirs", "_templates"))
-
-  -- Seed files exist on disk.
-  local seeds_dir = kb_types.seeds_dir()
-  ok("kb-seeds/library.md exists",
-     vim.fn.filereadable(seeds_dir .. "/library.md") == 1)
-  ok("kb-seeds/_library-rules.md exists",
-     vim.fn.filereadable(seeds_dir .. "/_library-rules.md") == 1)
-  ok("kb-seeds/library-templates/ exists",
-     vim.fn.isdirectory(seeds_dir .. "/library-templates") == 1)
-  ok("kb-seeds/library-templates/archive-entry.md ships",
-     vim.fn.filereadable(seeds_dir .. "/library-templates/archive-entry.md") == 1)
-  ok("kb-seeds/library-templates/convention.md ships",
-     vim.fn.filereadable(seeds_dir .. "/library-templates/convention.md") == 1)
-  ok("kb-seeds/library-templates/convention-manifest.yaml ships",
-     vim.fn.filereadable(seeds_dir .. "/library-templates/convention-manifest.yaml") == 1)
-
-  -- ensure_layout scaffolds the full library tree end-to-end.
-  local tmp_root = vim.fn.tempname() .. "_library_kb"
-  vim.fn.mkdir(tmp_root, "p")
-
-  kb_init.ensure_layout(tmp_root, { type = "library" })
-
-  ok("ensure_layout creates archive/",
-     vim.fn.isdirectory(tmp_root .. "/archive") == 1)
-  ok("ensure_layout creates draft/",
-     vim.fn.isdirectory(tmp_root .. "/draft") == 1)
-  ok("ensure_layout creates incidents/",
-     vim.fn.isdirectory(tmp_root .. "/incidents") == 1)
-  ok("ensure_layout creates redacted/",
-     vim.fn.isdirectory(tmp_root .. "/redacted") == 1)
-  ok("ensure_layout creates shared/conventions/",
-     vim.fn.isdirectory(tmp_root .. "/shared/conventions") == 1)
-  ok("ensure_layout creates shared/glossary/",
-     vim.fn.isdirectory(tmp_root .. "/shared/glossary") == 1)
-  ok("ensure_layout creates shared/synthesis/",
-     vim.fn.isdirectory(tmp_root .. "/shared/synthesis") == 1)
-  ok("ensure_layout creates raw/",
-     vim.fn.isdirectory(tmp_root .. "/raw") == 1)
-  ok("ensure_layout creates agents/",
-     vim.fn.isdirectory(tmp_root .. "/agents") == 1)
-  ok("ensure_layout creates _templates/",
-     vim.fn.isdirectory(tmp_root .. "/_templates") == 1)
-
-  -- AGENTS.md content reflects the library seed.
-  ok("AGENTS.md is written from library seed",
-     vim.fn.filereadable(tmp_root .. "/AGENTS.md") == 1)
-  do
-    local f = io.open(tmp_root .. "/AGENTS.md", "r")
-    if f then
-      local content = f:read("*a"); f:close()
-      ok("AGENTS.md names the library KB type",
-         content:find("Document Library Contract", 1, true) ~= nil)
-      ok("AGENTS.md references KB_RULES.md",
-         content:find("KB_RULES.md", 1, true) ~= nil)
-      ok("AGENTS.md references RULES.md",
-         content:find("RULES.md", 1, true) ~= nil)
-    end
+  for _, mod in ipairs({ "scope", "types", "sync", "manifest", "ingest", "obsidian", "frontmatter" }) do
+    package.loaded["auto-agents.kb." .. mod] = nil
+    ok("19a: auto-agents.kb." .. mod .. " is gone",
+      pcall(require, "auto-agents.kb." .. mod) == false)
   end
 
-  -- KB_RULES.md and RULES.md both shipped at the root.
-  ok("KB_RULES.md is written (universal rules)",
-     vim.fn.filereadable(tmp_root .. "/KB_RULES.md") == 1)
-  ok("RULES.md is written from _library-rules.md seed (per-type rules)",
-     vim.fn.filereadable(tmp_root .. "/RULES.md") == 1)
-  do
-    local f = io.open(tmp_root .. "/RULES.md", "r")
-    if f then
-      local content = f:read("*a"); f:close()
-      ok("RULES.md declares schema_version",
-         content:find("schema_version:", 1, true) ~= nil)
-      ok("RULES.md describes the partition scheme",
-         content:find("Partition scheme", 1, true) ~= nil)
-      ok("RULES.md describes the filename template",
-         content:find("Filename template", 1, true) ~= nil)
-      ok("RULES.md describes the hash spec",
-         content:find("Hash spec", 1, true) ~= nil)
-    end
+  local seeds = vim.fn.readdir(project_root .. "/kb-seeds")
+  ok("19b: kb-seeds/ holds only the todo-handling seed",
+    #seeds == 1 and seeds[1] == "_todo-handling.md", vim.inspect(seeds))
+  local seed_text = table.concat(vim.fn.readfile(project_root .. "/kb-seeds/_todo-handling.md"), "\n")
+  ok("19b: the todo-handling seed is the unchanged convention (revision 4)",
+    seed_text:find("\nrevision: 4\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil)
+  ok("19b: kb.todo_convention_seed() resolves it",
+    kb.todo_convention_seed() == project_root .. "/kb-seeds/_todo-handling.md", tostring(kb.todo_convention_seed()))
+
+  -- 19c. The admin `kb` verb.
+  local admin_mod = require("auto-agents.panel.admin")
+  local core_kb = require("auto-core.kb")
+  local saved_kb = aa.state.config.kb
+  core_kb._reset_for_tests()
+  local phantom = vim.fn.tempname() .. "_kb19"
+  aa.state.config.kb = { root_override = phantom }
+  local none = table.concat(admin_mod._kb_lines(nil), "\n")
+  ok("19c: `kb` without a primary says so", none:find("no primary KB", 1, true) ~= nil, none)
+  local kb19 = vim.fn.tempname() .. "_kb19set"
+  vim.fn.mkdir(kb19, "p")
+  core_kb.set_primary(nil, { root = kb19, workspace = "ws-19" }, { confirmed = true })
+  local shown = table.concat(admin_mod._kb_lines(nil), "\n")
+  ok("19c: `kb` shows the primary's root and workspace",
+    shown:find(core_kb.primary().root, 1, true) ~= nil and shown:find("ws-19", 1, true) ~= nil, shown)
+  for _, sub in ipairs({ "init", "ingest", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }) do
+    local out = table.concat(admin_mod._kb_lines(sub), "\n")
+    ok("19c: `kb " .. sub .. "` is retired", out:find("retired in auto-agents v0.3.0", 1, true) ~= nil, out)
   end
-
-  -- _templates/ bundle is populated from library-templates/.
-  ok("_templates/archive-entry.md is shipped",
-     vim.fn.filereadable(tmp_root .. "/_templates/archive-entry.md") == 1)
-  ok("_templates/convention.md is shipped",
-     vim.fn.filereadable(tmp_root .. "/_templates/convention.md") == 1)
-  ok("_templates/convention-manifest.yaml is shipped",
-     vim.fn.filereadable(tmp_root .. "/_templates/convention-manifest.yaml") == 1)
-
-  -- log.md gets the rotation-pointer header (per KB_RULES.md R1)
-  -- even for library KBs.
-  do
-    local f = io.open(tmp_root .. "/log.md", "r")
-    if f then
-      local content = f:read("*a"); f:close()
-      ok("log.md carries the rotation-pointer header",
-         content:find("Current ISO week only", 1, true) ~= nil)
-    end
-  end
-
-  -- Idempotency: a second ensure_layout call without force_schema
-  -- doesn't clobber. Write a marker into AGENTS.md, re-run, verify
-  -- the marker survives.
-  do
-    local agents_md = tmp_root .. "/AGENTS.md"
-    local f = io.open(agents_md, "a")
-    if f then f:write("\n<!-- USER MARKER -->\n"); f:close() end
-    kb_init.ensure_layout(tmp_root, { type = "library" })
-    local g = io.open(agents_md, "r")
-    if g then
-      local content = g:read("*a"); g:close()
-      ok("ensure_layout is idempotent on AGENTS.md (user marker preserved)",
-         content:find("USER MARKER", 1, true) ~= nil)
-    end
-  end
-
-  -- Teardown: rm -rf the temp KB.
-  pcall(vim.fn.delete, tmp_root, "rf")
+  local leftover = vim.fn.readdir(kb19)
+  ok("19c: the kb verbs wrote nothing into the KB", #leftover == 0, vim.inspect(leftover))
+  ok("19c: nor created the legacy KB", vim.fn.isdirectory(phantom) == 0)
+  local _, kb_cands = admin_mod._complete_at("kb ", 3)
+  ok("19c: `kb ` completes no subverbs", #kb_cands == 0, vim.inspect(kb_cands))
+  local help_text = table.concat(admin_mod._help_lines(), "\n")
+  ok("19c: the help lists no retired kb subverb",
+    help_text:find("kb init", 1, true) == nil and help_text:find("kb sync", 1, true) == nil
+      and help_text:find("kb scope", 1, true) == nil, help_text)
+  core_kb._reset_for_tests()
+  aa.state.config.kb = saved_kb
 end
 
 -- ────────── 20. Phase 4: peek + say mailbox commands + admin `run` ──────────
@@ -2426,25 +2323,21 @@ do
   local strays = vim.fn.glob(id_dir .. "/**/.tmp-*", false, true)
   ok("25d: no atomic-write temp strays", #strays == 0, vim.inspect(strays))
 
-  -- kb scaffold writes are atomic too: fresh layout, no .tmp strays.
-  local kb_dir = vim.fn.tempname() .. "_aa-kb25"
-  local kb = require("auto-agents.kb")
-  local lay_ok, lay_err = pcall(kb.ensure_layout, kb_dir, { type = "general" })
-  ok("25d: ensure_layout on fresh dir succeeds", lay_ok, tostring(lay_err))
-  ok("25d: AGENTS.md scaffolded", vim.fn.filereadable(kb_dir .. "/AGENTS.md") == 1)
-  local kb_strays = vim.fn.glob(kb_dir .. "/**/.tmp-*", false, true)
-  ok("25d: no temp strays in scaffolded KB", #kb_strays == 0, vim.inspect(kb_strays))
-
-  -- manifest.write: valid JSON on disk, atomic (no strays).
-  vim.fn.mkdir(kb_dir .. "/shared", "p")
-  local manifest = require("auto-agents.kb.manifest")
-  local m_err = manifest.write(kb_dir .. "/shared", nil)
-  ok("25d: manifest.write succeeds", m_err == nil, tostring(m_err))
-  local mf = io.open(kb_dir .. "/shared/manifest.json", "r")
-  local m_raw = mf and mf:read("*a") or ""
-  if mf then mf:close() end
-  local m_ok = pcall(vim.json.decode, m_raw)
-  ok("25d: manifest.json is complete valid JSON", m_ok, m_raw:sub(1, 80))
+  -- The managed block is the one KB-adjacent file auto-agents still
+  -- writes (the KB scaffold and manifest writers went with ADR 1791209946
+  -- §7): instruct.ensure writes atomically — content complete, no strays.
+  local instr25 = require("auto-agents.kb.instruct")
+  local cwd25 = vim.fn.tempname() .. "_aa-instr25"
+  vim.fn.mkdir(cwd25, "p")
+  instr25._invalidate_ensure_cache()
+  local p25 = instr25.ensure({ kind = "codex", name = "smoke25", slot = 2 }, { root = "/tmp/kb25", workspace = "ws25" }, cwd25)
+  local f25 = p25 and io.open(p25, "r")
+  local t25 = f25 and f25:read("*a") or ""
+  if f25 then f25:close() end
+  ok("25d: instruct.ensure writes a complete managed block",
+    t25:find("auto-agents:begin", 1, true) ~= nil and t25:find("auto-agents:end", 1, true) ~= nil, tostring(p25))
+  local strays25 = vim.fn.glob(cwd25 .. "/.tmp-*", false, true)
+  ok("25d: no atomic-write temp strays beside the instruction file", #strays25 == 0, vim.inspect(strays25))
 
   -- 25e. Batch A bonus: the vendored-logger family bridge no longer
   -- crashes on multi-part emissions (table.unpack is nil on LuaJIT;
@@ -2456,7 +2349,7 @@ do
 end
 
 -- ─────────────── 26. ADR-0039 Batch D — KB hot-path perf ───────────────
-print("\n[26] ADR-0039 D — instruct.ensure bail-out cache + single-pass kb sync")
+print("\n[26] ADR-0039 D — instruct.ensure bail-out cache (re-renders on a new primary)")
 do
   -- 26a. P1: second ensure() with identical inputs takes the
   -- stat-only bail-out — no read, no write, identical file.
@@ -2465,7 +2358,7 @@ do
   vim.fn.mkdir(d_cwd, "p")
   local d_kb = vim.fn.tempname() .. "_aa-kb26"
   vim.fn.mkdir(d_kb, "p")
-  local spec = { kind = "claude", name = "smoke26", slot = 1, kb_scope = "shared" }
+  local spec = { kind = "claude", name = "smoke26", slot = 1 }
 
   instr._invalidate_ensure_cache()
   local p1 = instr.ensure(spec, d_kb, d_cwd)
@@ -2503,37 +2396,19 @@ do
   ok("26a: exactly one managed block after re-splice",
     block_count <= 1, "begin markers: " .. tostring(block_count))
 
-  -- 26b. P2: sync_all generates each namespace manifest exactly once
-  -- (write() returns the manifest; record() reuses it).
-  local manifest = require("auto-agents.kb.manifest")
-  local sync = require("auto-agents.kb.sync")
-  local kb26 = vim.fn.tempname() .. "_aa-sync26"
-  vim.fn.mkdir(kb26 .. "/shared", "p")
-  vim.fn.mkdir(kb26 .. "/agents/a1", "p")
-  local function put(p, s)
-    local f = assert(io.open(p, "w")); f:write(s); f:close()
-  end
-  put(kb26 .. "/shared/one.md", "# one\nlinks [[two]]\n")
-  put(kb26 .. "/shared/two.md", "# two\n")
-  put(kb26 .. "/agents/a1/note.md", "# note\n")
-
-  manifest._generate_count = 0
-  local summary = sync.sync_all(kb26)
-  ok("26b: sync_all covers both namespaces",
-    #summary.namespaces == 2, vim.inspect(summary))
-  local by_name = {}
-  for _, ns in ipairs(summary.namespaces) do by_name[ns.name] = ns end
-  ok("26b: shared count flows through from write()'s manifest",
-    by_name["shared"] and by_name["shared"].count == 2,
-    vim.inspect(by_name["shared"]))
-  ok("26b: agents/a1 count flows through",
-    by_name["agents/a1"] and by_name["agents/a1"].count == 1,
-    vim.inspect(by_name["agents/a1"]))
-  ok("26b: one generate per namespace (no double walk)",
-    manifest._generate_count == 2,
-    "generate_count=" .. tostring(manifest._generate_count))
-  ok("26b: wikilink resolution intact ([[two]] resolves, zero broken)",
-    summary.total_broken == 0, "total_broken=" .. tostring(summary.total_broken))
+  -- 26b. The bail-out cache keys on the rendered block, so a change of
+  -- the primary KB re-renders (the file must not keep a stale root).
+  -- (Replaces the single-pass `kb sync` cell: kb/sync.lua is gone.)
+  local hits_b = instr._ensure_cache_hits
+  local p4 = instr.ensure(spec, { root = d_kb .. "-moved", workspace = "ws26" }, d_cwd)
+  local moved = slurp(p4)
+  ok("26b: a new primary busts the cache and re-renders",
+    instr._ensure_cache_hits == hits_b and moved:find("`" .. d_kb .. "-moved`", 1, true) ~= nil
+      and moved:find("- KB root: `" .. d_kb .. "`  ", 1, true) == nil,
+    string.format("hits %d -> %d", hits_b, instr._ensure_cache_hits))
+  local p5 = instr.ensure(spec, nil, d_cwd)
+  ok("26b: losing the primary re-renders to the ask-the-user line",
+    slurp(p5):find("no primary KB", 1, true) ~= nil)
 end
 
 -- ──── 27. ADR-0045 — send_buffer_picker payload + guards ────

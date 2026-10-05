@@ -336,47 +336,6 @@ function M.agent(mode, slot)
   }
 end
 
----kb.new — create + open a KB file via wizard.
----@return table
-function M.kb_new()
-  return {
-    name = "kb.new",
-    banner = "auto-agents: new kb file",
-    steps = {
-      {
-        field = "relative",
-        prompt = "relative path (under kb root, e.g. shared/notes/foo.md)",
-        validate = function(v)
-          if v == nil or v == "" then return false, "path is required" end
-          return true
-        end,
-      },
-    },
-    on_complete = function(values, emit)
-      local kb = require("auto-agents.kb")
-      local path = kb.resolve(values.relative)
-      vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-      if vim.fn.filereadable(path) == 0 then
-        local f = io.open(path, "w"); if f then f:close() end
-        kb.log("new: " .. values.relative)
-      end
-      emit({ "Opening " .. path })
-      vim.schedule(function()
-        local panel = require("auto-agents").state.panel_winid
-        local target_win
-        for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-          if vim.api.nvim_win_is_valid(w) and w ~= panel then
-            local cfg = vim.api.nvim_win_get_config(w)
-            if cfg.relative == "" or cfg.relative == nil then target_win = w; break end
-          end
-        end
-        if target_win then pcall(vim.api.nvim_set_current_win, target_win) end
-        vim.cmd("edit " .. vim.fn.fnameescape(path))
-      end)
-    end,
-  }
-end
-
 ---project.import — interactive selector pick when called without arg.
 ---@return table|nil
 function M.project_import()
