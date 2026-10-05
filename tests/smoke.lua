@@ -1447,8 +1447,10 @@ do
   ok("19b: kb-seeds/ holds only the todo-handling seed",
     #seeds == 1 and seeds[1] == "_todo-handling.md", vim.inspect(seeds))
   local seed_text = table.concat(vim.fn.readfile(project_root .. "/kb-seeds/_todo-handling.md"), "\n")
-  ok("19b: the todo-handling seed is the unchanged convention (revision 4)",
-    seed_text:find("\nrevision: 4\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil)
+  ok("19b: the todo-handling seed is the convention, revision 5 (its examples at the KB v2 paths)",
+    seed_text:find("\nrevision: 5\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil)
+  ok("19b: …no example names a v1 path (shared/adrs, shared/conventions)",
+    seed_text:find("shared/adrs", 1, true) == nil and seed_text:find("shared/conventions", 1, true) == nil)
   ok("19b: kb.todo_convention_seed() resolves it",
     kb.todo_convention_seed() == project_root .. "/kb-seeds/_todo-handling.md", tostring(kb.todo_convention_seed()))
 
@@ -3456,6 +3458,28 @@ do
   ok("30a: an unguarded auto-core.kb callback does not recurse (one call, legacy answer)",
     nr_ok and nr == legacy and calls == 1, string.format("ok=%s r=%s calls=%d", tostring(nr_ok), tostring(nr), calls))
   package.loaded["auto-core.kb"] = saved_core_kb
+
+  -- 30a'. A project with its own config (config_source "project") and no KB folder falls back to the
+  -- global KB, as a project without its own config does; its own folder wins once it exists, and an
+  -- explicit [kb].root is honoured as written.
+  do
+    local store = require("auto-agents.config.store")
+    local global = store.config_dir() .. "/kb"
+    local made_global = vim.fn.isdirectory(global) == 0
+    vim.fn.mkdir(global, "p")
+    local saved_src, saved_proot = aa.state.config_source, aa.state.session_project_root
+    local proj = vim.fn.tempname() .. "_proj30"
+    vim.fn.mkdir(proj, "p")
+    aa.state.config_source, aa.state.session_project_root, aa.state.config.kb = "project", proj, {}
+    ok("30a': a project config with no KB folder gets the global KB", kb.legacy_root() == global, kb.legacy_root())
+    vim.fn.mkdir(proj .. "/.auto-agents/kb", "p")
+    ok("30a': …and its own KB folder once it exists", kb.legacy_root() == proj .. "/.auto-agents/kb", kb.legacy_root())
+    local missing = vim.fn.tempname() .. "_nowhere"
+    aa.state.config.kb = { root_override = missing }
+    ok("30a': an explicit [kb].root is honoured as written, even missing", kb.legacy_root() == missing, kb.legacy_root())
+    aa.state.config_source, aa.state.session_project_root = saved_src, saved_proot
+    if made_global then vim.fn.delete(global, "d") end
+  end
 
   -- 30b. Spawn WITH a primary.
   core_kb._reset_for_tests()
