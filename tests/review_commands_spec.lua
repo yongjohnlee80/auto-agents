@@ -42,8 +42,11 @@ vim.env.XDG_STATE_HOME = sb .. "/state"
 vim.env.XDG_CONFIG_HOME = sb .. "/config"
 vim.env.XDG_CACHE_HOME = sb .. "/cache"
 -- $KB_ROOT isolated: review.create writes a document under it, so an inherited
--- value would write into the real knowledge base.
+-- value would write into the real knowledge base. The verb takes the KB from
+-- auto-core.kb (primary, then this env), which refuses a root that is not an
+-- existing directory, so the fixture KB exists.
 vim.env.AUTO_AGENTS_KB_ROOT = sb .. "/kb"
+vim.fn.mkdir(sb .. "/kb", "p")
 
 local pass, fail = 0, 0
 local function ok(n, c, d)
@@ -111,9 +114,15 @@ ok("*** the Markdown it wrote holds the CONTENT the agent supplied ***",
     :find("prose the JSON cannot carry", 1, true) ~= nil)
 ok("*** and the JSON cross-references it ***",
   (review.load(SLUG, SHA, 1) or {}).document == created.value.md_path)
+-- worktree.nvim owns the folder (agents/<r>/reviews/ before the KB v2
+-- migration, reviews/<r>/ after it, ADR 1791209946 §6); either way the display
+-- name is a safe segment and the document is inside the KB.
 ok("*** a DISPLAY name became a safe path segment ***",
-  created.value.md_path:find("/agents/lector/reviews/", 1, true) ~= nil,
+  (created.value.md_path:find("/agents/lector/reviews/", 1, true) ~= nil
+    or created.value.md_path:find("/reviews/lector/", 1, true) ~= nil),
   created.value.md_path)
+ok("*** the document is inside the KB auto-core.kb resolved ***",
+  vim.startswith(created.value.md_path, sb .. "/kb/"), created.value.md_path)
 ok("*** the document name carries the repo component ***",
   created.value.md_path:find("-repo-", 1, true) ~= nil, created.value.md_path)
 ok("*** a successful create publishes core.review:changed ***",
@@ -220,6 +229,43 @@ do
   local realdir = vim.fn.tempname(); vim.fn.mkdir(realdir, "p")
   local r = handlers["review.list"]({ repo = realdir, commit = SHA })
   ok("an existing directory still resolves to a slug", r.ok == true, vim.inspect(r))
+end
+
+io.stdout:write("\n[6] the KB comes from auto-core.kb (ADR 1791209946 §7)\n")
+do
+  local core_kb = require("auto-core.kb")
+  local saved_env = vim.env.AUTO_AGENTS_KB_ROOT
+  local aa = require("auto-agents")
+  local saved_cfg = aa.state.config
+  aa.state.config = { kb = { root_override = sb .. "/no-such-kb" } }
+
+  -- No primary, no env, and a legacy root that does not exist: refused, and
+  -- nothing is created.
+  core_kb._reset_for_tests()
+  vim.env.AUTO_AGENTS_KB_ROOT = nil
+  local C = string.rep("c", 40)
+  local before = review.max_recorded_revision(SLUG, C)
+  local none = handlers["review.create"]({
+    repo = SLUG, commit = C, reviewer = "Lector", markdown = "# none" })
+  ok("*** no KB → dependency_unavailable ***",
+    none.ok == false and none.code == "dependency_unavailable", vim.inspect(none))
+  ok("and no revision was spent", review.max_recorded_revision(SLUG, C) == before)
+  ok("and the legacy KB was not created", vim.fn.isdirectory(sb .. "/no-such-kb") == 0)
+
+  -- The project's primary wins over $AUTO_AGENTS_KB_ROOT.
+  vim.env.AUTO_AGENTS_KB_ROOT = sb .. "/kb"
+  vim.fn.mkdir(sb .. "/kb-primary", "p")
+  local set_ok = core_kb.set_primary(nil, { root = sb .. "/kb-primary", workspace = "rc" }, { confirmed = true })
+  ok("fixture primary set", set_ok == true)
+  local prim = handlers["review.create"]({
+    repo = SLUG, commit = string.rep("d", 40), reviewer = "Lector", markdown = "# primary" })
+  ok("*** the review lands in the project's primary KB ***",
+    prim.ok == true and vim.startswith(prim.value.md_path, core_kb.primary().root .. "/"),
+    vim.inspect(prim.value or prim))
+
+  core_kb._reset_for_tests()
+  vim.env.AUTO_AGENTS_KB_ROOT = saved_env
+  aa.state.config = saved_cfg
 end
 
 io.stdout:write(string.format("\n%d passed, %d failed\n", pass, fail))
