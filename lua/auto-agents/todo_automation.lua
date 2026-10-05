@@ -17,16 +17,17 @@
 ---        clone COMPLETES on this successful dispatch (M.fire's
 ---        end-of-chain rule, unless a step agent-assigned it) —
 ---        reverses the r3 A3 "stays in-progress" behavior.
----      - subscriber on `core.todo.automation:fired` → writes a
----        one-line audit entry into `$AUTO_AGENTS_KB_ROOT/log.md`
----        when that env is set. No-op otherwise.
+---    Automation fires are recorded by auto-core's own log and events
+---    (`core.todo.automation:fired`). The former audit subscriber that
+---    appended each fire to `$AUTO_AGENTS_KB_ROOT/log.md` is gone:
+---    log.md retired with KB v2 (ADR 1791209946 §5.3, amending
+---    ADR-0035 §12).
 ---  • `uninstall()` — symmetric teardown for tests / re-arm.
 ---@module 'auto-agents.todo_automation'
 
 local M = {}
 
 local _installed = false
-local _audit_handle = nil
 
 local function _automation()
   return require("auto-core.todo.automation")
@@ -219,46 +220,6 @@ local function _bash_t_executor(step, _clone, ctx)
   }, nil
 end
 
----Subscribe to `core.todo.automation:fired` and write an audit line
----to `$AUTO_AGENTS_KB_ROOT/log.md` per ADR-0035 §12. No-op when the
----env var is unset (auto-core stays KB-neutral; this is the auto-
----agents-side adapter that adds KB persistence when a KB is
----configured).
-local function _install_kb_audit()
-  if _audit_handle then return end
-  local kb_root = vim.env.AUTO_AGENTS_KB_ROOT
-  if not kb_root or kb_root == "" then return end
-
-  local events = require("auto-core.events")
-  _audit_handle = events.subscribe("core.todo.automation:fired", function(payload)
-    if type(payload) ~= "table" then return end
-    local line = string.format(
-      "## [%s] automation-fire | origin=%s clone=%s outcome=%s\n",
-      tostring(payload.fired_at),
-      tostring(payload.origin_id),
-      tostring(payload.clone_id),
-      tostring(payload.outcome))
-    local path = kb_root .. "/log.md"
-    -- ADR-0039 Batch C: flush before close so the audit entry reaches
-    -- the OS (append-only log — flush, not atomic rewrite, to avoid
-    -- racing concurrent appenders).
-    local f = io.open(path, "a")
-    if f then
-      f:write(line)
-      f:flush()
-      f:close()
-    end
-  end)
-end
-
-local function _uninstall_kb_audit()
-  if not _audit_handle then return end
-  pcall(function()
-    require("auto-core.events").unsubscribe(_audit_handle)
-  end)
-  _audit_handle = nil
-end
-
 ---Idempotent install. Safe to call from auto-agents setup AND from
 ---smoke tests; second call is a no-op.
 function M.install()
@@ -279,8 +240,6 @@ function M.install()
     validate = _bash_t_validate,
   })
 
-  _install_kb_audit()
-
   -- Start the engine so the scheduler tick + event router fire.
   -- Idempotent on the automation side.
   pcall(automation.start)
@@ -288,7 +247,7 @@ function M.install()
   _installed = true
   local log = _log()
   if log and log.debug then
-    pcall(log.debug, "todo_automation", "installed hook + executor + KB audit")
+    pcall(log.debug, "todo_automation", "installed hook + executor")
   end
 end
 
@@ -301,7 +260,6 @@ function M.uninstall()
     pcall(automation.unregister_executor, "bash -t=")
     pcall(automation.stop)
   end
-  _uninstall_kb_audit()
   _installed = false
 end
 
