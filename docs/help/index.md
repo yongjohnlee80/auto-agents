@@ -9,7 +9,7 @@ opens the help file in the editor for browsing or hand-editing.
 | Verb        | Purpose                                                |
 |-------------|--------------------------------------------------------|
 | `agent`     | Manage agent slots (focus, add, edit, kill, send, …)   |
-| `kb`        | Knowledge-base — init, sync, scope, file ops           |
+| `kb`        | Show the project's primary KB (agents' KB)             |
 | `project`   | Per-project config (init/import/remove/list/show)      |
 | `resource`  | Per-slot grants (paths, cwd, manager designation)      |
 | `term`      | Playground terminals T1..T4 (shared user/agent shells) |
@@ -29,7 +29,7 @@ real markdown files shipped with the plugin.
 ## Navigation shortcuts
 
 - Inside admin (slot 0), normal-mode `0`–`9` focuses that slot.
-- `<C-c>` aborts an active wizard (`agent add`, `agent edit`, `kb scope`,
+- `<C-c>` aborts an active wizard (`agent add`, `agent edit`,
   `project import`, etc.) at any step.
 - `<F5>` toggles the panel from anywhere.
 - `<F6>` / `<F12>` opens the navigation dock for one-key slot dispatch.
@@ -37,7 +37,7 @@ real markdown files shipped with the plugin.
 ## See also
 
 - `agent help` — agent slot operations + the admin wizard
-- `kb help` — KB types, scopes, sync, instruction files
+- `kb help` — the primary KB, what agents get at spawn, what retired
 - `project help` — TOML resolution, init/import/remove
 - `term help` — playground terminals, focus behavior, paste-safe send
 - `panel help` — pinning the panel column width via `panel resize` / `panel reset` / `panel show`

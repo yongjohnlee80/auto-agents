@@ -2,7 +2,7 @@
 
 T1..T4 are **shared playground terminals** — floating shells that the
 human and any agent can both use. They're separate from agent slots
-(0–9): not tied to the panel, not tied to the TOML, no kb_scope, no
+(0–9): not tied to the panel, not tied to the TOML, no KB env, no
 bootstrap config. Just four persistent floats keyed by slot number.
 
 Mapped to `<F1>..<F4>` by default. Press the F-key to focus (or open
@@ -86,7 +86,7 @@ automatically). Useful from a keymap when you want explicit control.
 ## How term operations interact with the rest of the system
 
 - **Independent of agent slots**: T1..T4 don't appear in `status`,
-  don't have a kb_scope, don't get an instruction file written to
+  don't get the KB env, don't get an instruction file written to
   their cwd. They're just shells.
 - **Independent of TOML**: T-config doesn't persist — these are
   ephemeral playground shells, not configured agents. After nvim

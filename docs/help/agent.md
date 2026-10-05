@@ -39,14 +39,12 @@ agent add                # opens the wizard inside this admin buffer
 ```
 
 Step-by-step wizard. Each step shows `[default]` — Enter to keep it,
-type to change, **`<C-c>` to abort**. The final step asks for a KB type
-(coding | wiki | research | ops | general | custom | none).
+type to change, **`<C-c>` to abort**. It asks no KB questions: every
+agent uses the project's primary KB (`kb help`).
 
 **Affects:**
 - Writes a new `[[agents]]` block to the active TOML
   (per-project if one exists, else global).
-- If a KB type is picked, scaffolds the KB layout under
-  `<kb_root>` with the chosen seed copied to `<kb_root>/AGENTS.md`.
 - Refreshes `<leader>aN` keymap descriptions (so which-key reflects
   the new slot label).
 - Triggers `focus_slot(N)` after save.
@@ -114,9 +112,7 @@ agent rename <N> <new-name>
 ```
 
 Renames the bootstrap entry's `name` field in-place. Live: the winbar
-and `<leader>aN` description update without a restart. The KB scope
-directory under `kb/agents/<name>/` does **not** auto-migrate — if the
-agent has private/isolated KB content, move it manually if you care.
+and `<leader>aN` description update without a restart.
 
 **Affects:** TOML is saved; in-memory state updated; keymap descriptions
 refreshed.
@@ -401,11 +397,11 @@ exposes, so it ships separately from v0.1.0.
   TOML — that's the per-project file if `project init` was run, else
   the global default. `project remove` falls back to global; agents
   added before `init` "promote" to project on next save.
-- **KB**: Each agent has a `kb_scope` (shared|private|isolated) which
-  controls the env vars at spawn (`$AUTO_AGENTS_KB_{ROOT,READ,WRITE}`).
-  KB type is project-wide (`[kb].type` in TOML). The instruction file
-  at the agent's cwd (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`) points at
-  `<kb_root>/AGENTS.md` for the schema.
+- **KB**: every agent gets the project's primary KB from auto-core.kb
+  (`$AUTO_AGENTS_KB_ROOT`, `$AUTODOC_WORKSPACE`, granted with
+  `--add-dir`); a project without one spawns agents with no KB env.
+  The instruction file at the agent's cwd
+  (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`) points at `<kb_root>/AGENTS.md`.
 - **Resources**: Per-slot grants (`resource grant N <path>`) and cwd
   overrides land in the spawn's env. Relevant during fresh spawn or
   `restart`, not applied to a running terminal.

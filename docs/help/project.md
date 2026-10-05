@@ -1,6 +1,6 @@
 # project — TOML config lifecycle
 
-Auto-agents resolves its agents and KB from TOML files under
+Auto-agents resolves its agents from TOML files under
 `<stdpath('config')>/.auto-agents-config/`:
 
 - `<sha16-of-project-root>.toml` — per-project (wins if it exists).
@@ -8,7 +8,7 @@ Auto-agents resolves its agents and KB from TOML files under
 
 The session caches the project key at nvim startup (`sha16(git_root ||
 cwd)`). `:cd` does **not** move the project boundary mid-session —
-your agents and KB stay tied to the directory you opened nvim from.
+your agents stay tied to the directory you opened nvim from.
 
 ## init
 
@@ -103,9 +103,10 @@ cached `session_cwd` and `session_project_root`, and both
   that change which file is "active." Wizard mutations
   (`agent add/edit/move/rename`) and `config save` always write to
   whichever file is active *at that moment*.
-- **KB**: `project import` shares the source's KB root, but doesn't
-  copy KB content. `project remove` leaves the KB on disk. KB types
-  travel with the project TOML (`[kb].type`).
+- **KB**: `project import` carries the source's `[kb].root`, which only
+  matters until the project has a primary KB (auto-core.kb imports it
+  once). It copies no KB content, and `project remove` leaves the KB on
+  disk.
 - **Resources**: per-slot grants live in a separate JSON file
   (`<stdpath('data')>/auto-agents/<key>-grants.json`). `project
   remove` does not delete grants — they sit unused under the same key
