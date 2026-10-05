@@ -7,8 +7,9 @@ local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
 -- Standard worktree layout: sibling auto-core.nvim/main
-local core_root = plugins_root .. "/auto-core.nvim/main"
-if vim.fn.isdirectory(core_root) == 0 then
+-- $AUTO_CORE_ROOT overrides the sibling resolution (see tests/run-all.sh).
+local core_root = vim.env.AUTO_CORE_ROOT or (plugins_root .. "/auto-core.nvim/main")
+if not vim.env.AUTO_CORE_ROOT and vim.fn.isdirectory(core_root) == 0 then
   -- Fallback to plain repo if no worktree
   core_root = plugins_root .. "/auto-core.nvim"
 end

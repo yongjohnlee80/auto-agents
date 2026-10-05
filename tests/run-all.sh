@@ -21,8 +21,32 @@
 # TWO summary formats coexist in this repo, so the sentinel matches both:
 #   "<P> passed, <F> failed"     and     "Passed: <P>, Failed: <F>"
 # In both, the failed count is the LAST integer on the line.
+#
+# auto-core resolution: every suite loads the sibling checkout
+# ../../auto-core.nvim/main (falling back to ../../auto-core.nvim).
+# AUTO_CORE_ROOT overrides it, for testing against an auto-core branch that
+# has not reached main yet:
+#
+#   AUTO_CORE_ROOT=../../auto-core.nvim/kb-primary tests/run-all.sh
+#
+# auto-agents v0.3.0 needs `auto-core.kb` (ADR 1791209945 §5). The preflight
+# below refuses to run against an auto-core without it, instead of letting a
+# dozen suites fail on a missing module.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
+
+core="${AUTO_CORE_ROOT:-}"
+if [ -z "$core" ]; then
+  core="../../auto-core.nvim/main"
+  [ -d "$core" ] || core="../../auto-core.nvim"
+fi
+if [ ! -f "$core/lua/auto-core/kb.lua" ]; then
+  echo "run-all: auto-core at '$core' has no lua/auto-core/kb.lua."
+  echo "         Point AUTO_CORE_ROOT at an auto-core checkout with auto-core.kb."
+  echo "run-all: FAILED"
+  exit 1
+fi
+export AUTO_CORE_ROOT="$(cd "$core" && pwd)"
 
 overall=0
 only="${1:-}"
