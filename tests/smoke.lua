@@ -3556,6 +3556,66 @@ do
   aa.state.config.kb = saved_kb
 end
 
+
+-- ───────────── 31. migrate_kb is KB-layout-agnostic (v0.3.0) ─────────────
+-- :AutoAgentsMigrateKbTodos stays (the managed block's unchanged todo
+-- protocol names it) but no longer assumes `shared/synthesis/`: it reads
+-- KB v1 and KB v2 synthesis folders and archives each doc within its own
+-- layout, never overwriting.
+print("\n[31] migrate_kb — KB v1 and v2 layouts, archive per layout, no overwrite")
+do
+  local mk = require("auto-agents.todos.migrate_kb")
+  local kb31 = vim.fn.tempname() .. "_kb31"
+  local function put(p, text)
+    vim.fn.mkdir(vim.fn.fnamemodify(p, ":h"), "p")
+    local f = assert(io.open(p, "w")); f:write(text); f:close()
+  end
+  local TODO = "# Todos\n\n**Tags:** `type:todo-list` `repo:x`\n"
+  put(kb31 .. "/shared/synthesis/v1-todos.md", TODO)
+  put(kb31 .. "/synthesis/v2-todos.md", TODO)
+  put(kb31 .. "/synthesis/clash-todos.md", TODO)
+  put(kb31 .. "/archive/synthesis/clash-todos.md", "already archived\n")
+  put(kb31 .. "/synthesis/not-a-todo.md", "# Note\n\n**Tags:** `type:synthesis`\n")
+
+  local found = mk.scan(kb31)
+  local names = {}
+  for _, p in ipairs(found) do names[#names + 1] = p:sub(#kb31 + 2) end
+  ok("31a: scan finds todo-lists in both layouts (and nothing else)",
+    vim.deep_equal(names, { "shared/synthesis/v1-todos.md", "synthesis/clash-todos.md", "synthesis/v2-todos.md" }),
+    vim.inspect(names))
+  ok("31a: a v1 doc archives under shared/synthesis/archive/",
+    mk.archive_dir_for(kb31, kb31 .. "/shared/synthesis/v1-todos.md") == kb31 .. "/shared/synthesis/archive")
+  ok("31a: a v2 doc archives under archive/synthesis/",
+    mk.archive_dir_for(kb31, kb31 .. "/synthesis/v2-todos.md") == kb31 .. "/archive/synthesis")
+
+  -- 31b. --apply with auto-core.todo stubbed, so nothing reaches a real store.
+  local saved_todo = package.loaded["auto-core.todo"]
+  package.loaded["auto-core.todo"] = {
+    get_todo_dir = function() return kb31 .. "/.todo-stub" end,
+    import = function(src) return { { id = vim.fn.fnamemodify(src, ":t:r"), status = "open" } } end,
+  }
+  local run_ok, summary = pcall(mk.migrate, { apply = true, kb_root = kb31 .. "/" })
+  package.loaded["auto-core.todo"] = saved_todo
+  ok("31b: apply runs", run_ok, tostring(summary))
+  if run_ok then
+    ok("31b: the v1 doc moved to shared/synthesis/archive/",
+      vim.fn.filereadable(kb31 .. "/shared/synthesis/archive/v1-todos.md") == 1
+        and vim.fn.filereadable(kb31 .. "/shared/synthesis/v1-todos.md") == 0)
+    ok("31b: the v2 doc moved to archive/synthesis/",
+      vim.fn.filereadable(kb31 .. "/archive/synthesis/v2-todos.md") == 1
+        and vim.fn.filereadable(kb31 .. "/synthesis/v2-todos.md") == 0)
+    local clash = table.concat(vim.fn.readfile(kb31 .. "/archive/synthesis/clash-todos.md"), "\n")
+    ok("31b: an existing archive target is never overwritten",
+      clash == "already archived" and vim.fn.filereadable(kb31 .. "/synthesis/clash-todos.md") == 1, clash)
+    local clash_err = false
+    for _, e in ipairs(summary.errors) do
+      if e.phase == "archive" and tostring(e.err):find("not overwritten", 1, true) then clash_err = true end
+    end
+    ok("31b: the clash is reported as an archive error", clash_err, vim.inspect(summary.errors))
+  end
+  pcall(vim.fn.delete, kb31, "rf")
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
