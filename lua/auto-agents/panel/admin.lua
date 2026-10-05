@@ -71,7 +71,6 @@ local function help_lines()
     "  kb init [<type> [<seed>]]      seed kb (coding|wiki|research|ops|general|custom)",
     "  kb ingest [--attach <N>]       diff raw/ vs ingested source pages; optionally hand worklist to slot N",
     "  kb path                        print kb root + ensure layout",
-    "  kb scope <N> <mode>            change kb_scope (shared|private|isolated)",
     "  kb sync                        regenerate manifest.json per namespace",
     "  kb new <relative>              create + open a kb file in the editor",
     "  kb open <relative>             open a kb file in the editor",
@@ -549,10 +548,6 @@ local function dispatch(input)
         require("auto-agents.config.store").save_current()
         emit({ "kb init (" .. type .. "): ensured at " .. root, "  AGENTS.md refreshed from seed." })
       end
-    elseif sub == "scope" then
-      local n = tonumber(toks[3])
-      local specs = require("auto-agents.panel.wizard_specs")
-      require("auto-agents.panel.wizard").start(specs.kb_scope(n), function(lines) emit(lines) end)
     elseif sub == "new" then
       local rel = toks[3]
       if rel and rel ~= "" then
@@ -701,7 +696,7 @@ local function dispatch(input)
         vim.cmd("normal! G")
       end)
     else
-      emit({ "kb: unknown subverb '" .. tostring(sub) .. "' — try path/scope/sync/new/open/attach/tail/log" })
+      emit({ "kb: unknown subverb '" .. tostring(sub) .. "' — try path/sync/new/open/attach/tail/log" })
     end
 
   elseif verb == "panel" then
@@ -1195,7 +1190,7 @@ local function complete_at(prompt, cursor_col)
   elseif #prev_toks == 2 and prev_toks[1] == "help" and prev_toks[2] == "open" then
     candidates = { "index", "agent", "kb", "project", "resource", "term", "config", "panel", "general" }
   elseif #prev_toks == 1 and prev_toks[1] == "kb" then
-    candidates = { "init", "ingest", "path", "scope", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
+    candidates = { "init", "ingest", "path", "sync", "new", "open", "attach", "tail", "log", "obsidian-init" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "init" then
     candidates = { "coding", "wiki", "research", "ops", "general", "custom" }
   elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "ingest" then
@@ -1203,11 +1198,8 @@ local function complete_at(prompt, cursor_col)
   elseif #prev_toks == 3 and prev_toks[1] == "kb" and prev_toks[2] == "ingest"
       and prev_toks[3] == "--attach" then
     candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
-  elseif #prev_toks == 2 and prev_toks[1] == "kb"
-    and (prev_toks[2] == "scope" or prev_toks[2] == "attach") then
+  elseif #prev_toks == 2 and prev_toks[1] == "kb" and prev_toks[2] == "attach" then
     candidates = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
-  elseif #prev_toks == 3 and prev_toks[1] == "kb" and prev_toks[2] == "scope" then
-    candidates = { "shared", "private", "isolated" }
   elseif #prev_toks == 1 and prev_toks[1] == "agent" then
     candidates = { "focus", "list", "add", "edit", "kill", "restart", "rename", "send", "attach", "move", "task", "mem" }
   elseif #prev_toks == 2 and prev_toks[1] == "agent" and prev_toks[2] == "task" then

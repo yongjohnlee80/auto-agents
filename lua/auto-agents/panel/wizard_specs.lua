@@ -3,7 +3,11 @@
 ---
 ---Edits pre-populate every field's default from the existing entry, so
 ---the user can see the current value next to each prompt and Enter to
----keep it. Adds use sensible defaults (kind=claude, kb_scope=shared).
+---keep it. Adds use sensible defaults (kind=claude).
+---
+---v0.3.0 (ADR 1791209946 §7): no KB questions. An agent's KB is the
+---project's primary KB from auto-core.kb, not a per-agent scope, a KB
+---type or a seed.
 ---
 ---@module 'auto-agents.panel.wizard_specs'
 
@@ -15,7 +19,6 @@ local VALID_KINDS  = { claude = true, codex = true, antigravity = true, junie = 
 local MODEL_KINDS    = { goose = true, opencode = true }
 local PROVIDER_KINDS = { goose = true }
 local API_BASE_KINDS = { goose = true }
-local VALID_SCOPES = { shared = true, private = true, isolated = true }
 
 local function find_entry(slot)
   local cfg = require("auto-agents").state.config or {}
@@ -122,7 +125,7 @@ function M.agent(mode, slot)
     },
     {
       field = "name",
-      prompt = "name (handle, used for KB dir + grants)",
+      prompt = "name (handle, used for the mailbox id + grants)",
       default = default("name", ""),
       placeholder = (existing and existing.name) or "(blank to auto-generate)",
       parse = blank_to_nil,
@@ -180,18 +183,6 @@ function M.agent(mode, slot)
       default = default("manager", ""),
       placeholder = (existing and existing.manager and tostring(existing.manager)) or "none",
       parse = parse_int_or_nil,
-    },
-    {
-      field = "kb_scope",
-      prompt = "kb_scope",
-      choices = { "shared", "private", "isolated" },
-      default = default("kb_scope", "shared"),
-      validate = function(v)
-        if not VALID_SCOPES[v] then
-          return false, "kb_scope must be shared|private|isolated"
-        end
-        return true
-      end,
     },
     {
       -- goose/opencode take the model id at spawn (GOOSE_MODEL env for
@@ -279,130 +270,6 @@ function M.agent(mode, slot)
     },
   }
 
-  -- Add-only: KB type picker. Picks one of the built-in types,
-  -- supplies a custom seed path, or skips KB init.
-  if mode == "add" then
-    local kb_types = require("auto-agents.kb.types")
-    local choices = vim.list_extend(vim.list_slice(kb_types.BUILTIN, 1, #kb_types.BUILTIN),
-      { "custom", "none" })
-    table.insert(steps, {
-      field = "_kb_type",
-      prompt = "KB type",
-      choices = choices,
-      -- Default to the project's current `[kb].type` when already set
-      -- so a no-op `<CR>` keeps the project type unchanged. Falls
-      -- back to "coding" for first-ever adds (nvim users skew
-      -- coding). When the user explicitly picks a different value
-      -- AND their kb_scope is "shared", the follow-on
-      -- `_kb_type_conflict_ack` step fires the SHOUTY warning.
-      default = function()
-        local cfg = require("auto-agents").state.config
-        local existing = cfg and cfg.kb and cfg.kb.type
-        if type(existing) == "string" and existing ~= "" then
-          return existing
-        end
-        return "coding"
-      end,
-      validate = function(v)
-        for _, c in ipairs(choices) do if c == v then return true end end
-        return false, "must be one of " .. table.concat(choices, "|")
-      end,
-    })
-    table.insert(steps, {
-      field = "_kb_seed_path",
-      prompt = "path to your custom seed .md",
-      placeholder = "(absolute or ~/relative)",
-      skip = function(values) return values._kb_type ~= "custom" end,
-      parse = function(v)
-        if v == nil or v == "" then return nil end
-        local expanded = vim.fn.expand(v)
-        if vim.fn.filereadable(expanded) ~= 1 then
-          error("seed file not found: " .. expanded)
-        end
-        return expanded
-      end,
-      validate = function(v)
-        if v == nil or v == "" then
-          return false, "custom seed requires a readable .md file"
-        end
-        return true
-      end,
-    })
-
-    -- Project-KB-type conflict ACK. The wizard's `_kb_type` prompt
-    -- LOOKS like a per-agent choice but the side effect is project-
-    -- scoped: `cfg.kb.type` gets overwritten with the picked value.
-    -- For `kb_scope = "shared"` agents this is real damage — both
-    -- types' layout dirs end up coexisting under the same `shared/`
-    -- tree, AGENTS.md stays describing the old contract, and the
-    -- two paradigms' mutability models collide (especially nasty
-    -- when mixing coding/ops "living-doc" style with wiki's
-    -- finalized-cards style).
-    --
-    -- For `private` / `isolated` scope, the new agent writes to its
-    -- own `agents/<name>/` subdir — no immediate damage. The TOML's
-    -- `[kb].type` still changes (which affects FUTURE shared-scope
-    -- agents) but the ACK only fires for shared scope to avoid
-    -- prompt fatigue on the common scope-isolation case.
-    --
-    -- The ACK demands `YES_CHANGE_PROJECT_TYPE` (uppercase, full
-    -- phrase) so muscle-memory `y` / `yes` / <CR> doesn't bypass.
-    table.insert(steps, {
-      field = "_kb_type_conflict_ack",
-      skip = function(values)
-        local cfg = require("auto-agents").state.config
-        local current = cfg and cfg.kb and cfg.kb.type
-        if not current or current == "" then return true end           -- no existing type
-        if values._kb_type == "none" then return true end              -- user opted out
-        if values._kb_type == current then return true end             -- no change
-        if (values.kb_scope or "shared") ~= "shared" then              -- per-agent isolation: no immediate conflict
-          return true
-        end
-        return false
-      end,
-      pre_emit = function(values)
-        local cfg = require("auto-agents").state.config
-        local current = (cfg and cfg.kb and cfg.kb.type) or "?"
-        local picked = values._kb_type or "?"
-        local cur_up = string.upper(tostring(current))
-        local pick_up = string.upper(tostring(picked))
-        return {
-          "",
-          "  ════════════════════════════════════════════════════════════",
-          "  ⚠  WARNING — PROJECT KB TYPE CONFLICT",
-          "  ════════════════════════════════════════════════════════════",
-          "",
-          "  CURRENT PROJECT KB TYPE: " .. cur_up,
-          "  YOU PICKED:              " .. pick_up,
-          "  KB_SCOPE FOR THIS AGENT: SHARED (writes into shared/)",
-          "",
-          "  PROCEEDING WILL:",
-          "    - OVERWRITE [kb].type IN THE TOML (" .. cur_up .. " → " .. pick_up .. ")",
-          "    - LEAVE AGENTS.md DESCRIBING THE OLD CONTRACT (" .. cur_up .. ")",
-          "    - CREATE BOTH TYPES' LAYOUT DIRS SIDE BY SIDE UNDER shared/",
-          "    - MIX MUTABILITY MODELS IN shared/synthesis/",
-          "",
-          "  THIS IS USUALLY A MISCONFIG. CODING/OPS USE LIVING DOCS",
-          "  THAT ITERATE; WIKI USES FINALIZED ZETTEL CARDS. MIXING",
-          "  THEM IN ONE SHARED TREE CONFUSES BOTH AGENT STYLES.",
-          "",
-          "  IF YOU REALLY WANT A HYBRID, CONSIDER:",
-          "    - kb_scope = isolated / private  (agent gets its own subdir)",
-          "    - kb_type = general              (no opinionated layout)",
-          "    - kb_type = custom + own seed    (hand-crafted layout)",
-          "",
-          "  TO CONFIRM, TYPE EXACTLY: YES_CHANGE_PROJECT_TYPE",
-          "",
-        }
-      end,
-      prompt = "Type exactly 'YES_CHANGE_PROJECT_TYPE' (uppercase) to confirm, or <C-c> to cancel",
-      validate = function(v)
-        if v == "YES_CHANGE_PROJECT_TYPE" then return true end
-        return false, "must type exactly 'YES_CHANGE_PROJECT_TYPE' (uppercase) — or <C-c> to cancel"
-      end,
-    })
-  end
-
   return {
     name = "agent." .. mode,
     banner = title,
@@ -432,7 +299,6 @@ function M.agent(mode, slot)
         cmd = cmd,
         allowed_paths = values.allowed_paths,
         manager = values.manager,
-        kb_scope = values.kb_scope or "shared",
         bottom_margin = values.bottom_margin,
         diff_review = values.diff_review == true or nil,  -- omit when false to keep TOML clean
         model = values.model,
@@ -456,34 +322,12 @@ function M.agent(mode, slot)
       end
       table.insert(cfg.agents.bootstrap, entry)
 
-      -- KB init (add-only). Persist type/seed in cfg.kb so save_current
-      -- writes them into [kb] alongside any [kb].root override.
-      local kb_init_msg
-      if mode == "add" and values._kb_type and values._kb_type ~= "none" then
-        local cfg2 = require("auto-agents").state.config
-        cfg2.kb = cfg2.kb or {}
-        cfg2.kb.type = values._kb_type
-        if values._kb_type == "custom" then
-          cfg2.kb.seed_path = values._kb_seed_path
-        else
-          cfg2.kb.seed_path = nil  -- clear stale custom seed reference
-        end
-        local kb = require("auto-agents.kb")
-        local root = kb.root()
-        kb.ensure_layout(root, {
-          type = values._kb_type,
-          seed_path = values._kb_seed_path,
-        })
-        kb_init_msg = "  KB (" .. values._kb_type .. ") ensured at " .. root
-      end
-
       local ok, path = require("auto-agents.config.store").save_current()
       pcall(function() require("auto-agents").refresh_keymaps() end)
 
       local lines = { "", "✓ Slot " .. entry.slot .. " " .. (mode == "edit" and "updated" or "added")
         .. " (" .. entry.kind .. (entry.name and ("/" .. entry.name) or "") .. ")" }
       if ok then table.insert(lines, "  saved → " .. path) end
-      if kb_init_msg then table.insert(lines, kb_init_msg) end
 
       table.insert(lines, "")
       emit(lines)
@@ -529,59 +373,6 @@ function M.kb_new()
         if target_win then pcall(vim.api.nvim_set_current_win, target_win) end
         vim.cmd("edit " .. vim.fn.fnameescape(path))
       end)
-    end,
-  }
-end
-
----kb.scope — change a slot's kb_scope via wizard (pre-fills current).
----@param slot integer|nil
----@return table
-function M.kb_scope(slot)
-  -- ADR 0024 §2.3: range from live panel slot_count, not hardcoded.
-  local slot_max = require("auto-agents").MAX_SLOT or 5
-  local range_str = "1.." .. tostring(slot_max)
-  return {
-    name = "kb.scope",
-    banner = "auto-agents: change kb_scope",
-    steps = {
-      {
-        field = "slot",
-        prompt = "slot (" .. range_str .. ")",
-        default = slot and tostring(slot) or nil,
-        placeholder = slot and tostring(slot) or range_str,
-        parse = function(v) return tonumber(v) end,
-        validate = function(n)
-          if not n or n < 1 or n > slot_max then
-            return false, "slot must be " .. range_str
-          end
-          if not find_entry(n) then return false, "slot " .. n .. " has no bootstrap entry" end
-          return true
-        end,
-      },
-      {
-        field = "scope",
-        prompt = "scope",
-        choices = { "shared", "private", "isolated" },
-        default = function(values)
-          local entry = find_entry(values.slot)
-          return (entry and entry.kb_scope) or "shared"
-        end,
-        validate = function(v)
-          if not VALID_SCOPES[v] then return false, "scope must be shared|private|isolated" end
-          return true
-        end,
-      },
-    },
-    on_complete = function(values, emit)
-      local entry = find_entry(values.slot)
-      if not entry then
-        emit({ "kb scope: slot " .. values.slot .. " has no bootstrap entry" })
-        return
-      end
-      entry.kb_scope = values.scope
-      require("auto-agents.config.store").save_current()
-      emit({ "✓ kb_scope of slot " .. values.slot .. " set to " .. values.scope
-        .. " (effective at next spawn)" })
     end,
   }
 end

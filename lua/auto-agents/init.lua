@@ -196,8 +196,6 @@ function M.setup(opts)
   if loaded and loaded.kb then
     config.kb = config.kb or {}
     if loaded.kb.root then config.kb.root_override = loaded.kb.root end
-    if loaded.kb.type then config.kb.type = loaded.kb.type end
-    if loaded.kb.seed then config.kb.seed_path = loaded.kb.seed end
   end
   M.state.config_source = source
 
