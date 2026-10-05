@@ -1825,7 +1825,7 @@ end
 -- `assign user` sentinel skip in the recipient router, the two new
 -- mailbox verbs (todos.fire, todos.automation_set), and the KB
 -- audit subscriber.
-print("\n[24] ADR-0035 Phase 2 — todo_automation adapter + mailbox surface + KB audit")
+print("\n[24] ADR-0035 Phase 2 — todo_automation adapter + mailbox surface (no KB audit)")
 do
   local ok_aa_auto, aa_auto = pcall(require, "auto-agents.todo_automation")
   if not ok_aa_auto then
@@ -2011,6 +2011,46 @@ do
     local r_good_al = as_spec.handler({ bash_allowlist = { "^echo ", "^make " } })
     ok("todos.automation_set accepts list allowlist",
       r_good_al.ok == true)
+
+    -- 24m. KB v2 (ADR 1791209946 §5.3): an automation fire no longer
+    -- appends to $AUTO_AGENTS_KB_ROOT/log.md, even with the KB env set at
+    -- install time (the old subscriber read it then). The fire stays in
+    -- auto-core's log and events.
+    aa_auto.uninstall()
+    local kb24 = vim.fn.tempname() .. "_kb24"
+    vim.fn.mkdir(kb24, "p")
+    vim.env.AUTO_AGENTS_KB_ROOT = kb24
+    aa_auto.install()
+    local fired_seen = 0
+    local h24 = events.subscribe("core.todo.automation:fired", function() fired_seen = fired_seen + 1 end)
+    events.publish("core.todo.automation:fired", {
+      fired_at = "2026-10-06T00:00:00Z", origin_id = "o24", clone_id = "c24", outcome = "ok",
+    })
+    vim.wait(50, function() return fired_seen > 0 end)
+    pcall(events.unsubscribe, h24)
+    vim.env.AUTO_AGENTS_KB_ROOT = nil
+    ok("24m: the fire event was delivered", fired_seen == 1, "seen=" .. fired_seen)
+    ok("24m: no log.md written into the KB", vim.fn.filereadable(kb24 .. "/log.md") == 0)
+    ok("24m: nothing written into the KB at all", #vim.fn.readdir(kb24) == 0, vim.inspect(vim.fn.readdir(kb24)))
+    aa_auto.uninstall()
+    pcall(vim.fn.delete, kb24, "rf")
+
+    -- 24n. Todo handling is unchanged by KB v2: the todos.* verbs still
+    -- register with the mailbox and the todo bootstrap doc still resolves.
+    local reg = todos_mod.register_all()
+    local listed = {}
+    for _, e in ipairs(require("auto-core").mailbox.commands.list() or {}) do listed[e.name] = true end
+    local missing = {}
+    for _, verb in ipairs({ "todos.list", "todos.show", "todos.list_dirs", "todos.get_dir", "todos.add",
+                            "todos.update", "todos.status", "todos.assign", "todos.archive",
+                            "todos.remove", "todos.refresh", "todos.set_dir", "todos.import" }) do
+      if not listed[verb] then missing[#missing + 1] = verb end
+    end
+    ok("24n: the 13 documented todos.* verbs are registered", #missing == 0, vim.inspect(missing))
+    ok("24n: register_all skipped nothing", #reg.skipped == 0, vim.inspect(reg.skipped))
+    local bdoc = todos_mod.bootstrap_doc_path()
+    ok("24n: the todo bootstrap doc still resolves",
+      type(bdoc) == "string" and vim.fn.filereadable(bdoc) == 1, tostring(bdoc))
 
     -- Reset for downstream.
     ns:set("bash_enabled", false)
