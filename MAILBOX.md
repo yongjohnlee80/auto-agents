@@ -352,7 +352,7 @@ For each `configured` agent:
 The user's `~/.claude/`, `~/.codex/`, `~/.gemini/antigravity/` are inside
 each tool's sandbox by default — the agent can read and write
 without extra grants. To skip the per-op permission prompt for
-the mailbox dir + KB paths, auto-agents v0.2.9 appends the
+the mailbox dir + the KB, auto-agents v0.2.9 appends the
 appropriate per-kind CLI flag at spawn time:
 
 | Kind        | Flag                                                       |
@@ -364,8 +364,8 @@ appropriate per-kind CLI flag at spawn time:
 Paths granted at spawn:
 
 - `$AUTO_AGENTS_MAILBOX_DIR` (the agent's own mailbox)
-- Every entry of `$AUTO_AGENTS_KB_READ` (colon-split)
-- `$AUTO_AGENTS_KB_WRITE` (if not already covered by READ)
+- `$AUTO_AGENTS_KB_ROOT` (the project's primary KB, v0.3.0; none when
+  the project has no primary)
 
 Strategy module: `lua/auto-agents/permissions.lua`. Add new
 kinds by extending the `STRATEGY` table with a

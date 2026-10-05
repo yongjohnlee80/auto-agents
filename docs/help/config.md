@@ -64,8 +64,8 @@ opening it with `:edit` outside the admin.
   always writes to the per-project file if it exists, else global.
   `project init` creates the per-project file; `project remove`
   deletes it; both flip what `config save` targets.
-- **Wizard mutations**: `agent add/edit/move/rename`, `kb scope`, and
-  `kb init` all call the same `config.store.save_current()`. So you
+- **Wizard mutations**: `agent add/edit/move/rename` all call the
+  same `config.store.save_current()`. So you
   rarely need `config save` directly — it's a fallback.
 - **Session cwd cache**: every config command uses
   `state.session_project_key`, cached at startup. `:cd` doesn't

@@ -2,8 +2,9 @@
 
 > Multi-agent orchestration panel for Neovim. One right-side window holds slot
 > **0** (an admin REPL) plus a **configurable number of agent slots** (default
-> 5, up to 9) — all in the same panel, switched by buffer. Project-local
-> knowledge-base, per-slot resource grants, and one-key navigation.
+> 5, up to 9) — all in the same panel, switched by buffer. The project's
+> primary knowledge base for every agent, per-slot resource grants, and
+> one-key navigation.
 
 **Status:** pre-release. M1–M5 are implemented and in daily use. See
 [`PLAN.md`](./PLAN.md) for the full design and milestone log,
@@ -39,7 +40,8 @@ split, and [`PERFORMANCE.md`](./PERFORMANCE.md) for the memory/CPU budget.
 A single right-hand panel that hosts **multiple** agent terminals — Claude
 Code, Codex, Gemini, Copilot, or any shell — switchable by slot, with shared
 project context. Each slot can have its own working directory, its own
-knowledge-base scope, its own grant of paths/env, and its own task list. Add as
+grant of paths/env, and its own task list; every agent shares the project's
+primary knowledge base. Add as
 many agent slots as you need (up to 9) with `slot add`, so a manager agent and
 its helpers all share one panel.
 
@@ -54,7 +56,7 @@ its helpers all share one panel.
     "yongjohnlee80/auto-core.nvim",  -- foundation library; hard dep as of v0.2.0
     "folke/snacks.nvim",              -- navigation dock + playground-terminal floats
   },
-  opts = {},  -- agents/KB live in TOML — see below
+  opts = {},  -- agents live in TOML — see below
 }
 ```
 
@@ -88,8 +90,8 @@ On first run with no TOML, `:AutoAgents` opens slot 0 (admin) and auto-engages
 an `agent add` wizard. Step through the prompts and you get a working agent
 plus a saved TOML. See [First run](#first-run) below.
 
-The session pins its project key at startup — `:cd` does not move agents or
-KB mid-session, so you can wander the file tree freely.
+The session pins its project key at startup — `:cd` does not move agents
+mid-session, so you can wander the file tree freely.
 
 ## Slot model
 
@@ -222,7 +224,7 @@ Claude Code eventually forwards `content[2]`, both channels carrying
 the same text becomes a benign duplicate — no editor-side changes
 needed.
 
-See [ADR 0012](kb-seeds/coding.md) in the KB for the full rationale.
+See ADR 0012 in the KB for the full rationale.
 
 ## First run
 
@@ -243,16 +245,16 @@ auto-agents: new agent
 > 1
   kind (claude|codex|antigravity|junie|goose|opencode|copilot|generic)  [claude]:
 > 
-  name (handle, used for KB dir + grants)  [(blank to auto-generate)]:
+  name (handle, used for the mailbox id + grants)  [(blank to auto-generate)]:
 > main
   ...
-  Create / ensure KB for this project? (y|N)  [N]:
-> y
 
 ✓ Slot 1 added (claude/main)
   saved → ~/.config/nvim/auto-agents/<project-key>.toml
-  KB ensured at <project-root>/.auto-agents/kb
 ```
+
+The wizard asks no KB questions: agents use the project's primary KB (see
+[Knowledge base](#knowledge-base)).
 
 Each step shows the current/default value in `[…]`. Press Enter to keep it,
 or type a new value. **`<C-c>` cancels** the wizard at any step (terminal
@@ -263,7 +265,7 @@ If you'd rather configure a **per-project** TOML before adding agents, type
 
 ## TOML config
 
-Agents and KB are stored in TOML files under
+Agents are stored in TOML files under
 `<stdpath('config')>/.auto-agents-config/`:
 
 | File                     | Used for                                          |
@@ -272,7 +274,7 @@ Agents and KB are stored in TOML files under
 | `global.toml`            | Default agents for any project without its own.   |
 
 The session resolves its project key at nvim startup (`sha16(git_root || cwd)`)
-and **caches it** — `:cd` does not move agents/KB mid-session.
+and **caches it** — `:cd` does not move agents mid-session.
 
 ```toml
 [project]
@@ -280,7 +282,7 @@ cwd = "/abs/path"
 created_at = "2026-05-01T12:34:56Z"
 
 [kb]
-root = "/abs/path/.auto-agents/kb"   # absolute; can be shared across projects
+root = "/abs/path/.auto-agents/kb"   # optional: the legacy KB location (see below)
 
 [[agents]]
 slot          = 1
@@ -292,12 +294,16 @@ cwd           = "/abs/path"                  # optional; defaults to project roo
 cmd           = ["claude", "--mini"]         # optional override
 allowed_paths = ["src/", "tests/"]           # exported as AUTO_AGENTS_ALLOWED_PATHS
 manager       = 0                            # optional: managing slot
-kb_scope      = "shared"                     # shared|private|isolated
 bottom_margin = 1                            # optional: per-slot TUI footer override
 ```
 
 You can hand-edit the TOML, or use the wizard inside the admin panel. Either
 way, mutations from the wizard land back in the same file.
+
+`[kb] root` is read only to find an existing KB the first time a project has
+no primary KB (auto-core.kb imports it once). v0.3.0 retired `[kb] type`,
+`[kb] seed` and the per-agent `kb_scope`: a file that still has them loads
+with one warning, and the next save drops them.
 
 Top-level lua `opts` is now small — just runtime settings:
 
@@ -313,7 +319,6 @@ Top-level lua `opts` is now small — just runtime settings:
     slot_rail     = "winbar",  -- winbar|vertical|off
     bottom_margin = 1,         -- TUI footer breathing room (overridden per-slot in TOML)
   },
-  kb       = { default_scope = "shared" },
   terminal = { provider = "auto", git_repo_cwd = true },
 }
 ```
@@ -325,7 +330,7 @@ Top-level lua `opts` is now small — just runtime settings:
 | Command                                 | Effect                                                            |
 |-----------------------------------------|-------------------------------------------------------------------|
 | `project init`                          | Create a fresh per-project TOML for the cached cwd.               |
-| `project import <key\|path\|cwd>`       | Copy `[[agents]]` from another project; **shares its `[kb].root`**. |
+| `project import <key\|path\|cwd>`       | Copy `[[agents]]` from another project, with its `[kb].root`. |
 | `project import` (no args)              | List candidates, ask you to re-run with the chosen one.           |
 | `project remove`                        | Delete the per-project TOML. **KB on disk survives.** Falls back to global. |
 | `project list`                          | Show every TOML in the config dir + which is active.              |
@@ -333,7 +338,7 @@ Top-level lua `opts` is now small — just runtime settings:
 
 `project import` exists for the case where you have the same project mirrored
 at multiple paths (a clone, a worktree, a sibling repo) — agents are
-duplicated, but the KB is shared so notes don't fragment.
+duplicated, and the `[kb].root` comes along.
 
 ## Mailbox command surface — and where verbs live
 
@@ -385,7 +390,7 @@ You can browse the docs three ways:
 
   ```
   agent add help          # → renders the `## add` section of agent.md
-  kb init ?               # → same, for kb.md
+  kb ?                    # → same, for kb.md
   ?                       # → top-level index.md
   ```
 
@@ -407,10 +412,8 @@ Press Enter to keep, type to change, **`<C-c>` to abort.**
 
 | Verb                        | Wizard                                                            |
 |-----------------------------|-------------------------------------------------------------------|
-| `agent add`                 | New agent. Pre-filled with sensible defaults. Final step offers KB init. |
+| `agent add`                 | New agent. Pre-filled with sensible defaults.                     |
 | `agent edit <slot>`         | Edit existing agent. Every field pre-fills with the current value.|
-| `kb new`                    | Create + open a KB file. Single prompt.                           |
-| `kb scope <slot>`           | Change a slot's `kb_scope` interactively (pre-fills current).     |
 | `project import` (no arg)   | Pick a source project from a listing.                             |
 
 ## Admin panel
@@ -433,15 +436,7 @@ agent task add 2 ship the migration    add a task to slot 2's list
 agent task done 2 1                    mark task #1 done
 agent task list [N]                    show tasks (one slot or all)
 agent mem                              report RSS per running agent
-kb path                                print kb root + ensure layout
-kb scope 2 private                     change kb_scope (shared|private|isolated)
-kb sync                                regenerate manifest.json per namespace
-kb new <relative>                      create + open a kb file
-kb open <relative>                     open a kb file
-kb attach 2 <relative>                 send a kb path to slot 2
-kb tail                                open log.md (autoread)
-kb log                                 print path of log.md
-kb obsidian-init                       scaffold .obsidian/ in kb root
+kb                                     show the project's primary KB
 resource grant 2 <path>                grant a path to slot 2
 resource revoke 2 <path>               revoke a previously-granted path
 resource cwd 2 [<path>]                set/clear explicit cwd for slot 2
@@ -517,66 +512,40 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 
 ## Knowledge base
 
-A project-local KB lives at `<git-root>/.auto-agents/kb` (or wherever
-`[kb].root` in the TOML points). Every KB has an immutable `raw/` directory
-for source material — agents read it, never edit it.
+Since v0.3.0 auto-agents owns no KB code (ADR 1791209946 §7). A project's
+agents share **one KB, the project's primary KB**, recorded by
+[auto-core](https://github.com/yongjohnlee80/auto-core)'s `auto-core.kb`. The
+KB scaffold, search and maintenance live in AutoDoc, and agents search the KB
+through `autodoc --call`.
 
-### KB types
+At spawn, an agent gets:
 
-When you create a KB (via `agent add` wizard or `kb init <type>`), pick a
-specialized seed that comes with its own layout, conventions, and operations.
-The seed is copied to `<kb_root>/AGENTS.md` and is the canonical contract for
-that KB.
+- `AUTO_AGENTS_KB_ROOT`: the KB root, also granted with `--add-dir`;
+- `AUTODOC_WORKSPACE`: the KB's AutoDoc workspace, when one is named;
+- `AUTODOC_KB_OPERATIONS_DOC`: `<root>/KB_OPERATIONS.md`, when it exists;
+- `AUTO_AGENTS_TODOS_CONVENTION_DOC`: the todo-handling convention, unchanged
+  (`<root>/conventions/todo-handling.md`, then
+  `<root>/shared/conventions/todo-handling.md`, then the bundled seed).
 
-| Type       | When to use                                                                  |
-|------------|------------------------------------------------------------------------------|
-| `coding`   | **Default for nvim users.** Codebase conventions, ADRs, review playbooks.    |
-| `wiki`     | LLM-wiki / Zettelkasten-flavored — durable, interlinked knowledge that compounds. |
-| `research` | Paper-driven research notebook — papers, hypotheses, experiments, synthesis. |
-| `ops`      | Runbook / SRE — alerts, runbooks, incidents, postmortems.                    |
-| `library`  | Content-addressed document archive — immutable records with a partitioned, content-addressed `raw/` (v0.2.24+). |
-| `general`  | Living KB — minimal seed; structure emerges from real work.                  |
-| `custom`   | You supply the seed `.md`. Everything else (layout, raw immutability) still applies. |
+A project with no primary KB spawns its agents with no KB environment, and
+their instruction file tells them to ask you. The first time a project with
+no primary is used, auto-core imports the KB auto-agents used before v0.3.0
+(`[kb].root`, the global KB, or `<project>/.auto-agents/kb`) once, if that
+directory exists. Nothing in auto-agents creates KB folders.
 
-The seeds ship under the plugin's `kb-seeds/` directory. They're
-self-documenting markdown — open `kb-seeds/coding.md` (or any of the others)
-to see the full contract before picking a type.
-
-### Scope (per-agent)
-
-`kb_scope` controls each agent's read/write window via env vars injected at spawn:
-
-| Scope      | Reads                                         | Writes                  |
-|------------|-----------------------------------------------|-------------------------|
-| `shared`   | `kb/shared` + `kb/agents/*`                   | `kb/shared`             |
-| `private`  | `kb/shared` + `kb/agents/<name>`              | `kb/agents/<name>`      |
-| `isolated` | `kb/agents/<name>`                            | `kb/agents/<name>`      |
-
-The plugin exports:
-
-- `AUTO_AGENTS_KB_ROOT`  — kb root
-- `AUTO_AGENTS_KB_READ`  — colon-separated read paths
-- `AUTO_AGENTS_KB_WRITE` — single write dir
-- `AUTO_AGENTS_KB_SCOPE` — the scope name itself
-
-`kb sync` regenerates a `manifest.json` per namespace (sha256, mtime, size,
-wikilinks). `kb obsidian-init` scaffolds an Obsidian vault config in the kb
-root so you can browse the same files visually.
+The admin `kb` verb shows the primary KB. The old `kb` subverbs (`init`,
+`ingest`, `path`, `scope`, `sync`, `new`, `open`, `attach`, `tail`, `log`,
+`obsidian-init`) are retired; `require("auto-agents.kb").root()` remains for
+this minor as a shim over `auto-core.kb.root()`.
 
 ### Telling the agent about the KB
 
-Two layers cooperate:
-
-1. **`<kb_root>/AGENTS.md`** — the canonical KB contract (copied from the
-   seed when you ran `kb init`). Defines the layout, operations, frontmatter,
-   immutability rule, and things to avoid for *this* KB. `<kb_root>/CLAUDE.md`
-   and `<kb_root>/GEMINI.md` sit alongside as thin pointers so each kind
-   auto-loads the same source of truth.
-2. **Per-kind instruction file at the agent's cwd** — `CLAUDE.md` /
-   `AGENTS.md` / `GEMINI.md` (per kind), with a small auto-agents block
-   between `<!-- auto-agents:begin -->` and `<!-- auto-agents:end -->`
-   markers. The block lists the env vars (`$AUTO_AGENTS_KB_ROOT` etc.) and
-   directs the agent to read `<kb_root>/AGENTS.md` for the full schema.
+Each agent kind auto-loads an instruction file at its cwd (`CLAUDE.md` /
+`AGENTS.md` / `GEMINI.md`, per kind). auto-agents keeps a block in it between
+`<!-- auto-agents:begin -->` and `<!-- auto-agents:end -->`: the roster, the
+mailbox and todo protocols, the model preference, and three KB lines (the
+root, the AutoDoc workspace, and "read `<root>/AGENTS.md`"). The KB's own
+`AGENTS.md` is its contract.
 
 Your hand-written content above or below the block is preserved on every
 re-spawn — the plugin only rewrites the delimited section.
@@ -738,7 +707,7 @@ version was wrong:
 - [x] **M1** scaffold, terminal providers (snacks/native/none), per-instance state
 - [x] **M2** panel, slots, admin buffer, tab completion, form buffer
 - [x] **M3** agent registry, adapters (claude/codex/gemini/junie/aider/goose/opencode/copilot/generic), persistence
-- [x] **M4** knowledge base (shared/private/isolated, manifest, Obsidian compat)
+- [x] **M4** knowledge base (v0.3.0: replaced by the project's primary KB from auto-core.kb; the KB code moved to AutoDoc)
 - [x] **M5** resource grants, manager designation
 - [ ] **M6** README polish, ARCHITECTURE.md, test suite, `v0.1.0` tag
 - [x] **M7** per-Claude MCP / WebSocket bridge — vendored claudecode.nvim's WS stack as of v0.2.x; `openDiff` + `close_tab` registered, `auto-agents:diff_queued`/`diff_removed` topics drive the unified queue

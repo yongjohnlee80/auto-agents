@@ -10,7 +10,8 @@ native ws-mcp `openDiff` path via the per-slot bridge (ADR 0011).
 Heading levels start at `####` so the content nests cleanly beneath the
 `### Interactive diff review` section header emitted by `instruct.lua`.
 Source authored by agent:juliet during the 2026-05 diff-view session;
-verbatim KB mirror at `$AUTO_AGENTS_KB_ROOT/shared/conventions/diff-queue-workflow.md`.
+verbatim KB mirror at `$AUTO_AGENTS_KB_ROOT/conventions/diff-queue-workflow.md`
+(`shared/conventions/` before the KB v2 migration, ADR 1791209946 §8).
 -->
 
 **Claude-backed agents: skip this section.** You use the native
