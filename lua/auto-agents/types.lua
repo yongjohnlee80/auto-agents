@@ -4,7 +4,6 @@
 
 ---@alias AutoAgentsLogLevel "error"|"warn"|"info"|"debug"|"trace"
 ---@alias AutoAgentsAgentKind "claude"|"codex"|"antigravity"|"junie"|"goose"|"opencode"|"copilot"|"generic"
----@alias AutoAgentsKbScope "shared"|"private"|"isolated"
 ---@alias AutoAgentsSlotRail "winbar"|"vertical"|"off"
 ---@alias AutoAgentsSplitSide "left"|"right"
 ---@alias AutoAgentsAgentState "idle"|"running"|"exited"|"errored"
@@ -23,7 +22,8 @@
 ---@field bootstrap table[]  -- list of bootstrap entries
 
 ---@class AutoAgentsKbConfig
----@field default_scope AutoAgentsKbScope
+---@field root_override string|nil  -- `[kb].root`: the legacy KB location
+---@field path string|nil           -- legacy lua-spec KB path
 
 ---@class AutoAgentsTerminalConfig
 ---@field provider "auto"|"snacks"|"native"|"none"
@@ -79,7 +79,6 @@
 ---@field cmd string[]
 ---@field cwd string|nil
 ---@field allowed_paths string[]
----@field kb_scope AutoAgentsKbScope|nil
 ---@field env table<string,string>
 ---@field manager_id string|nil
 ---@field bufnr integer|nil

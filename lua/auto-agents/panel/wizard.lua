@@ -6,7 +6,7 @@
 ---
 ---Used by:
 ---  agent.add / agent.edit
----  kb.new / kb.scope
+---  kb.new
 ---  project.import (when no selector arg)
 ---
 ---Lifecycle:

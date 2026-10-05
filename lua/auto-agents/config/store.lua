@@ -14,7 +14,9 @@
 ---    created_at = "2026-05-01T12:34Z"  # informational
 ---
 ---    [kb]
----    root = "/abs/path/to/kb"          # absolute; sharable across projects
+---    root = "/abs/path/to/kb"          # absolute; the legacy KB location,
+---                                      #   imported once by auto-core.kb as
+---                                      #   the project's primary (v0.3.0)
 ---
 ---    [[agents]]
 ---    slot          = 1
@@ -41,8 +43,12 @@
 ---    cmd           = ["bin", "--flag"] # optional override
 ---    allowed_paths = ["src/", "tests/"]
 ---    manager       = 2                 # optional: managing slot
----    kb_scope      = "shared"          # shared|private|isolated
 ---    bottom_margin = 1                 # optional
+---
+---Retired in v0.3.0 (ADR 1791209946 §7): `[kb] type`, `[kb] seed` and
+---the per-agent `kb_scope`. A file that still carries them loads with
+---ONE warning per session; the keys are ignored and dropped on the next
+---save. Never an error.
 ---
 ---@module 'auto-agents.config.store'
 
@@ -53,10 +59,10 @@ local M = {}
 local SECTION_ORDER = { "project", "kb", "panel", "agents" }
 local AGENT_KEY_ORDER = {
   "slot", "kind", "name", "title", "role", "model", "provider", "api_base", "cwd", "cmd",
-  "allowed_paths", "manager", "kb_scope", "bottom_margin", "diff_review",
+  "allowed_paths", "manager", "bottom_margin", "diff_review",
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }
-local KB_KEY_ORDER = { "root", "type", "seed" }
+local KB_KEY_ORDER = { "root" }
 local PANEL_KEY_ORDER = { "width_override", "slot_count" }
 
 ---Directory holding project + global TOML files. Dot-prefixed so it
@@ -111,6 +117,43 @@ local function write_file(path, content)
   return true, nil
 end
 
+-- One warning per session for the retired KB keys, however many files carry them.
+local _retired_warned = false
+
+---Test hook: re-arm the one-time retired-keys warning.
+function M._reset_retired_warning() _retired_warned = false end
+
+---Strip the keys v0.3.0 retired (`[kb] type`/`seed`, per-agent `kb_scope`)
+---from a decoded TOML table, in place. Warns once per session.
+---@param data table
+local function drop_retired_keys(data)
+  local found = {}
+  if type(data.kb) == "table" then
+    for _, k in ipairs({ "type", "seed" }) do
+      if data.kb[k] ~= nil then
+        found[#found + 1] = "[kb] " .. k
+        data.kb[k] = nil
+      end
+    end
+    if next(data.kb) == nil then data.kb = nil end
+  end
+  local scoped = false
+  for _, a in ipairs(type(data.agents) == "table" and data.agents or {}) do
+    if type(a) == "table" and a.kb_scope ~= nil then
+      a.kb_scope = nil
+      scoped = true
+    end
+  end
+  if scoped then found[#found + 1] = "kb_scope" end
+  if #found > 0 and not _retired_warned then
+    _retired_warned = true
+    require("auto-agents.log").warn("config.store",
+      "ignoring retired KB settings (" .. table.concat(found, ", ")
+      .. "): auto-agents v0.3.0 uses the project's primary KB from auto-core.kb. "
+      .. "They are dropped on the next save.")
+  end
+end
+
 ---Parse a TOML file's content into the canonical { project, kb, agents } shape.
 ---Missing sections become nil/empty so callers don't have to guard.
 ---@param content string
@@ -122,6 +165,7 @@ local function normalize(content)
       "failed to parse TOML: " .. tostring(data))
     return { project = nil, kb = nil, agents = {} }
   end
+  drop_retired_keys(data)
   local raw_agents = data.agents or {}
   local agents = {}
   local agent_mod = require("auto-agents.agent")
@@ -226,20 +270,10 @@ function M.save_current()
     panel = existing.panel,
     agents = (cfg.agents and cfg.agents.bootstrap) or {},
   }
-  -- Carry over the live KB settings → [kb] so wizard mutations stick.
-  if cfg.kb then
-    if cfg.kb.root_override then
-      payload.kb = payload.kb or {}
-      payload.kb.root = cfg.kb.root_override
-    end
-    if cfg.kb.type then
-      payload.kb = payload.kb or {}
-      payload.kb.type = cfg.kb.type
-    end
-    if cfg.kb.seed_path then
-      payload.kb = payload.kb or {}
-      payload.kb.seed = cfg.kb.seed_path
-    end
+  -- Carry over the live `[kb].root` (the legacy KB location).
+  if cfg.kb and cfg.kb.root_override then
+    payload.kb = payload.kb or {}
+    payload.kb.root = cfg.kb.root_override
   end
   -- v0.2.0: panel.width_override and panel.slot_count migrated to
   -- auto-core.state.namespace("auto-agents") with the json backend

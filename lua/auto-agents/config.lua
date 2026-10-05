@@ -40,9 +40,10 @@ M.defaults = {
     primary_kind = "claude",
     bootstrap = {},
   },
-  kb = {
-    default_scope = "shared",
-  },
+  -- `kb.root_override` / `kb.path` feed only the legacy resolution
+  -- (`auto-agents.kb.legacy_root`), which auto-core.kb imports once as
+  -- the project's primary KB (ADR 1791209946 §7).
+  kb = {},
   terminal = {
     provider = "auto",
     cwd = nil,
@@ -115,7 +116,6 @@ local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace
 local SIDES = { left = true, right = true }
 local RAILS = { winbar = true, vertical = true, off = true }
 local KINDS = { claude = true, codex = true, antigravity = true, junie = true, goose = true, opencode = true, copilot = true, generic = true }
-local SCOPES = { shared = true, private = true, isolated = true }
 local PROVIDERS = { auto = true, snacks = true, native = true, none = true }
 local LAYOUT_STRATEGIES = { create_scratch = true, warn = true, off = true }
 local DIFF_STRATEGIES = { warn = true, off = true }
@@ -210,9 +210,6 @@ function M.validate(cfg)
           .. "' is reserved (collides with host/user mailbox)"
       end
     end
-  end
-  if not SCOPES[cfg.kb.default_scope] then
-    return "kb.default_scope must be one of shared|private|isolated"
   end
   if not PROVIDERS[cfg.terminal.provider] then
     return "terminal.provider must be one of auto|snacks|native|none"

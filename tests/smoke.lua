@@ -1344,117 +1344,86 @@ do
   aa.state.slot_terminals[5] = nil
 end
 
--- ─────────── 18. agent_add wizard — KB-type conflict ACK (v0.2.22+) ──────────
--- The `agent add` wizard's `_kb_type` field LOOKS like a per-agent
--- pick but its side effect is project-scoped (cfg.kb.type gets
--- overwritten). v0.2.22 adds a conflict-detection ACK step that
--- fires when the new pick differs from the existing project type
--- AND the new agent's kb_scope = "shared". Demands the user type
--- "YES_CHANGE_PROJECT_TYPE" verbatim. v0.2.23 also defaults the
--- `_kb_type` prompt to the current project type when set, so a
--- no-op <CR> keeps things unchanged.
-print("\n[18] agent_add wizard — KB-type conflict ACK (v0.2.22+)")
+-- ─────────── 18. KB v2 — no KB questions; retired TOML keys (ADR 1791209946 §7) ──────────
+-- v0.2.22's KB-type conflict ACK, the KB type/seed questions and the
+-- kb_scope step are gone with the KB code: an agent's KB is the project's
+-- primary from auto-core.kb. Old TOML `kb_scope` / `[kb] type/seed` keys
+-- must still load — ignored, with one warning, never an error.
+print("\n[18] KB v2 — the wizard asks no KB questions; retired TOML keys warn once")
 do
   local specs = require("auto-agents.panel.wizard_specs")
-
-  -- Stash + restore the project config so we don't pollute later
-  -- sections of the smoke. The wizard reads cfg.kb.type directly.
-  local saved_kb = aa.state.config.kb
-  aa.state.config.kb = { type = "coding" }
-
-  local spec = specs.agent("add", 9)
-  local conflict_step
-  local kb_type_step
-  for _, s in ipairs(spec.steps) do
-    if s.field == "_kb_type_conflict_ack" then conflict_step = s end
-    if s.field == "_kb_type" then kb_type_step = s end
-  end
-
-  ok("agent_add spec includes _kb_type step", kb_type_step ~= nil)
-  ok("agent_add spec includes _kb_type_conflict_ack step", conflict_step ~= nil)
-
-  -- Default injection: when cfg.kb.type is set, the _kb_type
-  -- default should match it (so a no-op <CR> keeps the project
-  -- type unchanged).
-  if kb_type_step and type(kb_type_step.default) == "function" then
-    local d = kb_type_step.default({})
-    ok("_kb_type default returns current cfg.kb.type when set",
-       d == "coding", "got " .. tostring(d))
-  end
-
-  -- Default injection: when cfg.kb is unset, fall back to "coding".
-  aa.state.config.kb = nil
-  if kb_type_step and type(kb_type_step.default) == "function" then
-    local d = kb_type_step.default({})
-    ok("_kb_type default falls back to 'coding' when cfg.kb absent",
-       d == "coding", "got " .. tostring(d))
-  end
-  aa.state.config.kb = { type = "coding" }  -- restore for ACK tests
-
-  if conflict_step then
-    -- Skip rules — five cases:
-
-    -- (1) Pick matches current type → skip.
-    ok("ACK skipped when _kb_type matches current type",
-       conflict_step.skip({ _kb_type = "coding", kb_scope = "shared" }) == true)
-
-    -- (2) Pick is "none" (user opted out of KB init) → skip.
-    ok("ACK skipped when _kb_type is 'none'",
-       conflict_step.skip({ _kb_type = "none", kb_scope = "shared" }) == true)
-
-    -- (3) Diff type but kb_scope = private → skip (per-agent dir,
-    -- no immediate shared-tree damage).
-    ok("ACK skipped when kb_scope is 'private'",
-       conflict_step.skip({ _kb_type = "wiki", kb_scope = "private" }) == true)
-
-    -- (4) Diff type but kb_scope = isolated → skip.
-    ok("ACK skipped when kb_scope is 'isolated'",
-       conflict_step.skip({ _kb_type = "wiki", kb_scope = "isolated" }) == true)
-
-    -- (5) Diff type AND kb_scope = shared → DO NOT skip (ACK fires).
-    ok("ACK FIRES when diff type AND kb_scope = shared",
-       conflict_step.skip({ _kb_type = "wiki", kb_scope = "shared" }) == false)
-
-    -- No current type (first-ever add) → skip even on shared scope.
-    aa.state.config.kb = nil
-    ok("ACK skipped when no current cfg.kb.type",
-       conflict_step.skip({ _kb_type = "wiki", kb_scope = "shared" }) == true)
-    aa.state.config.kb = { type = "coding" }
-
-    -- Validate rules.
-    local v_ok = conflict_step.validate("YES_CHANGE_PROJECT_TYPE")
-    ok("ACK validate accepts 'YES_CHANGE_PROJECT_TYPE'", v_ok == true)
-
-    local v_no_yes = conflict_step.validate("yes")
-    ok("ACK validate REJECTS lowercase 'yes'", v_no_yes == false)
-
-    local v_y = conflict_step.validate("y")
-    ok("ACK validate REJECTS single 'y'", v_y == false)
-
-    local v_partial = conflict_step.validate("YES")
-    ok("ACK validate REJECTS partial 'YES'", v_partial == false)
-
-    local v_empty = conflict_step.validate("")
-    ok("ACK validate REJECTS empty input", v_empty == false)
-
-    -- pre_emit returns multi-line banner that names both types.
-    if type(conflict_step.pre_emit) == "function" then
-      local lines = conflict_step.pre_emit({ _kb_type = "wiki", kb_scope = "shared" })
-      ok("ACK pre_emit returns a table", type(lines) == "table")
-      ok("ACK pre_emit produces multiple lines", #lines >= 5)
-      local joined = table.concat(lines, "\n")
-      ok("ACK banner names CURRENT type (uppercase)",
-         joined:find("CODING", 1, true) ~= nil)
-      ok("ACK banner names PICKED type (uppercase)",
-         joined:find("WIKI", 1, true) ~= nil)
-      ok("ACK banner shouts WARNING",
-         joined:find("WARNING", 1, true) ~= nil)
-      ok("ACK banner mentions the required confirmation phrase",
-         joined:find("YES_CHANGE_PROJECT_TYPE", 1, true) ~= nil)
+  local RETIRED = { kb_scope = true, _kb_type = true, _kb_seed_path = true, _kb_type_conflict_ack = true }
+  local function kb_fields(spec)
+    local hit = {}
+    for _, st in ipairs(spec.steps) do
+      if RETIRED[st.field] then hit[#hit + 1] = st.field end
+      local p = type(st.prompt) == "string" and st.prompt or ""
+      if p:find("KB", 1, true) or p:lower():find("kb", 1, true) then hit[#hit + 1] = "prompt:" .. p end
     end
+    return hit
   end
+  local add_hits = kb_fields(specs.agent("add", 9))
+  ok("18a: agent add has no KB step and no KB prompt", #add_hits == 0, vim.inspect(add_hits))
 
-  aa.state.config.kb = saved_kb
+  local saved_bootstrap = aa.state.config.agents.bootstrap
+  aa.state.config.agents.bootstrap = { { slot = 3, kind = "claude", name = "edit18" } }
+  local edit_hits = kb_fields(specs.agent("edit", 3))
+  ok("18a: agent edit has no KB step and no KB prompt", #edit_hits == 0, vim.inspect(edit_hits))
+  aa.state.config.agents.bootstrap = saved_bootstrap
+  ok("18a: the kb_scope wizard is gone", specs.kb_scope == nil)
+
+  -- 18b. Old TOML keys load, are ignored, and warn ONCE per session.
+  local store = require("auto-agents.config.store")
+  local log = require("auto-agents.log")
+  local toml_text = table.concat({
+    "[kb]",
+    'root = "/tmp/kb18"',
+    'type = "coding"',
+    'seed = "/tmp/seed18.md"',
+    "",
+    "[[agents]]",
+    "slot = 1",
+    'kind = "claude"',
+    'name = "a18"',
+    'kb_scope = "private"',
+    "",
+  }, "\n")
+  local warns = {}
+  local orig_warn = log.warn
+  log.warn = function(comp, msg, ...)
+    if comp == "config.store" then warns[#warns + 1] = tostring(msg) end
+    return orig_warn(comp, msg, ...)
+  end
+  store._reset_retired_warning()
+  local n_ok, n1 = pcall(store._normalize, toml_text)
+  local _, n2 = pcall(store._normalize, toml_text)
+  log.warn = orig_warn
+  ok("18b: a TOML with retired KB keys loads (never an error)", n_ok and type(n1) == "table", tostring(n1))
+  if n_ok then
+    ok("18b: [kb] type/seed are ignored, [kb] root is kept",
+      n1.kb and n1.kb.root == "/tmp/kb18" and n1.kb.type == nil and n1.kb.seed == nil, vim.inspect(n1.kb))
+    ok("18b: per-agent kb_scope is ignored",
+      n1.agents[1] and n1.agents[1].kb_scope == nil and n1.agents[1].name == "a18", vim.inspect(n1.agents[1]))
+    ok("18b: second load is ignored the same way", n2.agents[1].kb_scope == nil and n2.kb.type == nil)
+  end
+  local retired_warns = 0
+  for _, w in ipairs(warns) do
+    if w:find("retired KB settings", 1, true) then retired_warns = retired_warns + 1 end
+  end
+  ok("18b: exactly ONE warning for two loads", retired_warns == 1, vim.inspect(warns))
+  ok("18b: the warning names the retired keys",
+    warns[1] ~= nil and warns[1]:find("[kb] type", 1, true) ~= nil
+      and warns[1]:find("kb_scope", 1, true) ~= nil, tostring(warns[1]))
+
+  -- 18c. The next save drops them.
+  local out = vim.fn.tempname() .. "_store18.toml"
+  store.write(out, n1)
+  local fh = io.open(out, "r"); local written = fh and fh:read("*a") or ""; if fh then fh:close() end
+  ok("18c: a save writes no kb_scope / [kb] type / seed",
+    written:find("kb_scope", 1, true) == nil and written:find("type =", 1, true) == nil
+      and written:find("seed =", 1, true) == nil and written:find('root = "/tmp/kb18"', 1, true) ~= nil,
+    written)
+  pcall(vim.fn.delete, out)
 end
 
 -- ─────────── 19. library KB type — seed + scaffold (v0.2.24+) ──────────
