@@ -123,10 +123,24 @@ local function h_create(args)
       "args.reviewer produced no safe path segment")
   end
 
-  local kb = vim.env.AUTO_AGENTS_KB_ROOT
-  if type(kb) ~= "string" or kb == "" then
+  -- The KB comes from auto-core.kb (ADR 1791209946 §7): the project's
+  -- primary, then $AUTO_AGENTS_KB_ROOT, then its first-run import. A root
+  -- that is not an existing directory is refused rather than created —
+  -- the import answers the legacy location whether or not it exists.
+  local kb
+  do
+    local ok_kb, core_kb = pcall(require, "auto-core.kb")
+    if ok_kb and type(core_kb) == "table" and type(core_kb.root) == "function" then
+      local ok_r, r = pcall(core_kb.root)
+      if ok_r and type(r) == "string" and r ~= "" and vim.fn.isdirectory(r) == 1 then
+        kb = r
+      end
+    end
+  end
+  if not kb then
     return err_response("dependency_unavailable",
-      "cannot resolve $KB_ROOT for the review document")
+      "no KB for the review document: the project has no primary KB "
+      .. "(auto-core.kb) and $AUTO_AGENTS_KB_ROOT names no directory")
   end
 
   -- The SHARED envelope constructor (ADR-0067 §2.4, criterion 11): the panel
