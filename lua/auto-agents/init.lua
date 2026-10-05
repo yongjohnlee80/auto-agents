@@ -679,7 +679,6 @@ local function resolve_slot_spec(slot)
         title = entry.title,
         model = entry.model,
         cmd = agent.cmd_for(kind, entry),
-        kb_scope = entry.kb_scope,
         diff_review = entry.diff_review == true,
         slot = slot,
         configured = true,
@@ -692,20 +691,25 @@ local function resolve_slot_spec(slot)
     name = nil,
     title = nil,
     cmd = agent.cmd_for("generic", {}),
-    kb_scope = "shared",
     slot = slot,
     configured = false,
   }
 end
 
----Build the env table merged for an agent's spawn — KB scope vars
----(M4) + resource grants (M5). Returns nil if no env extras to keep
----snacks's defaulting clean.
+---Build the env table merged for an agent's spawn — the primary KB's
+---env (ADR 1791209946 §7) + resource grants (M5). Returns nil if no env
+---extras to keep snacks's defaulting clean.
 ---
----Side effects (M6, KB-aware launch): ensures the KB layout and writes
----the per-kind instruction file (CLAUDE.md/AGENTS.md/GEMINI.md) at the
----agent's cwd so the TUI auto-loads project conventions on startup.
----Logs a one-line confirmation banner so the user sees it landed.
+---The KB is the project's primary (`auto-core.kb.primary()`): it sets
+---AUTO_AGENTS_KB_ROOT, AUTODOC_WORKSPACE and AUTODOC_KB_OPERATIONS_DOC
+---and is granted with --add-dir. No primary, no KB env — the managed
+---block then tells the agent to ask the user. Nothing here creates KB
+---folders; the KB scaffold lives in AutoDoc.
+---
+---Side effect (M6): writes the per-kind instruction file
+---(CLAUDE.md/AGENTS.md/GEMINI.md) at the agent's cwd so the TUI
+---auto-loads project conventions on startup. Logs a one-line
+---confirmation banner so the user sees it landed.
 ---@param spec AutoAgentsResolvedSpec
 ---@param cwd string|nil
 ---@return table<string,string>|nil
@@ -713,12 +717,9 @@ local function build_agent_env(spec, cwd)
   local cfg = M.state.config
   if not cfg then return nil end
   local kb = require("auto-agents.kb")
-  local kb_root = kb.root()
-  kb.ensure_layout(kb_root, {
-    type = (cfg.kb or {}).type,
-    seed_path = (cfg.kb or {}).seed_path,
-  })
-  local env = require("auto-agents.kb.scope").env_for(spec, kb_root)
+  local primary = kb.primary()
+  local kb_root = primary and primary.root or nil
+  local env = kb.agent_env(primary)
   -- M5: merge in resource grants (AUTO_AGENTS_ALLOWED_PATHS, etc.).
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
   for k, v in pairs(resources_env) do env[k] = v end
@@ -732,8 +733,11 @@ local function build_agent_env(spec, cwd)
   -- when the doc can't be located on the runtimepath.
   --
   -- AUTO_AGENTS_TODOS_CONVENTION_DOC — absolute path to the
-  -- per-KB todo-handling convention (seeded by ensure_layout;
-  -- per-project customizable). Agents track the convention's
+  -- per-KB todo-handling convention (per-project customizable).
+  -- The document is unchanged in v0.3.0; only its folder follows
+  -- the KB layout (`conventions/`, then the pre-migration
+  -- `shared/conventions/`, then the bundled seed — see
+  -- kb.todo_convention_doc). Agents track the convention's
   -- `revision:` in their own local memory and re-ingest on
   -- change per the doc's own protocol.
   local ok_todos, todos_mod = pcall(require, "auto-agents.mailbox.todos_commands")
@@ -744,10 +748,8 @@ local function build_agent_env(spec, cwd)
     end
   end
   do
-    local conv = kb_root .. "/shared/conventions/todo-handling.md"
-    if vim.fn.filereadable(conv) == 1 then
-      env.AUTO_AGENTS_TODOS_CONVENTION_DOC = conv
-    end
+    local conv = kb.todo_convention_doc(kb_root)
+    if conv then env.AUTO_AGENTS_TODOS_CONVENTION_DOC = conv end
   end
 
   -- v0.2.26: per-agent diff_review gate. Direct, unambiguous signal
@@ -782,15 +784,15 @@ local function build_agent_env(spec, cwd)
   -- to inform the agent — sending stdin to claude/codex would be parsed
   -- as a prompt, so we lean on each kind's auto-loaded markdown.
   if spec.configured ~= false then  -- skip empty-slot shells
-    local instr_path = require("auto-agents.kb.instruct").ensure(spec, kb_root, cwd)
+    local instr_path = require("auto-agents.kb.instruct").ensure(spec, primary, cwd)
     local logger = require("auto-agents.log")
     logger.info("spawn",
-      string.format("slot %s (%s/%s) → KB=%s scope=%s%s",
+      string.format("slot %s (%s/%s) → KB=%s workspace=%s%s",
         tostring(spec.slot or "?"),
         spec.kind or "?",
         spec.name or "anon",
-        kb_root,
-        spec.kb_scope or "shared",
+        kb_root or "(no primary)",
+        primary and primary.workspace or "-",
         instr_path and (" instr=" .. instr_path) or ""))
   end
 
@@ -852,38 +854,19 @@ local function build_agent_env(spec, cwd)
       end
       for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
 
-      -- v0.3.0: spawn-time permission injection. Append the per-kind
+      -- Spawn-time permission injection. Append the per-kind
       -- CLI flag(s) that pre-authorize the agent to read/write its
-      -- own mailbox dir and the KB read/write paths. No prompt on
+      -- own mailbox dir and the primary KB root. No prompt on
       -- first file op; no settings-file mutation. Per-instance paths
       -- (mailbox dir) regenerate on every nvim restart, so the next
       -- spawn rebuilds the argv from scratch — persistence isn't
       -- desirable here.
       local dirs = { rec.dir }
-      -- Grant the KB root (covers root-level files like AGENTS.md /
-      -- log.md / index.md and the conventional subdirs in one entry).
-      -- Per-scope read/write contracts remain encoded in
-      -- AUTO_AGENTS_KB_{READ,WRITE} env vars — agents self-restrain
-      -- via those (best-effort coordination; see kb/scope.lua).
+      -- Grant the primary KB root: one entry covers the whole KB.
       -- --add-dir is purely about removing permission-prompt friction
       -- for the surface the agent is expected to operate within.
-      local function covered(path)
-        for _, d in ipairs(dirs) do
-          if d == path then return true end
-          if path:sub(1, #d + 1) == d .. "/" then return true end
-        end
-        return false
-      end
       if type(env.AUTO_AGENTS_KB_ROOT) == "string" and env.AUTO_AGENTS_KB_ROOT ~= "" then
         dirs[#dirs + 1] = env.AUTO_AGENTS_KB_ROOT
-      end
-      for path in tostring(env.AUTO_AGENTS_KB_READ or ""):gmatch("[^:]+") do
-        if path ~= "" and not covered(path) then dirs[#dirs + 1] = path end
-      end
-      if type(env.AUTO_AGENTS_KB_WRITE) == "string" and env.AUTO_AGENTS_KB_WRITE ~= "" then
-        if not covered(env.AUTO_AGENTS_KB_WRITE) then
-          dirs[#dirs + 1] = env.AUTO_AGENTS_KB_WRITE
-        end
       end
 
       local perms = require("auto-agents.permissions")
@@ -1577,7 +1560,7 @@ end
 
 ---Compute the live authoritative env surface for a bootstrap entry.
 ---Mirrors what `build_agent_env` would produce on a fresh spawn —
----KB scope env vars from `kb.scope.env_for(entry, kb_root)` plus the
+---the primary KB's env from `kb.agent_env(kb.primary())` plus the
 ---mailbox identity vars from `mailbox.env_for_agent(rec)`. Used by
 ---the reassert-identity picker as the authoritative source of truth
 ---to compare the agent's cached env against.
@@ -1587,11 +1570,10 @@ local function _live_env_for(entry)
   if not entry then return nil end
   local env = {}
   local ok_kb, kb_mod = pcall(require, "auto-agents.kb")
-  local ok_scope, scope_mod = pcall(require, "auto-agents.kb.scope")
-  if ok_kb and ok_scope then
-    local kb_root_ok, kb_root = pcall(kb_mod.root)
-    if kb_root_ok and kb_root then
-      for k, v in pairs(scope_mod.env_for(entry, kb_root) or {}) do env[k] = v end
+  if ok_kb then
+    local ok_p, primary = pcall(kb_mod.primary)
+    if ok_p then
+      for k, v in pairs(kb_mod.agent_env(primary)) do env[k] = v end
     end
   end
   local rec = _live_mailbox_record(entry)
@@ -1690,8 +1672,7 @@ local function _build_reassert_body(entry)
     "AUTO_AGENTS_MAILBOX_DIR",
     "AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC",
     "AUTO_AGENTS_KB_ROOT",
-    "AUTO_AGENTS_KB_READ",
-    "AUTO_AGENTS_KB_WRITE",
+    "AUTODOC_WORKSPACE",
   }
   local lines = {
     "Re-assert your runtime identity.",

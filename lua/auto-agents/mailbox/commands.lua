@@ -721,11 +721,12 @@ local function handle_refresh_agent_id(args, _ctx)
     local kb_ok, kb = pcall(require, "auto-agents.kb")
     local instr_ok, instr = pcall(require, "auto-agents.kb.instruct")
     if kb_ok and instr_ok then
-      local kb_root = kb.root()
+      local ok_p, primary = pcall(kb.primary)
       local cwd = matched_spec.cwd
                   or (aa.state and (aa.state.session_project_root
                                      or aa.state.session_cwd))
-      local ok_e, err_e = pcall(instr.ensure, matched_spec, kb_root, cwd)
+      local ok_e, err_e = pcall(instr.ensure, matched_spec,
+        ok_p and primary or nil, cwd)
       if not ok_e then
         require("auto-agents.log").warn("refresh_agent_id",
           "kb.instruct.ensure failed on resume: " .. tostring(err_e))

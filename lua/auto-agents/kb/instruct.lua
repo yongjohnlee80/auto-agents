@@ -7,9 +7,14 @@
 ---(Aider doesn't auto-load AGENTS.md by default — its adapter passes
 ---`--read AGENTS.md` explicitly so the same file works there too.)
 ---We inject a delimited "auto-agents" block into that file so the
----agent learns its KB location and read/write convention without us
----having to send anything via stdin (which TUIs would treat as a
----prompt).
+---agent learns its roster, the mailbox and todo protocols and where the
+---project's primary KB is, without us having to send anything via
+---stdin (which TUIs would treat as a prompt).
+---
+---The KB part is three lines (ADR 1791209946 §2.4): the root, the
+---AutoDoc workspace, and "read `<root>/AGENTS.md`". The KB's own
+---AGENTS.md is the contract; this block never restates it. A project
+---without a primary KB gets a line telling the agent to ask the user.
 ---
 ---**The instruction file is shared by every agent of the same kind in
 ---the project** (CLAUDE.md by all `claude` slots, AGENTS.md by all
@@ -108,12 +113,11 @@ local INTERACTIVE_KINDS = {
 ---`$AUTO_AGENTS_MAILBOX_ID`. This keeps the rendered content stable
 ---across same-kind spawns (otherwise every spawn would clobber the
 ---previous one's personalized text).
----@param spec table  -- { kind, name, slot, kb_scope, model }
----@param kb_root string
+---@param spec table  -- { kind, name, slot, model }
+---@param kb { root: string, workspace: string|nil }|nil  -- the primary KB
 ---@return string
-local function render_block(spec, kb_root)
+local function render_block(spec, kb)
   local aa_state  = (require("auto-agents").state or {}).config or {}
-  local kb_type   = (aa_state.kb or {}).type or "general"
   local bootstrap = (aa_state.agents or {}).bootstrap or {}
   local kind      = spec.kind or "?"
   local filename  = M.filename_for(kind)
@@ -140,7 +144,7 @@ local function render_block(spec, kb_root)
 
   local lines = {
     BEGIN,
-    "## auto-agents knowledge base",
+    "## auto-agents",
     "",
     "This project uses [auto-agents.nvim](https://github.com/yongjohnlee80/auto-agents)",
     "for multi-agent orchestration.",
@@ -176,80 +180,67 @@ local function render_block(spec, kb_root)
     end
     if show_model and any_diff_review then
       vim.list_extend(lines, {
-        "| Slot | Name | KB scope | Model | diff_review |",
-        "|------|------|----------|-------|-------------|",
+        "| Slot | Name | Model | diff_review |",
+        "|------|------|-------|-------------|",
       })
       for _, p in ipairs(peers) do
         local m = (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
-        local sc = p.kb_scope or "shared"
-        lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s | %s |",
-          tostring(p.slot or "?"), p.name or "?", sc, m, dr_cell(p))
+        lines[#lines + 1] = string.format("| %s | `%s` | %s | %s |",
+          tostring(p.slot or "?"), p.name or "?", m, dr_cell(p))
       end
     elseif show_model then
       vim.list_extend(lines, {
-        "| Slot | Name | KB scope | Model |",
-        "|------|------|----------|-------|",
+        "| Slot | Name | Model |",
+        "|------|------|-------|",
       })
       for _, p in ipairs(peers) do
         local m = (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
-        local sc = p.kb_scope or "shared"
-        lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s |",
-          tostring(p.slot or "?"), p.name or "?", sc, m)
+        lines[#lines + 1] = string.format("| %s | `%s` | %s |",
+          tostring(p.slot or "?"), p.name or "?", m)
       end
     elseif any_diff_review then
       vim.list_extend(lines, {
-        "| Slot | Name | KB scope | diff_review |",
-        "|------|------|----------|-------------|",
+        "| Slot | Name | diff_review |",
+        "|------|------|-------------|",
       })
       for _, p in ipairs(peers) do
-        local sc = p.kb_scope or "shared"
-        lines[#lines + 1] = string.format("| %s | `%s` | `%s` | %s |",
-          tostring(p.slot or "?"), p.name or "?", sc, dr_cell(p))
+        lines[#lines + 1] = string.format("| %s | `%s` | %s |",
+          tostring(p.slot or "?"), p.name or "?", dr_cell(p))
       end
     else
       vim.list_extend(lines, {
-        "| Slot | Name | KB scope |",
-        "|------|------|----------|",
+        "| Slot | Name |",
+        "|------|------|",
       })
       for _, p in ipairs(peers) do
-        local sc = p.kb_scope or "shared"
-        lines[#lines + 1] = string.format("| %s | `%s` | `%s` |",
-          tostring(p.slot or "?"), p.name or "?", sc)
+        lines[#lines + 1] = string.format("| %s | `%s` |",
+          tostring(p.slot or "?"), p.name or "?")
       end
     end
     lines[#lines + 1] = ""
   end
 
+  -- The KB part: three lines, or one asking the user (ADR 1791209946 §2.4).
+  vim.list_extend(lines, { "### Knowledge base", "" })
+  if type(kb) == "table" and type(kb.root) == "string" and kb.root ~= "" then
+    local ws = (type(kb.workspace) == "string" and kb.workspace ~= "")
+      and ("`" .. kb.workspace .. "`  (`$AUTODOC_WORKSPACE`)")
+      or "none named yet (`$AUTODOC_WORKSPACE` is unset)"
+    vim.list_extend(lines, {
+      "- KB root: `" .. kb.root .. "`  (`$AUTO_AGENTS_KB_ROOT`)",
+      "- AutoDoc workspace: " .. ws,
+      "- Read `" .. kb.root .. "/AGENTS.md` before any KB work.",
+      "",
+    })
+  else
+    vim.list_extend(lines, {
+      "This project has no primary KB. Ask the user which KB to use before",
+      "reading or writing one.",
+      "",
+    })
+  end
+
   vim.list_extend(lines, {
-    "### Project-level knowledge base",
-    "",
-    "- KB root:    `" .. kb_root .. "`  (`$AUTO_AGENTS_KB_ROOT`)",
-    "- KB type:    `" .. kb_type .. "`",
-    "- Read from:  `$AUTO_AGENTS_KB_READ`  (colon-separated)",
-    "- Write to:   `$AUTO_AGENTS_KB_WRITE` (single directory)",
-    "",
-    "### Read this first",
-    "",
-    "**The canonical schema for this KB is at `" .. kb_root .. "/AGENTS.md`.**",
-    "Read it before any non-trivial KB operation. It defines the directory",
-    "layout, the required frontmatter, the operations (ingest / review / lint /",
-    "etc.), the immutability rule for `raw/`, and the things to avoid.",
-    "",
-    "Each KB type has its own contract — `coding`, `wiki`, `research`, `ops`,",
-    "or `general`. The `AGENTS.md` at the KB root is authoritative for this",
-    "specific KB; this file (auto-injected at every agent's cwd) is a minimal",
-    "pointer with the env vars and a one-line convention summary.",
-    "",
-    "### Quick conventions",
-    "",
-    "- **`raw/` is immutable.** Read it; never edit or delete its contents.",
-    "- **Read before writing.** Consult `shared/` for durable conventions and",
-    "  your own `agents/<your-name>/` (resolved from `$AUTO_AGENTS_MAILBOX_ID`)",
-    "  for prior operational notes.",
-    "- **Append, don't overwrite.** Use `[[wikilinks]]` to cross-reference.",
-    "- **Audit trail.** Append a one-line entry to `log.md` after each",
-    "  meaningful KB write (e.g. `## [2026-05-01 14:00] op | summary`).",
-    "",
     "### Mailbox protocol",
     "",
     "Your mailbox lives at `$AUTO_AGENTS_MAILBOX_DIR` with subdirs",
@@ -482,11 +473,14 @@ end
 ---auto-agents block. Idempotent. User content outside the block is
 ---preserved verbatim.
 ---
----@param spec table       -- { kind, name, slot, kb_scope, cwd }
----@param kb_root string
+---@param spec table       -- { kind, name, slot, cwd }
+---@param kb { root: string, workspace: string|nil }|string|nil
+---                        -- the project's primary KB (`auto-agents.kb.primary()`);
+---                        -- a bare root string is accepted; nil = no primary
 ---@param cwd string|nil   -- defaults to spec.cwd or the session project root
 ---@return string|nil written_path
-function M.ensure(spec, kb_root, cwd)
+function M.ensure(spec, kb, cwd)
+  if type(kb) == "string" then kb = (kb ~= "") and { root = kb } or nil end
   cwd = cwd or spec.cwd
   if not cwd or cwd == "" then
     local aa = require("auto-agents")
@@ -496,7 +490,7 @@ function M.ensure(spec, kb_root, cwd)
 
   local filename = M.filename_for(spec.kind or "generic")
   local path = cwd .. "/" .. filename
-  local block = render_block(spec, kb_root)
+  local block = render_block(spec, kb)
 
   -- P1 bail-out: same rendered block + untouched file → identical
   -- outcome to the previous call; skip the file read and splice.
