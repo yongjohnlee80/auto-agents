@@ -13,8 +13,10 @@
 ---  2. cfg.kb.path            — legacy lua-spec override; expanded for ~
 ---  3. by config_source:
 ---     - "global" → <stdpath('config')>/.auto-agents-config/kb
----     - else     → <session_project_root>/.auto-agents/kb
----     - fallback (no setup) → <cwd>/.auto-agents/kb
+---     - else     → <session_project_root>/.auto-agents/kb when that folder exists, else the global
+---                  KB (v0.3.0 no longer creates a project KB, so a project with its own config and
+---                  no KB folder gets the global one until a primary is chosen)
+---     - fallback (no setup) → <cwd>/.auto-agents/kb, on the same terms
 ---@module 'auto-agents.kb'
 
 local M = {}
@@ -35,16 +37,22 @@ function M.legacy_root()
   if kb_cfg.path and kb_cfg.path ~= "" then
     return vim.fn.expand(kb_cfg.path)
   end
+  local global = require("auto-agents.config.store").config_dir() .. "/kb"
   if aa.state.config_source == "global" then
-    local store = require("auto-agents.config.store")
-    return store.config_dir() .. "/kb"
+    return global
   end
   local base = aa.state.session_project_root
   if not base or base == "" then
     local cwd_mod = require("auto-agents.cwd")
     base = cwd_mod.git_root(vim.fn.getcwd()) or vim.fn.getcwd()
   end
-  return base .. "/.auto-agents/kb"
+  local project = base .. "/.auto-agents/kb"
+  -- the project's own KB folder when it has one; else the global KB, as a project without its own
+  -- config gets (the explicit overrides above are honoured as written, existing or not)
+  if vim.fn.isdirectory(project) == 0 and vim.fn.isdirectory(global) == 1 then
+    return global
+  end
+  return project
 end
 
 ---auto-core.kb, or nil when the installed auto-core predates it.
