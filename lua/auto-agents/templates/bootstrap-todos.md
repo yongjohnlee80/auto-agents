@@ -1,5 +1,5 @@
 ---
-revision: 2
+revision: 3
 title: auto-agents todos command surface — bootstrap guide
 ---
 
@@ -136,7 +136,7 @@ choosing the most specific known root (`$KB_ROOT` → `$WORKSPACE`
 → user vars → `$HOME`; absolute kept only when no root contains
 it). This is what lets the panel open the attachment from any
 workspace. Do NOT hand-write a bare relative like
-`shared/adrs/foo.md` and hope — pass the absolute path.
+`adrs/foo.md` and hope — pass the absolute path.
 
 ```jsonc
 {
@@ -145,12 +145,12 @@ workspace. Do NOT hand-write a bare relative like
     "title": "Verify v0.1.43 assign event payload shape",
     "priority": "normal",
     "tags": ["test", "ad-hoc"],
-    "adr": ["/Users/you/.config/nvim/.auto-agents-config/kb/shared/adrs/0031-auto-core-per-project-todo-task-system.md"]
+    "adr": ["/Users/you/.config/nvim/.auto-agents-config/kb/adrs/0031-auto-core-per-project-todo-task-system.md"]
   }
 }
 → { "ok": true, "value": { "id": "2026-05-26-verify-v0143-assign-event-payload-shape" } }
 // the stored task records adr[0] as
-//   $KB_ROOT/shared/adrs/0031-auto-core-per-project-todo-task-system.md
+//   $KB_ROOT/adrs/0031-auto-core-per-project-todo-task-system.md
 ```
 
 The panel will then auto-refresh — `todos.add` (and `update` /

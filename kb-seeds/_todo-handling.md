@@ -1,9 +1,9 @@
 ---
 type: convention
-revision: 4
+revision: 5
 status: active
 sources:
-  - shared/adrs/0031-auto-core-per-project-todo-task-system.md
+  - adrs/0031-auto-core-per-project-todo-task-system.md
 tags: [todos, convention, todo-handling]
 ---
 
@@ -24,7 +24,7 @@ authoritative for THIS project.
 | Location                                   | Purpose                              |
 |--------------------------------------------|--------------------------------------|
 | `<workspace>/.todo-list/`                  | The actual task files (per-project)  |
-| `<kb>/shared/conventions/todo-handling.md` | THIS doc — per-project policy        |
+| `<kb>/conventions/todo-handling.md`        | THIS doc — per-project policy        |
 | `$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`         | Operational reference for `todos.*`  |
 | `auto-agents.nvim/lua/auto-agents/todos/migrate_kb.lua` | Migration script source  |
 
@@ -126,10 +126,10 @@ contains it (last resort — see
 ```yaml
 # you write (absolute):
 adr:
-  - /Users/you/.config/nvim/.auto-agents-config/kb/shared/adrs/0031-foo.md
+  - /Users/you/.config/nvim/.auto-agents-config/kb/adrs/0031-foo.md
 # the host stores (portable):
 adr:
-  - $KB_ROOT/shared/adrs/0031-foo.md
+  - $KB_ROOT/adrs/0031-foo.md
 ```
 
 `blocked:` is different — it holds todo task **ids**, not paths,
@@ -141,7 +141,7 @@ blocked:
 ```
 
 This normalization is what lets the panel open an attachment
-from any workspace. A bare relative like `shared/adrs/foo.md`
+from any workspace. A bare relative like `adrs/foo.md`
 that the host can't resolve is left as-is and flagged
 not-found — so prefer the absolute path.
 
