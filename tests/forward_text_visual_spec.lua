@@ -14,6 +14,8 @@ local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
 local function pick(rel)
+  -- $AUTO_CORE_ROOT overrides the sibling resolution (see tests/run-all.sh).
+  if rel == "auto-core.nvim" and vim.env.AUTO_CORE_ROOT then return vim.env.AUTO_CORE_ROOT end
   for _, wt in ipairs({ "/forward-text", "/main", "" }) do
     local p = plugins_root .. "/" .. rel .. wt
     if vim.fn.isdirectory(p .. "/lua") == 1 then return p end

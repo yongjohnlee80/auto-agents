@@ -23,6 +23,8 @@ local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 ---happens to be lying around (`tests-never-touch-the-developer-environment`).
 ---`/main` tracks the branch every other suite in this repo builds against.
 local function pick(rel)
+  -- $AUTO_CORE_ROOT overrides the sibling resolution (see tests/run-all.sh).
+  if rel == "auto-core.nvim" and vim.env.AUTO_CORE_ROOT then return vim.env.AUTO_CORE_ROOT end
   for _, wt in ipairs({ "/main", "" }) do
     local p = plugins_root .. "/" .. rel .. wt
     if vim.fn.isdirectory(p .. "/lua") == 1 then return p end

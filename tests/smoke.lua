@@ -14,8 +14,9 @@ local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 -- Sibling auto-core.nvim worktree. Prefer `main` (the
 -- integration line). Falls back to the plain repo for dev
 -- machines without a worktree tree.
-local core_root = plugins_root .. "/auto-core.nvim/main"
-if vim.fn.isdirectory(core_root) == 0 then
+-- $AUTO_CORE_ROOT overrides the sibling resolution (see tests/run-all.sh).
+local core_root = vim.env.AUTO_CORE_ROOT or (plugins_root .. "/auto-core.nvim/main")
+if not vim.env.AUTO_CORE_ROOT and vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
 

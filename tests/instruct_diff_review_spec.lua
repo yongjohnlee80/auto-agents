@@ -16,8 +16,9 @@ vim.opt.runtimepath:prepend(project_root)
 -- Batch C, so this spec needs it on the rtp like smoke.lua does.
 -- Prefer the sibling `main` worktree; fall back to the plain repo.
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
-local core_root = plugins_root .. "/auto-core.nvim/main"
-if vim.fn.isdirectory(core_root) == 0 then
+-- $AUTO_CORE_ROOT overrides the sibling resolution (see tests/run-all.sh).
+local core_root = vim.env.AUTO_CORE_ROOT or (plugins_root .. "/auto-core.nvim/main")
+if not vim.env.AUTO_CORE_ROOT and vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
 vim.opt.runtimepath:prepend(core_root)
