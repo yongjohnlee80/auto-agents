@@ -97,8 +97,10 @@ jobs:
       # is paid by the `drift` job below, not by weakening this one.
       - name: install plugin dependencies
         env:
-          AUTO_CORE_REF: "bc4d998bc22f0644b80e3e89cfe3e1b92d71d32a"  # main @ v0.2.15
-          WORKTREE_REF:  "1aedccca735b42b43b68f4e4f246669075ce03ae"
+          # BUMPED for KB v2 (ADR 1791209946): auto-agents v0.3.0 takes the primary KB from
+          # auto-core.kb, which arrived with auto-core.nvim#56 (merged, the v0.3.0 line).
+          AUTO_CORE_REF: "df53d8d663d664f9b3e46991de4133f6d1f8a300"  # main @ #56 merge (auto-core.kb)
+          WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"  # main @ #38 merge (KB v2 paths)
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
 
@@ -138,7 +140,7 @@ jobs:
       - name: report how stale the auto-core pin is
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTO_CORE_REF: "bc4d998bc22f0644b80e3e89cfe3e1b92d71d32a"
+          AUTO_CORE_REF: "df53d8d663d664f9b3e46991de4133f6d1f8a300"
         run: |
           # One API call rather than a second clone: compare gives the distance
           # to the default branch directly.
@@ -231,7 +233,7 @@ jobs:
       - name: install plugin dependencies (auto-core at HEAD)
         env:
           AUTO_CORE_REF: ""   # empty => default branch
-          WORKTREE_REF:  "1aedccca735b42b43b68f4e4f246669075ce03ae"
+          WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
 
