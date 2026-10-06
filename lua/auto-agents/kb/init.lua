@@ -6,6 +6,7 @@
 ---  M.legacy_root()          the pre-v0.3.0 resolution (its fallback)
 ---  M.primary()              { workspace, root } | nil
 ---  M.agent_env(primary)     the KB part of a spawned agent's env
+---  M.sync_managed(primary)  bring the primary's managed documents up to date before a spawn
 ---  M.todo_convention_doc(root)  AUTO_AGENTS_TODOS_CONVENTION_DOC
 ---
 ---Legacy resolution (what auto-core.kb's first-run import records):
@@ -106,6 +107,31 @@ function M.primary()
     return p
   end
   return nil
+end
+
+---Before a spawn, ask auto-core to bring the primary KB's managed documents
+---(AutoDoc's `KB_OPERATIONS.md` and schema) up to the newest copies AutoDoc
+---provided (`auto-core.kb.sync_managed`, auto-core v0.3.1+). The agent then
+---starts on the installed AutoDoc's operations document, and its revision gate
+---re-reads it when the revision moved. auto-core is the only writer: this asks,
+---it never writes. Soft: no primary, or an auto-core without the API, does
+---nothing and answers nil.
+---@param primary { workspace: string|nil, root: string }|nil
+---@return table|nil report  auto-core's report, when it ran
+function M.sync_managed(primary)
+  if type(primary) ~= "table" or type(primary.root) ~= "string" or primary.root == "" then return nil end
+  local kb = core_kb()
+  if not kb or type(kb.sync_managed) ~= "function" then return nil end
+  local log = require("auto-agents.log")
+  local ok, sok, err, rep = pcall(kb.sync_managed, primary.root)
+  if not ok or not sok then
+    log.warn("kb", "syncing the managed KB documents in " .. primary.root .. " failed: " .. tostring(ok and err or sok))
+    return nil
+  end
+  if rep and #rep.updated > 0 then
+    log.info("kb", "updated " .. table.concat(rep.updated, ", ") .. " in " .. primary.root .. " before the spawn")
+  end
+  return rep
 end
 
 ---The KB part of a spawned agent's environment (ADR 1791209946 §7):
