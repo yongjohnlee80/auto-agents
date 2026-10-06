@@ -97,9 +97,9 @@ jobs:
       # is paid by the `drift` job below, not by weakening this one.
       - name: install plugin dependencies
         env:
-          # BUMPED for KB v2 (ADR 1791209946): auto-agents v0.3.0 takes the primary KB from
-          # auto-core.kb, which arrived with auto-core.nvim#56 (merged, the v0.3.0 line).
-          AUTO_CORE_REF: "df53d8d663d664f9b3e46991de4133f6d1f8a300"  # main @ #56 merge (auto-core.kb)
+          # BUMPED for the managed KB documents: the spawn calls auto-core.kb.sync_managed, which
+          # arrives with auto-core.nvim#57 (v0.3.1). Moves to the v0.3.1 tag's commit before merge.
+          AUTO_CORE_REF: "d953c44376f56be0331784855797d8499cff0132"  # auto-core.nvim#57 head (managed KB documents)
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"  # main @ #38 merge (KB v2 paths)
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh

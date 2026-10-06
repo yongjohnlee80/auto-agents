@@ -522,7 +522,7 @@ At spawn, an agent gets:
 
 - `AUTO_AGENTS_KB_ROOT`: the KB root, also granted with `--add-dir`;
 - `AUTODOC_WORKSPACE`: the KB's AutoDoc workspace, when one is named;
-- `AUTODOC_KB_OPERATIONS_DOC`: `<root>/KB_OPERATIONS.md`, when it exists;
+- `AUTODOC_KB_OPERATIONS_DOC`: `<root>/KB_OPERATIONS.md`, when it exists. Before the spawn, auto-core brings it (and the schema) up to the newest copy the installed AutoDoc provided (`auto-core.kb.sync_managed`, auto-core v0.3.1+), so the agent starts on the current operations document;
 - `AUTO_AGENTS_TODOS_CONVENTION_DOC`: the todo-handling convention, unchanged
   (`<root>/conventions/todo-handling.md`, then
   `<root>/shared/conventions/todo-handling.md`, then the bundled seed).

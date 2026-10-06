@@ -2,6 +2,49 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.2] — 2026-10-06 — agents start on the installed AutoDoc's operations document
+
+Patch.
+
+- **The spawn syncs the primary KB's managed documents first.**
+  `kb.sync_managed(primary)` asks `auto-core.kb.sync_managed` (auto-core v0.3.1)
+  to bring the primary KB's `KB_OPERATIONS.md` and schema up to the newest
+  copies AutoDoc provided, before the agent's environment is built.
+  - The agent starts on the installed AutoDoc's operations document, and its
+    revision gate re-reads it when the revision moved.
+  - auto-core is the only writer: auto-agents only asks.
+  - No primary, or an older auto-core, does nothing.
+- **Tests:** smoke 30e.
+  - a spawn updates an older copy, and the agent's env points at it;
+  - with nothing provided, the copy is left alone;
+  - an auto-core without the API still spawns and writes nothing.
+  - Mutant: the spawn without the sync fails 30e.
+- **CI** pins auto-core at the managed-documents change (auto-core #57).
+- **This CHANGELOG** gains the v0.3.0 and v0.3.1 entries the tags missed.
+
+## [v0.3.1] — 2026-10-06 — a project config with no KB folder gets the global KB
+
+Patch.
+
+- A project with its own config and no KB folder gets the global KB until a
+  primary is chosen.
+- The todos docs (bootstrap revision 3, seed revision 5) use the KB v2 paths.
+
+## [v0.3.0] — 2026-10-06 — the primary KB replaces auto-agents' KB (ADR 1791209946 §7)
+
+Minor, by Johno's ruling. It removes surface:
+
+- **Agents take the project's primary KB from `auto-core.kb`.** The scoped KB env
+  (`AUTO_AGENTS_KB_READ/WRITE/SCOPE`) is gone; agents get `AUTO_AGENTS_KB_ROOT`,
+  `AUTODOC_WORKSPACE` and `AUTODOC_KB_OPERATIONS_DOC`.
+- **auto-agents sheds its KB code:** no scaffold, KB types, seeds or kb verbs.
+  - The config asks no KB questions.
+  - The retired `kb_scope` and `[kb] type/seed` keys load with one warning.
+- **Other changes:**
+  - todo automation no longer appends to the KB's `log.md`;
+  - `:AutoAgentsMigrateKbTodos` is KB-layout-agnostic;
+  - `review.create` takes the KB from `auto-core.kb`.
+
 ## [v0.2.64] — 2026-09-07 — the smoke suite wrote its fixtures into the real agent roster
 
 Patch. Tests only; no Lua surface changed. **Anyone who has run this suite
