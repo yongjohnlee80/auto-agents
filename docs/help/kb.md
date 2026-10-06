@@ -16,7 +16,9 @@ has none. It creates nothing.
 - `AUTO_AGENTS_KB_ROOT`: the primary's root, also granted with
   `--add-dir`.
 - `AUTODOC_WORKSPACE`: the primary's AutoDoc workspace, when it names one.
-- `AUTODOC_KB_OPERATIONS_DOC`: `<root>/KB_OPERATIONS.md`, when it exists.
+- `AUTODOC_KB_OPERATIONS_DOC`: `<root>/KB_OPERATIONS.md`, when it exists. Before the
+  spawn, auto-core brings it (and the schema) up to the newest copy the installed
+  AutoDoc provided, so the agent starts on the current operations document.
 - `AUTO_AGENTS_TODOS_CONVENTION_DOC`: the todo-handling convention,
   unchanged: `<root>/conventions/todo-handling.md`, then
   `<root>/shared/conventions/todo-handling.md`, then the bundled seed.
