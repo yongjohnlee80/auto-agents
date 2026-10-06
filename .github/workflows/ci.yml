@@ -98,8 +98,8 @@ jobs:
       - name: install plugin dependencies
         env:
           # BUMPED for the managed KB documents: the spawn calls auto-core.kb.sync_managed, which
-          # arrives with auto-core.nvim#57 (v0.3.1). Moves to the v0.3.1 tag's commit before merge.
-          AUTO_CORE_REF: "c3992572822a3bdf270dfbc19cf15609ebfeb4ad"  # auto-core.nvim#57 head (managed KB documents)
+          # arrived with auto-core.nvim#57, released as v0.3.1.
+          AUTO_CORE_REF: "9ea026cfbcab73c76a9a6d2d4fac13de978a468d"  # auto-core v0.3.1 (managed KB documents)
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"  # main @ #38 merge (KB v2 paths)
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
@@ -140,7 +140,7 @@ jobs:
       - name: report how stale the auto-core pin is
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTO_CORE_REF: "c3992572822a3bdf270dfbc19cf15609ebfeb4ad"
+          AUTO_CORE_REF: "9ea026cfbcab73c76a9a6d2d4fac13de978a468d"
         run: |
           # One API call rather than a second clone: compare gives the distance
           # to the default branch directly.
