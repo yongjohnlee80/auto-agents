@@ -140,7 +140,7 @@ jobs:
       - name: report how stale the auto-core pin is
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTO_CORE_REF: "df53d8d663d664f9b3e46991de4133f6d1f8a300"
+          AUTO_CORE_REF: "c3992572822a3bdf270dfbc19cf15609ebfeb4ad"
         run: |
           # One API call rather than a second clone: compare gives the distance
           # to the default branch directly.
