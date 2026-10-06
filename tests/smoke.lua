@@ -3575,6 +3575,39 @@ do
       and core_kb.primary() ~= nil and core_kb.primary().root == vim.fs.normalize(legacy),
     tostring(env_d.AUTO_AGENTS_KB_ROOT))
 
+  -- 30e. Before a spawn, the primary KB's managed documents are brought up to
+  -- the newest copies AutoDoc provided (auto-core.kb.sync_managed, v0.3.1+).
+  if type(core_kb.sync_managed) == "function" then
+    core_kb._reset_for_tests()
+    local kb_e = vim.fn.tempname() .. "_kb30e"
+    local function ops(v) return "---\ntype: kb\nkind: operations\nautodoc_version: " .. v .. "\nrevision: 2\n---\n# ops " .. v .. "\n" end
+    put(kb_e .. "/KB_OPERATIONS.md", ops("0.1.15"))
+    put(kb_e .. "/AGENTS.md", "# this KB's own\n")
+    core_kb.set_primary(nil, { root = kb_e, workspace = "ws-30e" }, { confirmed = true })
+    local env_e0 = spawn(cwd_c)
+    ok("30e: with nothing provided, the KB's copy is left as it is", slurp(kb_e .. "/KB_OPERATIONS.md") == ops("0.1.15"))
+    core_kb.provide_managed("autodoc", { version_key = "autodoc_version",
+      files = { { rel = "KB_OPERATIONS.md", version = "0.1.18", text = ops("0.1.18") } } })
+    local env_e = spawn(cwd_c)
+    ok("30e: a spawn first brings the primary's older KB_OPERATIONS.md up to the provided copy",
+      slurp(kb_e .. "/KB_OPERATIONS.md") == ops("0.1.18"))
+    ok("30e: and the agent's env points at it", env_e.AUTODOC_KB_OPERATIONS_DOC == vim.fs.normalize(kb_e) .. "/KB_OPERATIONS.md"
+      or env_e.AUTODOC_KB_OPERATIONS_DOC == kb_e .. "/KB_OPERATIONS.md", tostring(env_e.AUTODOC_KB_OPERATIONS_DOC))
+    ok("30e: nothing else in the KB is touched", slurp(kb_e .. "/AGENTS.md") == "# this KB's own\n")
+    -- an auto-core without the API: the spawn proceeds, nothing is written
+    local real_sync = core_kb.sync_managed
+    core_kb.sync_managed = nil
+    put(kb_e .. "/KB_OPERATIONS.md", ops("0.1.15"))
+    local env_old = spawn(cwd_c)
+    core_kb.sync_managed = real_sync
+    ok("30e: an auto-core without sync_managed still spawns, and writes nothing",
+      env_old.AUTO_AGENTS_KB_ROOT ~= nil and slurp(kb_e .. "/KB_OPERATIONS.md") == ops("0.1.15"))
+    ok("30e: (fixture) the first spawn carried the KB env", env_e0.AUTO_AGENTS_KB_ROOT ~= nil)
+  else
+    ok("30e: the test auto-core carries sync_managed (auto-core v0.3.1+)", false,
+      "set AUTO_CORE_ROOT to an auto-core with the managed-documents API")
+  end
+
   core_kb._reset_for_tests()
   aa.state.config.agents.bootstrap = saved_bootstrap
   aa.state.config.kb = saved_kb

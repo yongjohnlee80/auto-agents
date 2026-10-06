@@ -717,6 +717,8 @@ local function build_agent_env(spec, cwd)
   local kb = require("auto-agents.kb")
   local primary = kb.primary()
   local kb_root = primary and primary.root or nil
+  -- first, so the env below points at the installed AutoDoc's operations document
+  kb.sync_managed(primary)
   local env = kb.agent_env(primary)
   -- M5: merge in resource grants (AUTO_AGENTS_ALLOWED_PATHS, etc.).
   local resources_env = require("auto-agents.resources").env_for(spec.slot or 0)
