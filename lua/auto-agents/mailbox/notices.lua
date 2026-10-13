@@ -113,9 +113,14 @@ local function strip_controls(s)
       or (b >= 0xE0 and b <= 0xEF and 3) or (b >= 0xF0 and b <= 0xF4 and 4) or nil
     local ok_seq = len ~= nil and i + len - 1 <= n
     if ok_seq and len > 1 then
+      -- RFC 3629: these leads narrow the first continuation byte, which
+      -- rejects overlongs (E0, F0), surrogates (ED) and > U+10FFFF (F4).
+      local lo = (b == 0xE0 and 0xA0) or (b == 0xF0 and 0x90) or 0x80
+      local hi = (b == 0xED and 0x9F) or (b == 0xF4 and 0x8F) or 0xBF
       for k = i + 1, i + len - 1 do
         local c = s:byte(k)
-        if c < 0x80 or c > 0xBF then ok_seq = false; break end
+        if c < lo or c > hi then ok_seq = false; break end
+        lo, hi = 0x80, 0xBF
       end
     end
     if not ok_seq then
