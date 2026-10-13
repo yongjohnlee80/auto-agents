@@ -357,7 +357,29 @@ local HOSTILE = {
   { name = "C1 CSI",        v = "agent:x\194\155" .. "31m" },
   { name = "very long",     v = "agent:" .. string.rep("a", 600) },
   { name = "leading slash", v = "/agent:x" },
+  -- Lector r1 P2: well-formed continuation bytes, invalid UTF-8.
+  { name = "overlong E0",   v = "agent:x\224\128\128y" },
+  { name = "surrogate ED",  v = "agent:x\237\160\128y" },
+  { name = "above 10FFFF",  v = "agent:x\244\144\128\128y" },
+  { name = "overlong F0",   v = "agent:x\240\128\128\128y" },
+  { name = "overlong C0",   v = "agent:x\192\175y" },
 }
+-- The invalid sequences above are stripped; the valid boundaries are kept.
+for _, c in ipairs({
+  { "overlong E0", "x\224\128\128y" }, { "surrogate ED", "x\237\160\128y" },
+  { "above 10FFFF", "x\244\144\128\128y" }, { "overlong F0", "x\240\128\128\128y" },
+  { "overlong C0", "x\192\175y" },
+}) do
+  local got = notices.sanitize(c[2])
+  ok("sanitize strips " .. c[1], got == "x y", vim.inspect(got))
+end
+for _, c in ipairs({
+  { "U+D55C (ED 95 9C)", "\237\149\156" }, { "U+0800 (E0 A0 80)", "\224\160\128" },
+  { "U+10000 (F0 90 80 80)", "\240\144\128\128" }, { "U+10FFFF (F4 8F BF BF)", "\244\143\191\191" },
+}) do
+  local got = notices.sanitize("a" .. c[2] .. "b")
+  ok("sanitize keeps " .. c[1], got == "a" .. c[2] .. "b", vim.inspect(got))
+end
 -- Single notices: a hostile `from` through the real router.
 for _, h in ipairs(HOSTILE) do
   local m = message.build({ from = h.v, to = "agent:y", subject = "hostile " .. h.name })
