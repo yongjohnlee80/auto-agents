@@ -2,6 +2,27 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [Unreleased] — todo automation removed
+
+Part of the AutoDoc todo cutover set (ADR 1791532020 §3 step 3); ships with
+auto-core's `auto-core.todo` shim (v0.3.4). Automation was never used: no
+task in the global KB store is `automated` or carries an automation field
+(ADR 1791532020 §1.3).
+
+- **Removed:** the `todos.fire` and `todos.automation_set` mailbox verbs, the
+  `auto-agents.todo_automation` module (the `assign slot:` hook and the
+  `bash -t=` executor it registered with `auto-core.todo.automation`), its
+  install call in `setup()`, and the `:AutoAgentsTodosAutomationEnable`
+  command. A call to either verb is now rejected as `unknown_command`.
+- **Unchanged:** the other thirteen `todos.*` verbs still call
+  `auto-core.todo`, and assignment notifications still route to the
+  assignee's inbox.
+- **Docs:** `bootstrap-todos.md` revision 4 records the removal; the README's
+  verb count is 13.
+- **Tests:** smoke [24] drops the automation cells and asserts the module,
+  both verbs and the user command are gone, each beside a control that is
+  present.
+
 ## [v0.3.4] — 2026-10-13 — notices name the real sender and stay quiet when there is nothing to read
 
 Patch. Pairs with auto-core v0.3.3, whose wake ctx carries the arriving

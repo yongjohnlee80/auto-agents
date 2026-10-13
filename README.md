@@ -368,8 +368,9 @@ the verb does, which is the shape worth avoiding rather than mirroring.
 Either side *may* register — the registry is shared, and this repo does
 both. Verbs registered here are `wake`, `say`, `send_user`, `peek`,
 `diff_queue`, `refresh_agent_id`, `addressbook`, `commands_list`, plus the
-`todos.*` roster (15 thin wrappers over `auto-core.todo` — ADR-0031 §5's
-thirteen, plus `todos.fire` and `todos.automation_set` from ADR-0035) and
+`todos.*` roster (ADR-0031 §5's 13 thin wrappers over `auto-core.todo`;
+ADR-0035's `todos.fire` and `todos.automation_set` were removed with
+automation by ADR 1791532020) and
 the `review.*` namespace, four verbs wrapping `worktree.review`. So "it
 wraps another plugin's Lua API" is not by itself a reason to put a verb in
 that plugin.
