@@ -499,6 +499,12 @@ function M.on_undeliverable(payload)
     error   = str(payload.error),
   }
   item.check = item.path and "path" or nil
+  -- An auto-core that predates `subject` on this event: read it from the
+  -- file still sitting in the outbox.
+  if not item.subject and item.path then
+    local doc = read_json(item.path)
+    item.subject = doc and str(doc.subject) or nil
+  end
   local key = table.concat({ tostring(payload.from_full or payload.from),
     tostring(payload.id), item.failure }, "|")
   item.undeliverable_key = key
