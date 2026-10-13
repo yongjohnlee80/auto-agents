@@ -17,8 +17,13 @@ removes `auto-core.todo`.
   - Open buffers follow a moved task through `auto-core.todo.buffers`.
   - The verbs publish the `core.todo:*` events after their writes, and ask
     auto-core's notifier to poll at once after an assignment.
+- **An agent's rev.** `update`, `status`, `assign`, `archive` and `remove`
+  take an optional `rev` (from `todos.show`): a task changed since the agent
+  read it is refused as `stale`, never overwritten. Without it the verb reads
+  the task and writes at that rev. Either way the write goes to the store the
+  task was read from, even if the project switched meanwhile (Lector #26 r0).
 - **Errors carry the daemon's meaning:** `stale`, `not_found`,
-  `invalid_args`, `unclaimed`, `not_writable`, `exists`, `timeout`, and
+  `invalid_args`, `not_a_store`, `unclaimed`, `not_writable`, `exists`, `timeout`, and
   `dependency_unavailable` ("AutoDoc required", or an auto-core older than
   v0.4.0). There is no Lua fallback.
 - **Shapes are AutoDoc's.**

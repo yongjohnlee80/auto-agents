@@ -84,7 +84,7 @@ Responses follow the standard `{ ok, value | error, code }` envelope:
 |--------------------------|------------------------------------------------------------------------|
 | `invalid_args`           | a field is wrong; the message names it (AutoDoc's `todos.invalid` too) |
 | `not_found`              | no such task: list again                                               |
-| `stale`                  | the task changed between the verb's read and its write: show it again, and retry if the change still applies |
+| `stale`                  | the task changed since the `rev` you passed (or between the verb's read and its write): show it again, and retry if your change still applies |
 | `unclaimed`              | the store is not AutoDoc's yet (a rollback released it): tell the user |
 | `not_writable`           | the directory is not a store AutoDoc may write                          |
 | `exists`                 | an id or a target that is already taken                                |
@@ -190,6 +190,16 @@ against the KB root only. Pass the absolute path.
 The panel auto-refreshes: `todos.add` (and `update` / `remove`)
 fire `core.todo:changed`, so a created task appears without a
 manual refresh.
+
+### Writing at the rev you read
+
+`todos.update`, `todos.status`, `todos.assign`, `todos.archive` and
+`todos.remove` take an optional `rev`: the one `todos.show` (or
+`todos.list` with `full = true`) gave you. With it, a task someone else
+changed since you read it is refused as `stale` instead of overwritten —
+pass it whenever your change was decided from what you read (a whole
+`review` / `tags` list, say). Without it the verb reads the task and
+writes at that rev.
 
 ### `todos.update`
 
