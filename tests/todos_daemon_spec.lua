@@ -262,6 +262,64 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────
+section("an agent's rev: a task changed since the agent read it is refused (Lector #26 r0 P2 1)")
+do
+  local sid = run("todos.add", { title = "Stale target" }).value.id
+  local seen_by_agent = run("todos.show", { id = sid }).value
+  -- another client changes the task after the agent read it
+  local other = run("todos.update", { id = sid, patch = { priority = "high" } })
+  ok("fixture: another client changed the task", other.ok and other.value.rev ~= seen_by_agent.rev,
+    vim.inspect(other))
+  local r = run("todos.update", { id = sid, rev = seen_by_agent.rev,
+    patch = { review = { sb .. "/agents-review.md" } } })
+  ok("an update at the agent's old rev is refused as stale", r.ok == false and r.code == "stale",
+    vim.inspect(r))
+  local now = run("todos.show", { id = sid }).value
+  ok("… and the other client's change survived, the stale patch did not land",
+    now.priority == "high" and (now.review == nil or #now.review == 0), vim.inspect(now))
+  r = run("todos.status", { id = sid, rev = seen_by_agent.rev, status = "deferred" })
+  ok("a status at the old rev is refused as stale too", r.ok == false and r.code == "stale", vim.inspect(r))
+  r = run("todos.update", { id = sid, rev = now.rev, patch = { priority = "low" } })
+  ok("at the current rev the update lands", r.ok and r.value.priority == "low", vim.inspect(r))
+  r = run("todos.update", { id = sid, patch = { priority = "normal" } })
+  ok("without a rev it still works (the no-rev convenience)", r.ok and r.value.priority == "normal",
+    vim.inspect(r))
+  r = run("todos.update", { id = sid, rev = 42, patch = { priority = "low" } })
+  ok("a rev that is not a string is invalid_args", r.ok == false and r.code == "invalid_args", vim.inspect(r))
+  run("todos.remove", { id = sid })
+end
+
+-- ─────────────────────────────────────────────────────────────
+section("a project switch while the read waits: the write goes to the store it read (Lector #26 r0 P2 2)")
+do
+  local sid = run("todos.add", { title = "Bound to its store" }).value.id
+  local proj2 = sb .. "/proj-switched"
+  vim.fn.mkdir(proj2, "p")
+  local switch_on_get = true
+  local spy = ad_todos.call
+  ad_todos.call = function(verb, params, cb)
+    spy(verb, params, function(r, e)
+      if verb == "get" and switch_on_get then
+        switch_on_get = false
+        worktree.set_workspace_root(proj2) -- the user switched projects meanwhile
+      end
+      cb(r, e)
+    end)
+  end
+  last_params = {}
+  local r = run("todos.update", { id = sid, patch = { priority = "high" } })
+  ad_todos.call = spy
+  local wrote_at = last_params["update"] and last_params["update"][1]
+  ok("fixture: the project switched during the read", switch_on_get == false)
+  ok("the update succeeded", r.ok and r.value.priority == "high", vim.inspect(r))
+  ok("… sent to the store the task was read from, not the new project's",
+    type(wrote_at) == "table" and wrote_at.root == proj, vim.inspect(wrote_at))
+  ok("… and the new project got no store", vim.fn.isdirectory(proj2 .. "/.todo-list") == 0)
+  worktree.set_workspace_root(proj)
+  run("todos.remove", { id = sid })
+end
+
+-- ─────────────────────────────────────────────────────────────
 section("set_dir: another existing store, then back")
 do
   local other = sb .. "/other-store"

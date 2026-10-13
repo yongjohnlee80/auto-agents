@@ -36,6 +36,7 @@ local ENVELOPE_CODES = {
   [-32071] = "stale",
   [-32072] = "not_found",
   [-32073] = "invalid_args",
+  [-32074] = "not_a_store",
   [-32075] = "exists",
   [-32076] = "not_writable",
   [-32077] = "unclaimed",
@@ -127,6 +128,18 @@ end
 function M.call(verb, ...)
   local ctx, cerr = M.context()
   if not ctx then return nil, cerr end
+  return M.call_at(ctx, verb, ...)
+end
+
+---call_at runs todos.<verb> on the store a previous call resolved (`ctx`),
+---without resolving the project again: a write that follows a read goes to
+---the store the task was read from, even if the project switched while the
+---read waited (Lector #26 r0 P2).
+---@param ctx table a ctx a previous call answered
+---@param verb string
+---@param ... any the params after `at`
+---@return any result, AutoAgentsTodosError|nil err, table ctx
+function M.call_at(ctx, verb, ...)
   local d = deps()
   if not d then return nil, fail(M.REQUIRED) end
   local params = { ctx.at, ... }
