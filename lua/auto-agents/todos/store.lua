@@ -105,13 +105,15 @@ local function await(start)
   return unpack(res, 1, res.n)
 end
 
----context resolves (and, the first time, claims) this project's store.
+---context resolves (and, the first time, claims) this project's store, or
+---`root`'s when given (a sequence that captured its root at its start).
+---@param root string? default: the project root now
 ---@return table|nil ctx { root, at, store, store_id, claimed, writable }
 ---@return AutoAgentsTodosError|nil err
-function M.context()
+function M.context(root)
   local d, why = deps()
   if not d then return nil, fail(why) end
-  local root = d.where.root()
+  root = root or d.where.root()
   return await(function(done)
     d.daemon.run(function() return d.where.ensure(root) end, function(ok, ctx)
       if ok then done(ctx) else done(nil, fail(ctx)) end
@@ -255,7 +257,10 @@ function M.set_dir(dir)
   if err then return nil, err end
   d.where.set_override(root, dir ~= "" and dir or nil)
   d.where.reset(root)
-  return M.context()
+  -- the root this call started on, not the project root now: a switch while
+  -- set_dir waited must not answer (or claim) another project's store
+  -- (Lector #26 r2 P2)
+  return M.context(root)
 end
 
 return M
