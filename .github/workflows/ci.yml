@@ -101,7 +101,7 @@ jobs:
           # outcome; envelope command/code): tests/wake_notice_spec.lua needs
           # them. Pinned at auto-core.nvim#2's head until it is merged and
           # released, then moved to the tag.
-          AUTO_CORE_REF: "221bda33fb8c5ce9bcca4856644b9c82132478a7"  # auto-core v0.3.3 (wake ctx arrival facts)
+          AUTO_CORE_REF: "5bd0f4be35ecaf025fd7dc3dd2ddb44e550e5fe2"  # auto-core v0.4.0 (the todo cutover; ships with this change)
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"  # main @ #38 merge (KB v2 paths)
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
@@ -142,7 +142,7 @@ jobs:
       - name: report how stale the auto-core pin is
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTO_CORE_REF: "221bda33fb8c5ce9bcca4856644b9c82132478a7"
+          AUTO_CORE_REF: "5bd0f4be35ecaf025fd7dc3dd2ddb44e550e5fe2"
         run: |
           # One API call rather than a second clone: compare gives the distance
           # to the default branch directly.
