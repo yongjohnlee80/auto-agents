@@ -2,6 +2,23 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.3] — 2026-10-13 — sandbox .git stubs preserve the project config
+
+Patch.
+
+- The Git-root fallback resolves `.git` to an absolute path before taking its
+  parent, stripping the directory separator added by `:p`. An empty `.git`
+  sandbox stub no longer produces `"."` as the project root or switches the
+  project's roster and KB to `global.toml`.
+- Relative search starts are made absolute, and spaces and search-path
+  delimiters are escaped for `finddir`.
+- The existing directory-marker fallback is retained when Git rejects a
+  `.git` directory. Valid repositories and worktree gitfiles still resolve
+  through Git; an invalid gitfile is not a directory marker.
+- **Tests:** smoke section 32 covers project-key stability, project-over-global
+  TOML selection, terminal CWD, uncached resource grants and legacy KB paths,
+  nested/relative starts, real Git failure, repositories and worktree gitfiles.
+
 ## [v0.3.2] — 2026-10-06 — agents start on the installed AutoDoc's operations document
 
 Patch.

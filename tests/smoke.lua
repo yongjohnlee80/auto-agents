@@ -3673,6 +3673,91 @@ do
   pcall(vim.fn.delete, kb31, "rf")
 end
 
+-- ──── 32. Git-root fallback keeps project identity absolute ────
+print("\n[32] Git-root fallback and project config identity")
+do
+  local cwd = require("auto-agents.cwd")
+  local store = require("auto-agents.config.store")
+  local saved_cwd = vim.fn.getcwd()
+  local fixture = vim.fn.tempname() .. "-cwd32"
+  local project = fixture .. "/project with spaces"
+  vim.fn.mkdir(project .. "/nested", "p")
+  vim.api.nvim_set_current_dir(project)
+
+  -- Bound the no-marker control to this fixture: neither git nor finddir
+  -- may discover an unrelated repository above the temporary directory.
+  local saved_systemlist, saved_finddir = vim.fn.systemlist, vim.fn.finddir
+  vim.fn.systemlist = function()
+    return saved_systemlist({ "git", "-C", fixture .. "/missing", "rev-parse", "--show-toplevel" })
+  end
+  vim.fn.finddir = function() return "" end
+  local clean_root = cwd.git_root(project) or project
+  vim.fn.finddir = saved_finddir
+  local key = vim.fn.sha256(clean_root):sub(1, 16)
+  ok("32: without a marker the project identity is the absolute cwd", clean_root == project, clean_root)
+
+  -- Real finddir/fnamemodify: an empty sandbox stub returns relative '.git'
+  -- at the process cwd. Git failure is deterministic above, as for the stub.
+  vim.fn.mkdir(project .. "/.git", "p")
+  ok("32: finddir reproduces the relative .git result",
+    vim.fn.finddir(".git", project .. ";") == ".git")
+  local root = cwd.git_root(project)
+  ok("32: empty .git resolves to the absolute project root", root == project, root)
+  ok("32: empty .git preserves the project config key",
+    vim.fn.sha256(root or project):sub(1, 16) == key, root)
+  ok("32: terminal git_repo_cwd receives the absolute root",
+    cwd.resolve({ git_repo_cwd = true }, { cwd = project }) == project)
+  local saved_key, saved_root, saved_source, saved_config =
+    aa.state.session_project_key, aa.state.session_project_root, aa.state.config_source, aa.state.config
+  aa.state.session_project_key, aa.state.session_project_root, aa.state.config_source, aa.state.config = nil, nil, "project", { kb = {} }
+  vim.fn.mkdir(project .. "/.auto-agents/kb", "p")
+  ok("32: uncached resource grants use the absolute project key",
+    require("auto-agents.resources.grants").file_path() == vim.fn.stdpath("data") .. "/auto-agents/" .. key .. "-grants.json")
+  ok("32: uncached legacy KB uses the absolute project root",
+    require("auto-agents.kb").legacy_root() == project .. "/.auto-agents/kb")
+  aa.state.session_project_key, aa.state.session_project_root, aa.state.config_source, aa.state.config =
+    saved_key, saved_root, saved_source, saved_config
+
+  local proj_path = store.project_path(key)
+  local global_path = store.global_path()
+  local saved_global = vim.fn.filereadable(global_path) == 1 and vim.fn.readfile(global_path) or nil
+  store.write(proj_path, { project = { cwd = project }, agents = { { slot = 1, kind = "generic", name = "project-agent" } } })
+  store.write(global_path, { agents = { { slot = 1, kind = "generic", name = "global-agent" } } })
+  local loaded, source = store.load(vim.fn.sha256(root or project):sub(1, 16))
+  ok("32: empty .git selects project TOML instead of global TOML",
+    source == "project" and loaded.agents[1].name == "project-agent", source)
+  vim.fn.delete(proj_path)
+  if saved_global then vim.fn.writefile(saved_global, global_path) else vim.fn.delete(global_path) end
+
+  vim.api.nvim_set_current_dir(project .. "/nested")
+  local nested_root = cwd.git_root(".")
+  ok("32: nested cwd resolves the stub's absolute parent", nested_root == project, nested_root)
+  vim.api.nvim_set_current_dir(fixture)
+  local relative_root = cwd.git_root("project with spaces/nested")
+  ok("32: relative start outside the project resolves its absolute root",
+    relative_root == project, relative_root)
+  vim.fn.systemlist = saved_systemlist
+  vim.fn.systemlist({ "git", "-C", project, "rev-parse", "--show-toplevel" })
+  ok("32: real Git rejects the empty sandbox stub", vim.v.shell_error ~= 0)
+  ok("32: real Git failure still gives the absolute fallback", cwd.git_root(project) == project)
+
+  -- Git's successful path remains authoritative for both a real repository
+  -- and a worktree whose .git is a file (not visible to finddir).
+  local repo, worktree = fixture .. "/repo", fixture .. "/worktree"
+  vim.fn.systemlist({ "git", "init", "--quiet", repo })
+  ok("32: git init succeeds", vim.v.shell_error == 0)
+  vim.fn.mkdir(repo .. "/nested", "p")
+  ok("32: real Git root is absolute from a nested directory", cwd.git_root(repo .. "/nested") == repo)
+  vim.fn.systemlist({ "git", "-C", repo, "-c", "user.name=Smoke", "-c", "user.email=smoke@example.invalid",
+    "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "fixture" })
+  ok("32: fixture commit succeeds", vim.v.shell_error == 0)
+  vim.fn.systemlist({ "git", "-C", repo, "worktree", "add", "--quiet", "--detach", worktree })
+  ok("32: fixture worktree succeeds", vim.v.shell_error == 0)
+  ok("32: a worktree gitfile resolves through Git", cwd.git_root(worktree) == worktree)
+  vim.api.nvim_set_current_dir(saved_cwd)
+  vim.fn.delete(fixture, "rf")
+end
+
 -- ───────────────────────── summary ─────────────────────────
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
