@@ -2,7 +2,7 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## [Unreleased] — todo automation removed
+## [v0.3.5] — 2026-10-14 — todo automation removed
 
 Part of the AutoDoc todo cutover set (ADR 1791532020 §3 step 3); ships with
 auto-core's `auto-core.todo` shim (v0.4.0). Automation was never used: no
