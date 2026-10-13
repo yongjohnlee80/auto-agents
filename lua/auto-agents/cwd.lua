@@ -29,6 +29,8 @@ function M.git_root(start_dir)
   if not start_dir then
     return nil
   end
+  -- finddir's upward search needs an absolute start, including for '.'.
+  start_dir = vim.fn.fnamemodify(start_dir, ":p")
 
   local result
   if vim.fn.systemlist then
@@ -51,9 +53,13 @@ function M.git_root(start_dir)
   end
 
   if vim.fn.finddir then
-    local git_dir = vim.fn.finddir(".git", start_dir .. ";")
+    local git_dir = vim.fn.finddir(".git", vim.fn.escape(start_dir, " ,;") .. ";")
     if type(git_dir) == "string" and git_dir ~= "" then
-      local parent = vim.fn.fnamemodify(git_dir, ":h")
+      -- finddir can return '.git' relative to cwd. Make it absolute
+      -- before taking its parent so project keys never hash '.'. :p
+      -- appends a separator for directories; strip it so :h removes .git.
+      local absolute_git_dir = vim.fn.fnamemodify(git_dir, ":p"):gsub("[/\\]+$", "")
+      local parent = vim.fn.fnamemodify(absolute_git_dir, ":h")
       return normalize_dir(parent)
     end
   end
