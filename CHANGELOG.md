@@ -2,6 +2,29 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.4] — 2026-10-13 — notices name the real sender and stay quiet when there is nothing to read
+
+Patch. Pairs with auto-core v0.3.3, whose wake ctx carries the arriving
+message's facts. Against an older auto-core, notices fall back to what
+they can read from the file.
+
+- **The real sender.** An inbox notice names the message's `from`, not the
+  recipient's own mailbox. A response notice names the command that failed.
+- **Silent when there is nothing to read.** A wake with nothing unread, and a
+  file archived before the notice was typed, produce no notice.
+- **Response notices only on error.** An `ok:true` response is silent; an
+  `ok:false` one, an error code, or an unreadable response gives one notice.
+- **Routing failures** are announced once, not on every retry.
+- **Coalesced:** arrivals in one window type as one line per agent.
+- **Terminal-safe:** every mailbox-controlled field (sender, recipient,
+  command, code, reason, subject) is stripped of ESC sequences, C0/C1
+  controls and invalid UTF-8 (strict RFC 3629, so overlong, surrogate and
+  above-U+10FFFF sequences too) before it reaches an agent's terminal.
+- **Audit log:** every typed and every suppressed notice is logged with its
+  reason.
+- **Tests:** `wake_notice_spec` (272 cells) and `wake_notice_mutants.sh`
+  (26 mutants, all killed). CI pins auto-core v0.3.3.
+
 ## [v0.3.3] — 2026-10-13 — sandbox .git stubs preserve the project config
 
 Patch.
