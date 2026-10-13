@@ -95,6 +95,13 @@ jobs:
       # failure on an unrelated PR here. The cost of that pin — a consumer
       # frozen against its dependency can never observe an upstream regression —
       # is paid by the `drift` job below, not by weakening this one.
+      # Go builds AutoDoc's binary (install-deps.sh): the todos.* verbs call
+      # AutoDoc's daemon, so tests/todos_daemon_spec.lua runs against a real one.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.25"
+          cache: false
+
       - name: install plugin dependencies
         env:
           # BUMPED for the wake ctx's arrival facts (sender, subject, response
@@ -102,6 +109,8 @@ jobs:
           # them. Pinned at auto-core.nvim#2's head until it is merged and
           # released, then moved to the tag.
           AUTO_CORE_REF: "5bd0f4be35ecaf025fd7dc3dd2ddb44e550e5fe2"  # auto-core v0.4.0 (the todo cutover; ships with this change)
+          # The daemon the todos.* verbs call (ADR 1791532020 §3 step 4): v0.1.41.
+          AUTODOC_REF:   "0584e785b7b7d839bcfd2671b75896583ef91488"  # autodoc v0.1.41
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"  # main @ #38 merge (KB v2 paths)
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
@@ -232,9 +241,17 @@ jobs:
       # The ONE difference from `lua`: auto-core rides its default branch.
       # Everything else — including the other two pins — stays fixed, so a
       # failure here names auto-core and not "something moved".
+      # Go builds AutoDoc's binary (install-deps.sh): the todos.* verbs call
+      # AutoDoc's daemon, so tests/todos_daemon_spec.lua runs against a real one.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.25"
+          cache: false
+
       - name: install plugin dependencies (auto-core at HEAD)
         env:
           AUTO_CORE_REF: ""   # empty => default branch
+          AUTODOC_REF:   "0584e785b7b7d839bcfd2671b75896583ef91488"
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh

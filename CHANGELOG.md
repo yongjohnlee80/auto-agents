@@ -2,6 +2,52 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [Unreleased] — the todos.* verbs call AutoDoc itself
+
+ADR 1791532020 §3 step 4 (r12). **Requires auto-core v0.4.0 or later and
+autodoc.nvim v0.1.39 or later.** It must ship before auto-core v0.4.1, which
+removes `auto-core.todo`.
+
+- **A direct client.** The `todos.*` mailbox verbs call AutoDoc's `todos.*`
+  verbs through autodoc.nvim's client (`auto-agents.todos.store`), not through
+  `auto-core.todo`. Each handler waits for the daemon, bounded (15 s), as
+  autodoc's own registry verbs do: mailbox handlers answer synchronously.
+  - auto-core still says where the project's store is
+    (`auto-core.todo.where`, which also claims it the first time).
+  - Open buffers follow a moved task through `auto-core.todo.buffers`.
+  - The verbs publish the `core.todo:*` events after their writes, and ask
+    auto-core's notifier to poll at once after an assignment.
+- **Errors carry the daemon's meaning:** `stale`, `not_found`,
+  `invalid_args`, `unclaimed`, `not_writable`, `exists`, `timeout`, and
+  `dependency_unavailable` ("AutoDoc required", or an auto-core older than
+  v0.4.0). There is no Lua fallback.
+- **Shapes are AutoDoc's.**
+  - `todos.show` answers the task with `rev`, `path`, `file_path` and its body.
+  - `todos.list` takes `status = in-progress` and `all`, and refuses an
+    unknown status.
+  - `todos.list_dirs` lists the daemon's stores.
+  - `todos.refresh` answers the daemon's summary (`malformed`, not `skipped`).
+  - `todos.update` refuses a patch naming `status` or `assignee`.
+  - `todos.set_dir` needs an existing directory.
+- **Removed** (ADR 1791532020 D3 and §2.5):
+  - `todos.import`, `auto-agents.todos.migrate_kb` and
+    `:AutoAgentsMigrateKbTodos`. Import was dropped; since auto-core v0.4.0,
+    `--apply` was already refused.
+  - The `core.todo.assignee:changed` subscriber (`install_assignee_routing`).
+    auto-core's notifier is the only sender of assignment messages; the shim
+    stopped publishing that event at v0.4.0.
+  - Twelve `todos.*` verbs remain.
+- **Docs:**
+  - `bootstrap-todos.md` revision 5: the surface, the error codes, D1, the
+    notifier's message id.
+  - The managed CLAUDE.md block: 12 verbs, and no migrate command.
+  - The KB seed `_todo-handling.md` revision 6.
+- **Tests and CI:**
+  - `tests/todos_daemon_spec.lua` runs every verb against a real AutoDoc
+    daemon of its own.
+  - CI builds AutoDoc at v0.1.41 (`0584e78`, pinned in both jobs) and keeps
+    auto-core at v0.4.0.
+
 ## [v0.3.5] — 2026-10-14 — todo automation removed
 
 Part of the AutoDoc todo cutover set (ADR 1791532020 §3 step 3); ships with

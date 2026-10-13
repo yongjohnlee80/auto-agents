@@ -1,9 +1,10 @@
 ---
 type: convention
-revision: 5
+revision: 6
 status: active
 sources:
   - adrs/0031-auto-core-per-project-todo-task-system.md
+  - adrs/1791532020-autodoc-owns-the-todo-system.md
 tags: [todos, convention, todo-handling]
 ---
 
@@ -11,7 +12,7 @@ tags: [todos, convention, todo-handling]
 
 **Tags:** `type:convention` `living-doc` `owner:shared` `repo:shared` `area:todos` `area:workflow`
 
-**Revision**: 4 — compare against your stored value on every spawn; re-ingest on change.
+**Revision**: 6 — compare against your stored value on every spawn; re-ingest on change.
 
 **Abstract:** Per-project policy for how tasks are stored, edited, and moved
 between buckets. Each KB MAY customize this file; agents treat it as
@@ -26,14 +27,15 @@ authoritative for THIS project.
 | `<workspace>/.todo-list/`                  | The actual task files (per-project)  |
 | `<kb>/conventions/todo-handling.md`        | THIS doc — per-project policy        |
 | `$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`         | Operational reference for `todos.*`  |
-| `auto-agents.nvim/lua/auto-agents/todos/migrate_kb.lua` | Migration script source  |
 
-Backed by `auto-core.todo` (ADR-0031). Three surfaces expose the
-same data:
+The store is AutoDoc's (ADR 1791532020): its daemon owns the format, the
+rules and every write. Every surface is a client of the daemon:
 
-  - **Lua API**: `require("auto-core.todo")` — host code, source of truth.
   - **Mailbox**: `todos.*` verbs — see `$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`.
   - **User cmd**: `:AutoAgentsTodos <verb>` — humans, with tab-complete.
+  - **The daemon itself**: `autodoc --call todos.<verb>` (`autodoc --contracts 'todos.*'`
+    describes each), and `require("autodoc.todos")` in Lua.
+  - **The panel**: auto-finder's todos section.
 
 ---
 
@@ -94,7 +96,7 @@ Schema v1 in ADR-0031 §2.
 | Update arbitrary fields           | `todos.update`                | safer than YAML edit when in doubt     |
 | Archive                           | `todos.archive`               | sets archived_at + preserves history   |
 | Remove                            | `todos.remove`                | irreversible; auditable                |
-| Assign + notify                   | `todos.assign`                | mailbox message to the recipient       |
+| Assign + notify                   | `todos.assign`                | `open` → `in-progress` in the same write; mailbox message to the recipient |
 | Reconcile a stale dir             | `todos.refresh`               | re-evaluates buckets + errors[]        |
 
 **Encouraged**: direct YAML edits to non-managed hand-editable fields
@@ -117,7 +119,7 @@ Give the **absolute path** to the document. You reliably know
 where it lives on disk — you do NOT need to guess a `$KB_ROOT`
 or `$WORKSPACE` prefix. The host normalizes any absolute (or
 bare KB-relative) ref to the portable `$VAR/...` symbolic form
-on write (auto-core v0.1.46+), picking the most specific known
+on write (AutoDoc's daemon), picking the most specific known
 root: `$KB_ROOT` → `$WORKSPACE` → user-defined vars → `$HOME`.
 An absolute path is kept absolute ONLY when no known root
 contains it (last resort — see
@@ -155,43 +157,26 @@ active `.todo-list/` directory** — typically `shared/synthesis/*-todos.md`
 under the old convention, but any doc whose `**Tags:**` line contains
 `type:todo-list` qualifies.
 
-If you find any, **prompt the user** with three options:
+If you find any, **prompt the user** with two options:
 
-**(a) Migrate to `$KB_ROOT/.todo-list/`**
+**(a) Re-point the task store**
 
-KB-rooted task store. Shared across every workspace that opens this KB.
+`$KB_ROOT/.todo-list/` is shared across every workspace that opens this KB;
+`$WORKSPACE/.todo-list/` travels with the project's git repo. The directory
+must exist.
 
 ```vim
 :AutoAgentsTodos set_dir path=$KB_ROOT/.todo-list
-:AutoAgentsMigrateKbTodos --apply
 ```
 
-**(b) Migrate to `$WORKSPACE/.todo-list/`**
-
-Workspace-local task store. Travels with the project's git repo
-but not with the KB.
-
-```vim
-:AutoAgentsTodos set_dir path=$WORKSPACE/.todo-list
-:AutoAgentsMigrateKbTodos --apply
-```
-
-**(c) Leave as-is**
+**(b) Leave as-is**
 
 Keep the legacy docs in `shared/synthesis/` as historical reference.
 Don't write new ones in that format. New tasks go through the
 `todos.*` verbs.
 
-### Migration entry points
-
-| Surface     | Invocation                                                                |
-|-------------|---------------------------------------------------------------------------|
-| User cmd    | `:AutoAgentsMigrateKbTodos [--apply]`                                     |
-| Lua API     | `require("auto-agents.todos.migrate_kb").migrate({ apply = true })`       |
-| Source      | `auto-agents.nvim/lua/auto-agents/todos/migrate_kb.lua`                   |
-
-Dry-run by default — `--apply` (or pass `apply=true`) to commit
-the migration. Originals archive to `<kb>/shared/synthesis/archive/`.
+Importing legacy docs into the store was dropped (ADR 1791532020 D3): the
+KB migration it served finished on 2026-05-26.
 
 ---
 

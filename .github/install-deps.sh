@@ -11,7 +11,7 @@
 # Refs come from the environment. An EMPTY ref means "whatever the default
 # branch is now" — that is the drift job's whole purpose, so it is a supported
 # value and not a mistake:
-#   AUTO_CORE_REF  WORKTREE_REF  PLENARY_REF
+#   AUTO_CORE_REF  WORKTREE_REF  PLENARY_REF  AUTODOC_REF
 set -euo pipefail
 
 lazy="$HOME/.local/share/nvim/lazy"
@@ -47,3 +47,15 @@ clone_at https://github.com/yongjohnlee80/worktree.nvim \
 
 clone_at https://github.com/nvim-lua/plenary.nvim \
          "$lazy/plenary.nvim" "${PLENARY_REF:-}"
+
+# AutoDoc (ADR 1791532020): the todos.* verbs call AutoDoc's daemon through
+# autodoc.nvim's todos client, so tests/todos_daemon_spec.lua needs autodoc.nvim
+# (lua/, in the autodoc repo) and its binary. Sibling shape only: the spec looks
+# for <plugins>/autodoc/main and its bin/autodoc, and starts a daemon of its own.
+# The binary is built here, without cgo, as autodoc's Makefile does.
+echo "autodoc:"
+clone_at https://github.com/yongjohnlee80/autodoc "$siblings/autodoc/main" "${AUTODOC_REF:-}"
+command -v go >/dev/null || { echo "go is required to build autodoc (actions/setup-go)" >&2; exit 1; }
+( cd "$siblings/autodoc/main" && GOWORK=off CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+    go build -o bin/autodoc ./cmd/autodoc )
+"$siblings/autodoc/main/bin/autodoc" --version
