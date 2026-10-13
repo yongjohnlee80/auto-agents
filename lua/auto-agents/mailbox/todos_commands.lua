@@ -96,6 +96,9 @@ local function need_id(args)
   if type(args.id) ~= "string" or args.id == "" then
     return err_response("invalid_args", "args.id must be a non-empty string")
   end
+  if args.rev ~= nil and (type(args.rev) ~= "string" or args.rev == "") then
+    return err_response("invalid_args", "args.rev, when provided, must be the task's rev (todos.show)")
+  end
 end
 
 ---current reads one task, with its rev and absolute file_path.
@@ -107,14 +110,21 @@ local function current(id)
   return t, nil, ctx
 end
 
----mutate reads the task (an agent names it by id, not by rev), then sends the
----write at that rev, so a change between the two is refused as todos.stale
----and reported, never overwritten.
+---mutate reads the task, then sends the write to the SAME store (the read's
+---ctx, never a fresh resolution: a project switch while the read waited must
+---not send this task's id and rev to another store).
+---
+---The write's rev is the caller's when it gave one (`args.rev`, from an
+---earlier `todos.show` or `list full=true`): a task changed since the caller
+---read it is then refused as `stale`, never overwritten. Without one, the
+---rev just read is used: the change between the two reads is the caller's
+---to accept (the no-rev convenience).
+---@param rev string|nil the caller's rev
 ---@return table|nil before, table|nil after, table|nil err
-local function mutate(verb, id, ...)
-  local cur, gerr = current(id)
+local function mutate(verb, id, rev, ...)
+  local cur, gerr, ctx = current(id)
   if not cur then return nil, nil, gerr end
-  local t, err, ctx = store.call(verb, id, cur.rev, ...)
+  local t, err = store.call_at(ctx, verb, id, rev or cur.rev, ...)
   if err then return nil, nil, err end
   if type(t) == "table" then t.file_path = store.file_path(ctx, t) end
   return cur, t
@@ -274,7 +284,7 @@ local function h_update(args)
   end
   local patch = vim.deepcopy(args.patch)
   store.absolute_refs(patch)
-  local before, task, err = mutate("update", args.id, patch)
+  local before, task, err = mutate("update", args.id, args.rev, patch)
   if err then return failed(err) end
   store.follow(before, task)
   store.publish("core.todo:changed", { kind = "update", id = args.id })
@@ -283,8 +293,8 @@ end
 
 ---move runs a status-changing write and its effects: open buffers follow the
 ---file, and the panel hears of the move.
-local function move(verb, id, ...)
-  local before, task, err = mutate(verb, id, ...)
+local function move(verb, id, rev, ...)
+  local before, task, err = mutate(verb, id, rev, ...)
   if err then return failed(err) end
   store.follow(before, task)
   if before.status ~= task.status then
@@ -303,8 +313,10 @@ local function h_status(args)
   end
   local cur, gerr = current(args.id)
   if not cur then return failed(gerr) end
-  if cur.status == args.status then return ok_response(cur) end -- the same status is a no-op
-  local failure, _, task = move("status", args.id, args.status)
+  if cur.status == args.status and (args.rev == nil or args.rev == cur.rev) then
+    return ok_response(cur) -- the same status is a no-op
+  end
+  local failure, _, task = move("status", args.id, args.rev, args.status)
   if failure then return failure end
   return ok_response(task)
 end
@@ -321,7 +333,7 @@ local function h_assign(args)
   local who = type(args.assignee) == "string" and args.assignee or ""
   local extra = { who }
   if args.reason and args.reason ~= "" then extra[2] = args.reason end
-  local failure, _, task = move("assign", args.id, unpack(extra))
+  local failure, _, task = move("assign", args.id, args.rev, unpack(extra))
   if failure then return failure end
   store.publish("core.todo:changed", { kind = "assign", id = args.id })
   if who ~= "" then store.poke_notifier() end
@@ -329,12 +341,12 @@ local function h_assign(args)
 end
 
 local function h_archive(args)
-  return h_status({ id = args.id, status = "archived" })
+  return h_status({ id = args.id, rev = args.rev, status = "archived" })
 end
 
 local function h_remove(args)
   local bad = need_id(args); if bad then return bad end
-  local _, _, err = mutate("remove", args.id)
+  local _, _, err = mutate("remove", args.id, args.rev)
   if err then return failed(err) end
   store.publish("core.todo:changed", { kind = "remove", id = args.id })
   return ok_response({ removed = args.id })
@@ -414,33 +426,33 @@ local SPECS = {
   },
   ["todos.update"] = {
     owner       = "auto-agents",
-    description = "Patch a task's hand-editable fields (title, description, priority, due, tags, adr, review, blocked). `status` goes through todos.status and `assignee` through todos.assign; a patch naming either is refused. Returns the updated task.",
-    schema      = { id = "string", patch = "any" },
+    description = "Patch a task's hand-editable fields (title, description, priority, due, tags, adr, review, blocked). `status` goes through todos.status and `assignee` through todos.assign; a patch naming either is refused. Pass `rev` (from todos.show) to have a task changed since then refused as `stale` rather than overwritten. Returns the updated task.",
+    schema      = { id = "string", rev = "string?", patch = "any" },
     handler     = h_update,
   },
 
   ["todos.status"] = {
     owner       = "auto-agents",
     description = "Transition a task between open/in-progress/completed/deferred/archived. Fires `core.todo.status:changed` so the panel + subscribers update. Direct YAML `status:` edits change state on disk but do NOT fire this event — use this verb when other agents need to know.",
-    schema      = { id = "string", status = "string" },
+    schema      = { id = "string", rev = "string?", status = "string" },
     handler     = h_status,
   },
   ["todos.assign"] = {
     owner       = "auto-agents",
     description = "Set the task's assignee. Assigning an `open` task makes it `in-progress` in the same write (D1). auto-core's notifier sends the recipient a one-shot 'assigned to you' mailbox message (its id makes a repeat a duplicate). Pass `assignee = nil` to clear. Direct YAML `assignee:` edits stay metadata-only by design — use this verb when you want the recipient to be notified.",
-    schema      = { id = "string", assignee = "string?", reason = "string?" },
+    schema      = { id = "string", rev = "string?", assignee = "string?", reason = "string?" },
     handler     = h_assign,
   },
   ["todos.archive"] = {
     owner       = "auto-agents",
     description = "Move a task to archived/YYYY/MM/. Convenience alias for `todos.status` with status=archived; stamps archived_at + preserves completed_at when coming from completed.",
-    schema      = { id = "string" },
+    schema      = { id = "string", rev = "string?" },
     handler     = h_archive,
   },
   ["todos.remove"] = {
     owner       = "auto-agents",
     description = "Hard-delete a task. Irreversible; AutoDoc journals it. Returns `{removed: <id>}` on success.",
-    schema      = { id = "string" },
+    schema      = { id = "string", rev = "string?" },
     handler     = h_remove,
   },
 

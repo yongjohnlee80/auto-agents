@@ -42,6 +42,8 @@ mutants=(
   "$H|the assignee-routing subscriber comes back|---Return the absolute filesystem path to the bundled|function M.install_assignee_routing() end\n\n---Return the absolute filesystem path to the bundled"
   "$D|AutoDoc missing becomes an internal_error|      envelope = \"dependency_unavailable\"|      envelope = \"internal_error\""
   "$D|open buffers stay on the old path|  if from ~= to then pcall(buffers.retarget, from, to) else pcall(buffers.reload, to) end|  local _ = buffers"
+  "$H|the caller's rev is ignored (a stale patch overwrites)|  local t, err = store.call_at(ctx, verb, id, rev or cur.rev, ...)|  local t, err = store.call_at(ctx, verb, id, cur.rev, ...)"
+  "$H|the write re-resolves the project after the read|  local t, err = store.call_at(ctx, verb, id, rev or cur.rev, ...)|  local t, err = store.call(verb, id, rev or cur.rev, ...)"
   "$D|refs go to AutoDoc with Neovim's vars unresolved|  local ok, vars = pcall(require, \"auto-core.todo.vars\")\n  if not ok or type(vars.resolve_path) ~= \"function\" then return end|  do return end\n  local ok, vars = pcall(require, \"auto-core.todo.vars\")"
 )
 
