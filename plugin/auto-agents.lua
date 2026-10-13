@@ -406,33 +406,6 @@ end, {
   desc  = "Open the auto-agents `todos.*` command-surface bootstrap doc in a buffer",
 })
 
-vim.api.nvim_create_user_command("AutoAgentsMigrateKbTodos", function(opts)
-  -- Defaults to a dry-run; pass `--apply` (or any positional flag
-  -- starting with `--apply`) to commit. The bang form `!` is
-  -- accepted as a shorthand for `--apply`.
-  local apply = opts.bang == true
-  for _, arg in ipairs(opts.fargs) do
-    if arg == "--apply" or arg == "apply" then apply = true end
-  end
-  local ok, mod = pcall(require, "auto-agents.todos.migrate_kb")
-  if not ok then
-    vim.notify(
-      "auto-agents.todos.migrate_kb failed to load: " .. tostring(mod),
-      vim.log.levels.ERROR)
-    return
-  end
-  local ok_run, summary = pcall(mod.migrate, { apply = apply })
-  if not ok_run then
-    vim.notify("migrate failed: " .. tostring(summary), vim.log.levels.ERROR)
-    return
-  end
-  mod.format_summary(summary)
-end, {
-  nargs = "*",
-  bang  = true,
-  desc  = "Migrate KB synthesis `type:todo-list` docs into the active .todo-list/ (dry-run by default; ! or --apply to commit)",
-})
-
 vim.api.nvim_create_user_command("AutoAgentsMigrateCmd", function(opts)
   -- Defaults to a dry-run; pass `--apply` (or any positional flag
   -- starting with `--apply`) to commit. The bang form `!` is

@@ -1447,8 +1447,11 @@ do
   ok("19b: kb-seeds/ holds only the todo-handling seed",
     #seeds == 1 and seeds[1] == "_todo-handling.md", vim.inspect(seeds))
   local seed_text = table.concat(vim.fn.readfile(project_root .. "/kb-seeds/_todo-handling.md"), "\n")
-  ok("19b: the todo-handling seed is the convention, revision 5 (its examples at the KB v2 paths)",
-    seed_text:find("\nrevision: 5\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil)
+  ok("19b: the todo-handling seed is the convention, revision 6 (AutoDoc owns the store; no import)",
+    seed_text:find("\nrevision: 6\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil
+      and seed_text:find("**Revision**: 6", 1, true) ~= nil)
+  ok("19b: …and names no migration command or auto-core.todo Lua API",
+    seed_text:find("MigrateKbTodos", 1, true) == nil and seed_text:find('require("auto-core.todo")', 1, true) == nil)
   ok("19b: …no example names a v1 path (shared/adrs, shared/conventions)",
     seed_text:find("shared/adrs", 1, true) == nil and seed_text:find("shared/conventions", 1, true) == nil)
   ok("19b: kb.todo_convention_seed() resolves it",
@@ -1825,28 +1828,19 @@ end
 -- ──────────────── 24. todos.* mailbox surface ────────────────────
 -- ADR-0035's automation (todo_automation.lua, todos.fire,
 -- todos.automation_set, :AutoAgentsTodosAutomationEnable) was removed by
--- ADR 1791532020 §3 step 3. What stays: the `assign user` sentinel skip
--- in the recipient router, and the thirteen remaining todos.* verbs.
-print("\n[24] todos.* mailbox surface (automation removed, ADR 1791532020)")
+-- ADR 1791532020 §3 step 3; todos.import, migrate_kb and the
+-- assignee-routing subscriber by step 4 (D3; the notifier is auto-core's).
+-- What stays: the twelve todos.* verbs, which call AutoDoc's daemon
+-- (tests/todos_daemon_spec.lua runs them against a real one).
+print("\n[24] todos.* mailbox surface (automation and import removed, ADR 1791532020)")
 do
   local todos_mod = require("auto-agents.mailbox.todos_commands")
-  local events = require("auto-core.events")
 
-  -- 24f. assign user sentinel: the assignee-routing subscriber
-  -- skips mailbox delivery for `to == "user"`. We don't have a
-  -- live mailbox in smoke; assert behavior via direct event
-  -- publish: triggering the assignee event with to="user" must not fail.
-  todos_mod.install_assignee_routing()
-  local published = pcall(events.publish, "core.todo.assignee:changed", {
-    id        = "test-assign-user",
-    title     = "smoke fixture",
-    file_path = "/tmp/nonexistent.md",
-    from      = nil,
-    to        = "user",
-    reason    = nil,
-    at        = "2026-05-30T00:00:00Z",
-  })
-  ok("assign user sentinel: event publish completes without error", published)
+  -- 24f. Assignment notices are auto-core's notifier's (ADR §2.5): no
+  -- subscriber here can send a second copy.
+  ok("24f: the assignee-routing subscriber is gone",
+    todos_mod.install_assignee_routing == nil and todos_mod.uninstall_assignee_routing == nil)
+  ok("24f: control — register_all is still there", type(todos_mod.register_all) == "function")
 
   -- 24g. The automation surface is gone: no module, no verbs, no user
   -- command. Each probe is checked against something that IS present, so
@@ -1860,6 +1854,11 @@ do
   ok("24g: control — :AutoAgentsTodosDoc exists", vim.fn.exists(":AutoAgentsTodosDoc") == 2)
   ok("24g: :AutoAgentsTodosAutomationEnable no longer exists",
     vim.fn.exists(":AutoAgentsTodosAutomationEnable") == 0)
+  ok("24g: :AutoAgentsMigrateKbTodos no longer exists (import was dropped, D3)",
+    vim.fn.exists(":AutoAgentsMigrateKbTodos") == 0)
+  ok("24g: auto-agents.todos.migrate_kb no longer exists",
+    pcall(require, "auto-agents.todos.migrate_kb") == false)
+  ok("24g: todos.import is not in SPECS", todos_mod._SPECS["todos.import"] == nil)
 
   -- 24n. The todos.* verbs still register with the mailbox and the todo
   -- bootstrap doc still resolves.
@@ -1869,13 +1868,14 @@ do
   local missing = {}
   for _, verb in ipairs({ "todos.list", "todos.show", "todos.list_dirs", "todos.get_dir", "todos.add",
                           "todos.update", "todos.status", "todos.assign", "todos.archive",
-                          "todos.remove", "todos.refresh", "todos.set_dir", "todos.import" }) do
+                          "todos.remove", "todos.refresh", "todos.set_dir" }) do
     if not listed[verb] then missing[#missing + 1] = verb end
   end
-  ok("24n: the 13 documented todos.* verbs are registered", #missing == 0, vim.inspect(missing))
+  ok("24n: the 12 documented todos.* verbs are registered", #missing == 0, vim.inspect(missing))
   ok("24n: register_all skipped nothing", #reg.skipped == 0, vim.inspect(reg.skipped))
-  ok("24n: todos.fire / todos.automation_set are not registered",
-    listed["todos.list"] == true and not listed["todos.fire"] and not listed["todos.automation_set"])
+  ok("24n: todos.fire / todos.automation_set / todos.import are not registered",
+    listed["todos.list"] == true and not listed["todos.fire"] and not listed["todos.automation_set"]
+      and not listed["todos.import"])
   local bdoc = todos_mod.bootstrap_doc_path()
   ok("24n: the todo bootstrap doc still resolves",
     type(bdoc) == "string" and vim.fn.filereadable(bdoc) == 1, tostring(bdoc))
@@ -1945,7 +1945,7 @@ end
 -- the table it describes and was wrong from v0.2.49 (when ADR-0035 added
 -- the two) through v0.2.62 — fourteen tags — and auto-agents' README then
 -- inherited the count from it. (Both verbs were later removed with
--- automation, ADR 1791532020; SPECS has thirteen again.)
+-- automation, ADR 1791532020, and todos.import with D3; SPECS has twelve.)
 --
 -- Nothing could have caught it, because nothing compared the two. A count
 -- in a doc comment is a claim about a table; this cell makes it a fact.
@@ -3434,64 +3434,7 @@ do
 end
 
 
--- ───────────── 31. migrate_kb is KB-layout-agnostic (v0.3.0) ─────────────
--- :AutoAgentsMigrateKbTodos stays (the managed block's unchanged todo
--- protocol names it) but no longer assumes `shared/synthesis/`: it reads
--- KB v1 and KB v2 synthesis folders and archives each doc within its own
--- layout, never overwriting.
-print("\n[31] migrate_kb — KB v1 and v2 layouts, archive per layout, no overwrite")
-do
-  local mk = require("auto-agents.todos.migrate_kb")
-  local kb31 = vim.fn.tempname() .. "_kb31"
-  local function put(p, text)
-    vim.fn.mkdir(vim.fn.fnamemodify(p, ":h"), "p")
-    local f = assert(io.open(p, "w")); f:write(text); f:close()
-  end
-  local TODO = "# Todos\n\n**Tags:** `type:todo-list` `repo:x`\n"
-  put(kb31 .. "/shared/synthesis/v1-todos.md", TODO)
-  put(kb31 .. "/synthesis/v2-todos.md", TODO)
-  put(kb31 .. "/synthesis/clash-todos.md", TODO)
-  put(kb31 .. "/archive/synthesis/clash-todos.md", "already archived\n")
-  put(kb31 .. "/synthesis/not-a-todo.md", "# Note\n\n**Tags:** `type:synthesis`\n")
-
-  local found = mk.scan(kb31)
-  local names = {}
-  for _, p in ipairs(found) do names[#names + 1] = p:sub(#kb31 + 2) end
-  ok("31a: scan finds todo-lists in both layouts (and nothing else)",
-    vim.deep_equal(names, { "shared/synthesis/v1-todos.md", "synthesis/clash-todos.md", "synthesis/v2-todos.md" }),
-    vim.inspect(names))
-  ok("31a: a v1 doc archives under shared/synthesis/archive/",
-    mk.archive_dir_for(kb31, kb31 .. "/shared/synthesis/v1-todos.md") == kb31 .. "/shared/synthesis/archive")
-  ok("31a: a v2 doc archives under archive/synthesis/",
-    mk.archive_dir_for(kb31, kb31 .. "/synthesis/v2-todos.md") == kb31 .. "/archive/synthesis")
-
-  -- 31b. --apply with auto-core.todo stubbed, so nothing reaches a real store.
-  local saved_todo = package.loaded["auto-core.todo"]
-  package.loaded["auto-core.todo"] = {
-    get_todo_dir = function() return kb31 .. "/.todo-stub" end,
-    import = function(src) return { { id = vim.fn.fnamemodify(src, ":t:r"), status = "open" } } end,
-  }
-  local run_ok, summary = pcall(mk.migrate, { apply = true, kb_root = kb31 .. "/" })
-  package.loaded["auto-core.todo"] = saved_todo
-  ok("31b: apply runs", run_ok, tostring(summary))
-  if run_ok then
-    ok("31b: the v1 doc moved to shared/synthesis/archive/",
-      vim.fn.filereadable(kb31 .. "/shared/synthesis/archive/v1-todos.md") == 1
-        and vim.fn.filereadable(kb31 .. "/shared/synthesis/v1-todos.md") == 0)
-    ok("31b: the v2 doc moved to archive/synthesis/",
-      vim.fn.filereadable(kb31 .. "/archive/synthesis/v2-todos.md") == 1
-        and vim.fn.filereadable(kb31 .. "/synthesis/v2-todos.md") == 0)
-    local clash = table.concat(vim.fn.readfile(kb31 .. "/archive/synthesis/clash-todos.md"), "\n")
-    ok("31b: an existing archive target is never overwritten",
-      clash == "already archived" and vim.fn.filereadable(kb31 .. "/synthesis/clash-todos.md") == 1, clash)
-    local clash_err = false
-    for _, e in ipairs(summary.errors) do
-      if e.phase == "archive" and tostring(e.err):find("not overwritten", 1, true) then clash_err = true end
-    end
-    ok("31b: the clash is reported as an archive error", clash_err, vim.inspect(summary.errors))
-  end
-  pcall(vim.fn.delete, kb31, "rf")
-end
+-- [31] (migrate_kb, :AutoAgentsMigrateKbTodos) went with import: ADR 1791532020 D3.
 
 -- ──── 32. Git-root fallback keeps project identity absolute ────
 print("\n[32] Git-root fallback and project config identity")

@@ -73,6 +73,11 @@ its helpers all share one panel.
 - **[`folke/snacks.nvim`](https://github.com/folke/snacks.nvim)** — required
   for the `:AutoAgentsDock` navigation dock and the playground-terminal floats
   (`T1..T4`).
+- **[AutoDoc](https://github.com/yongjohnlee80/autodoc)** — required by the
+  `todos.*` mailbox verbs: autodoc.nvim **v0.1.39** or later and its binary, with
+  auto-core **v0.4.0** or later (its store resolution, `auto-core.todo.where`).
+  AutoDoc's daemon owns the todo store (ADR 1791532020); without it the verbs
+  answer `dependency_unavailable` ("AutoDoc required").
 
 > **Caret pin (`^0.2.0`)**: future v0.2.x releases auto-include without a
 > manual bump. The `auto-core` family follows an additive-only minor-bump
@@ -368,9 +373,9 @@ the verb does, which is the shape worth avoiding rather than mirroring.
 Either side *may* register — the registry is shared, and this repo does
 both. Verbs registered here are `wake`, `say`, `send_user`, `peek`,
 `diff_queue`, `refresh_agent_id`, `addressbook`, `commands_list`, plus the
-`todos.*` roster (ADR-0031 §5's 13 thin wrappers over `auto-core.todo`;
-ADR-0035's `todos.fire` and `todos.automation_set` were removed with
-automation by ADR 1791532020) and
+`todos.*` roster (ADR-0031 §5's 12 thin wrappers over AutoDoc's daemon,
+ADR 1791532020; ADR-0035's `todos.fire` and `todos.automation_set` went with
+automation, and `todos.import` with D3) and
 the `review.*` namespace, four verbs wrapping `worktree.review`. So "it
 wraps another plugin's Lua API" is not by itself a reason to put a verb in
 that plugin.
@@ -609,7 +614,7 @@ something that moved underneath it:
 |---|---|---|
 | commit SHA | `actions/checkout` | a tag can be moved to different code under the same name |
 | version **and SHA-256** | Neovim `v0.12.5` | a release asset can be replaced under the same tag and name, so the version alone is not reproducible |
-| commit SHA | `auto-core.nvim`, `worktree.nvim`, `plenary.nvim` | reproducibility; the pin's age is reported (see below) |
+| commit SHA | `auto-core.nvim`, `worktree.nvim`, `plenary.nvim`, `autodoc` | reproducibility; the pin's age is reported (see below) |
 
 **`drift` — the early warning.** The same suite, with **auto-core resolved
 at its default branch** instead of the commit `lua` pins. A regression in

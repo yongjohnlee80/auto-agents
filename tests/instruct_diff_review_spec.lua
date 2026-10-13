@@ -240,7 +240,8 @@ do
     and block:find("$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC", 1, true) ~= nil)
   ok("todo protocol kept", block:find("### Todo handling", 1, true) ~= nil
     and block:find("$AUTO_AGENTS_TODOS_CONVENTION_DOC", 1, true) ~= nil
-    and block:find(":AutoAgentsMigrateKbTodos --apply", 1, true) ~= nil)
+    and block:find("todos.set_dir", 1, true) ~= nil
+    and block:find(":AutoAgentsMigrateKbTodos", 1, true) == nil)
   ok("model preference kept", block:find("### Model preference", 1, true) ~= nil)
 
   -- A primary imported before it was given a workspace.
