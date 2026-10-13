@@ -1,4 +1,4 @@
----auto-agents.mailbox.todos_commands — register the 15 mailbox
+---auto-agents.mailbox.todos_commands — register the 13 mailbox
 ---verbs that expose `auto-core.todo` to peer agents (ADR-0031 §5).
 ---
 ---Each verb is a thin wrapper around the corresponding Lua API in
@@ -7,7 +7,7 @@
 ---/ `addressbook` / `commands_list` / `diff_queue` etc. surface in
 ---`commands_list` output.
 ---
----Verb roster (15 total):
+---Verb roster (13 total):
 ---
 ---  Read:
 ---    todos.list       — list tasks (optional status filter)
@@ -30,11 +30,8 @@
 ---    todos.set_dir    — point this workspace at a different .todo-list/
 ---    todos.import     — bulk import from a KB-format source
 ---
----  Automation (ADR-0035):
----    todos.fire          — run a task's automation now (bypass flags
----                          are refused from the mailbox)
----    todos.automation_set — configure a task's automation block
----                          (bash_enabled=true requires an explicit ack)
+---ADR-0035's automation verbs (`todos.fire`, `todos.automation_set`)
+---were removed with automation itself (ADR 1791532020 §3 step 3).
 ---
 ---This roster and the counts above are ASSERTED against `SPECS` by
 ---`tests/smoke.lua` [24l]. They were wrong from v0.2.49 (when ADR-0035
@@ -287,77 +284,6 @@ local function h_import(args)
   return ok_response(result)
 end
 
--- ─── ADR-0035 Phase 2: automation surface ─────────────────────────
-
----Lazy-load auto-core.todo.automation. Same pattern as todo_or_err.
-local function automation_or_err()
-  local ok, mod = pcall(require, "auto-core.todo.automation")
-  if not ok or type(mod) ~= "table" then
-    return nil, err_response("dependency_unavailable",
-      "auto-core.todo.automation module is not available")
-  end
-  return mod
-end
-
----Manual fire of an automated template. Wraps
----`auto-core.todo.automation.fire(id, opts)`.
----
----ADR §10: bypass flags (`bypass_bash_disabled`, `bypass_allowlist`)
----are NOT available through the mailbox surface AT ALL. The
----registered handler signature doesn't carry the mailbox `from:`
----field, so we can't distinguish agent vs user callers reliably.
----Rather than fall back to a weaker boundary, the mailbox path
----always refuses bypass — admin / user who genuinely need it call
----the underlying Lua API directly (`require("auto-core.todo.automation").fire(id, {bypass_bash_disabled=true})`)
----which is a deliberate "you're typing this on the host" gesture.
----@param args table
----@return table envelope
-local function h_fire(args)
-  local automation, errenv = automation_or_err(); if not automation then return errenv end
-  if type(args.id) ~= "string" or args.id == "" then
-    return err_response("invalid_args", "args.id must be a non-empty string")
-  end
-  if args.bypass_bash_disabled == true or args.bypass_allowlist == true then
-    return err_response("mailbox_bypass_rejected",
-      "bypass flags are not available through the mailbox surface; "
-        .. "use the Lua API directly on the host (admin/user only)")
-  end
-
-  local opts = { reason = args.reason }
-  local result, ferr = automation.fire(args.id, opts)
-  if not result then return err_response("internal_error", tostring(ferr)) end
-  return ok_response(result)
-end
-
----Manage workspace bash-trust state (`bash_enabled` and
----`bash_allowlist`). Mailbox path enforces `force = false` so a
----remote agent cannot bootstrap bash — the user must run the
----interactive `:AutoAgentsTodosAutomationEnable` command first to
----flip `bash_first_run_acknowledged`. ADR §4.5.
----@param args table
----@return table envelope
-local function h_automation_set(args)
-  local automation, errenv = automation_or_err(); if not automation then return errenv end
-  local opts = {}
-  if args.bash_enabled ~= nil then
-    opts.bash_enabled = args.bash_enabled == true
-  end
-  if args.bash_allowlist ~= nil then
-    opts.bash_allowlist = args.bash_allowlist
-  end
-  -- Critical: never pass force=true from the mailbox path. Only
-  -- the interactive user command can supply that.
-  local ok, serr = automation.set_trust(opts)
-  if not ok then
-    -- Distinguish the acknowledgement-gate error from generic
-    -- validation failures so callers can branch on the code.
-    local code = (serr == "trust_not_acknowledged")
-      and "trust_not_acknowledged" or "invalid_args"
-    return err_response(code, tostring(serr))
-  end
-  return ok_response(automation.trust_state())
-end
-
 -- ─── command specs ────────────────────────────────────────────
 
 ---@type table<string, AutoCoreCommandSpec>
@@ -458,28 +384,6 @@ local SPECS = {
     description = "Bulk import from an external source. `kind` ∈ {kb-todo-list, legacy-todos-md, asana-json}. `dry_run = true` skips writes. See ADR-0031 §3.4.",
     schema      = { source = "string", kind = "string", dry_run = "boolean?" },
     handler     = h_import,
-  },
-
-  -- ADR-0035 Phase 2: automation surface.
-  ["todos.fire"] = {
-    owner       = "auto-agents",
-    description = "Manually trigger an automated template (clone-on-fire). `id` is the template task id. Optional `bypass_bash_disabled` / `bypass_allowlist` are REJECTED for agent callers (user/nvim only). Returns `{clone_id, outcome, errors}`. ADR-0035 §10.",
-    schema      = {
-      id                  = "string",
-      reason              = "string?",
-      bypass_bash_disabled = "boolean?",
-      bypass_allowlist    = "boolean?",
-    },
-    handler     = h_fire,
-  },
-  ["todos.automation_set"] = {
-    owner       = "auto-agents",
-    description = "Manage workspace bash-trust state for the automation engine. Set `bash_enabled` / `bash_allowlist`. Enabling bash requires `bash_first_run_acknowledged = true` — the interactive `:AutoAgentsTodosAutomationEnable` user command is the only way to flip that gate; mailbox callers receive `{ok=false, code=trust_not_acknowledged}` until the user has acknowledged. Returns the resulting trust state. ADR-0035 §4.5 / §10.",
-    schema      = {
-      bash_enabled    = "boolean?",
-      bash_allowlist  = "any?",
-    },
-    handler     = h_automation_set,
   },
 }
 
