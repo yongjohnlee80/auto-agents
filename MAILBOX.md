@@ -178,21 +178,55 @@ args = { slot: string, text: string?, submit: boolean? }
 
 - `slot` — agent name (e.g. `"jarvis"`). Resolved → integer slot
   via `auto_agents.slot_for_name`.
-- `text` — terminal nudge. When omitted, auto-agents synthesizes
-  a default: `ATTENTION: [auto-agents] new <kind> from <mailbox> —
-  check $AUTO_AGENTS_MAILBOX_DIR/<kind>/`. The leading `ATTENTION:`
-  is load-bearing — codex-backed peers treat a wake message starting
-  with `[…]` as a bracketed composer entry and refuse to submit it
-  until the user manually hits ESC + ENTER.
+- `text` — terminal text. When given, it is typed at once (a
+  deliberate message, like `say`). When omitted, auto-agents builds a
+  **notice** (`lua/auto-agents/mailbox/notices.lua`) and types it only
+  when there is something unread to act on:
+  - **inbox arrival** — `ATTENTION: [auto-agents] new inbox from
+    <sender> — <subject> — read it with the Read tool: <path>`. The
+    sender is the message's `from` (auto-core's `ctx.arrival_from`), not
+    the recipient.
+  - **response** — silent when `ok: true`. An error (`ok: false`, or a
+    non-empty `code` / `error`) types `ATTENTION: [auto-agents] <command>
+    failed (<code>): <error> — read it with the Read tool: <path>`.
+  - **routing failure** — the sender gets `ATTENTION: [auto-agents] your
+    message to <to> was not delivered (<reason>): <subject> — it is still
+    in your outbox: <path>`, once per message and reason. Successful
+    routing is silent.
+  - **explicit wake** (an agent's `wake` command) — silent when the
+    target's inbox has nothing unread; otherwise `ATTENTION:
+    [auto-agents] new inbox from <waker> — check your inbox.`
+
+  Notices wait `notices.config.coalesce_ms` (1500 ms) before typing.
+  Arrivals for the same slot in that window fold into one line
+  (`ATTENTION: [auto-agents] 3 new inbox messages from agent:a, agent:b
+  — check your inbox.`), and an item whose file was already read and
+  archived is dropped. Every notice, typed or suppressed, is logged to
+  `:AutoCoreLog` (events `auto-agents.mailbox.notice_{queued,delivered,
+  suppressed,send_failed}`) with the time, slot, kind, sender, subject,
+  path and reason.
+
+  The leading `ATTENTION:` is load-bearing: codex-backed peers treat a
+  message starting with `[…]` as a bracketed composer entry and refuse
+  to submit it until the user presses ESC + ENTER. A path is only ever
+  the last token, never the first, and the generic and coalesced forms
+  are prose only. Sender text (subject, error) has its control
+  characters stripped and is truncated.
 - `submit` — whether to follow the text with a CR (default
   `true`).
 
 Returns:
 
 ```json
+{ "ok": true,  "value": { "slot": 1, "queued": true, "submit": true } }
+{ "ok": true,  "value": { "slot": 1, "suppressed": true, "reason": "nothing_unread" } }
 { "ok": true,  "value": { "slot": 1, "text": "...", "submit": true } }
 { "ok": false, "code": "invalid_args"        | "slot_not_found" | "terminal_unavailable", "error": "..." }
 ```
+
+The `text` form is returned when `args.text` was given. Suppression
+reasons are `nothing_unread`, `response_ok`, `archived_before_delivery`
+and `response_unreadable`.
 
 Used both as the router's wake hook (registered per-agent at
 spawn time as `wake = { command = "wake", args = { slot = "<name>" } }`)
@@ -293,7 +327,11 @@ Rules:
    owner is a fail-fast.
 2. **Handler signature is `fun(args: table, ctx: table): table`.**
    `ctx` carries router metadata when fired as a wake hook
-   (`mailbox`, `mailbox_full`, `arrival_kind`, `arrival_id`).
+   (`mailbox`, `mailbox_full`, `arrival_kind`, `arrival_id`,
+   `arrival_path`, and with auto-core's arrival facts `arrival_from`,
+   `arrival_subject`, `arrival_ok`, `arrival_code`, `arrival_error`,
+   `arrival_command`). `mailbox` is the recipient the hook fired for;
+   `arrival_from` is who sent the file.
 3. **Return a structured response.** `{ ok = true, value = … }` on
    success; `{ ok = false, code = "...", error = "..." }` on
    failure. Never throw — auto-core's `handle_message` catches
