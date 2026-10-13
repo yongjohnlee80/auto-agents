@@ -2,7 +2,7 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## [Unreleased] — the todos.* verbs call AutoDoc itself
+## [v0.3.6] — 2026-10-14 — the todos.* verbs call AutoDoc itself
 
 ADR 1791532020 §3 step 4 (r12). **Requires auto-core v0.4.0 or later and
 autodoc.nvim v0.1.39 or later.** It must ship before auto-core v0.4.1, which
