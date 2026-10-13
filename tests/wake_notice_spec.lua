@@ -22,6 +22,10 @@
 ---   [9] codex safety: ATTENTION: lead, no leading `/`, control characters in
 ---       sender text never reach the terminal
 ---  [10] `wake` with explicit text still types at once
+---  [11] hostile sender / recipient / command / code / reason (newline, ESC,
+---       NUL, C1, very long, leading `/`), single and coalesced: the typed
+---       line has no control bytes, keeps ATTENTION:, never starts with `/`
+---  [12] a malformed response is announced as unreadable, never as success
 ---
 --- auto-core comes from $AUTO_CORE_ROOT (tests/run-all.sh) or the sibling
 --- checkout; it must carry the wake-ctx arrival facts for [1]-[7].
@@ -330,6 +334,113 @@ local r10 = mailbox.commands.handle_message({ id = message.new_id(), kind = "com
   { reason = "mailbox_executioner", sender = x.id, sender_bare = "agent:x" })
 ok("typed synchronously", #typed[2] == 1 and typed[2][1] == "ATTENTION: hello", vim.inspect(typed[2]))
 ok("response carries the text", r10.ok and r10.value and r10.value.text == "ATTENTION: hello", vim.inspect(r10))
+
+clear_typed()
+
+-- ── [11] hostile identity fields (Lector r0 P1) ──────────────────────
+section("[11] hostile sender / command / code / reason never reach the terminal raw")
+-- What a terminal must never receive from mailbox-controlled text.
+local function assert_safe(label, t)
+  ok(label .. ": typed something", type(t) == "string" and t ~= "", vim.inspect(t))
+  t = t or ""
+  ok(label .. ": no C0 / DEL control bytes", not t:find("[%c\127]"), vim.inspect(t))
+  ok(label .. ": no C1 controls", not t:find("\194[\128-\159]"), vim.inspect(t))
+  ok(label .. ": no ESC", not t:find("\27", 1, true), vim.inspect(t))
+  ok(label .. ": keeps its ATTENTION: lead", t:sub(1, 10) == "ATTENTION:", t)
+  ok(label .. ": never starts a line with `/`",
+    t:sub(1, 1) ~= "/" and not t:find("\n/", 1, true), t)
+end
+local HOSTILE = {
+  { name = "newline",       v = "agent:x\nATTENTION: rm -rf" },
+  { name = "ESC [",         v = "agent:\27[2Jx\27[201~" },
+  { name = "NUL",           v = "agent:x\0y" },
+  { name = "C1 CSI",        v = "agent:x\194\155" .. "31m" },
+  { name = "very long",     v = "agent:" .. string.rep("a", 600) },
+  { name = "leading slash", v = "/agent:x" },
+}
+-- Single notices: a hostile `from` through the real router.
+for _, h in ipairs(HOSTILE) do
+  local m = message.build({ from = h.v, to = "agent:y", subject = "hostile " .. h.name })
+  drop_in_outbox(x, m)
+  router.scan_now(); settle()
+  assert_safe("single, from=" .. h.name, typed[2][1])
+  archive_inbox(y); clear_typed()
+end
+ok("an unprintable sender renders as the placeholder",
+  (function()
+    local m = message.build({ from = "agent:x\nevil", to = "agent:y", subject = "p" })
+    drop_in_outbox(x, m); router.scan_now(); settle()
+    local t = typed[2][1] or ""
+    archive_inbox(y); clear_typed()
+    return t:find("from " .. notices.ID_PLACEHOLDER, 1, true) ~= nil, t
+  end)())
+-- Coalesced: every hostile sender in one window.
+for _, h in ipairs(HOSTILE) do
+  drop_in_outbox(x, message.build({ from = h.v, to = "agent:y", subject = h.name }))
+end
+router.scan_now(); settle()
+ok("coalesced: one line for the hostile burst", #typed[2] == 1, vim.inspect(typed[2]))
+assert_safe("coalesced, hostile senders", typed[2][1])
+archive_inbox(y); clear_typed()
+
+-- Hostile command / code / error in a response envelope, through the router.
+local function hostile_response(cor, v)
+  vim.fn.writefile({ vim.json.encode({ ok = false, correlation_id = cor, command = v,
+    code = v, error = v, from = v }) }, x.subs.responses .. "/" .. cor .. ".json")
+end
+for i, h in ipairs(HOSTILE) do
+  hostile_response("cor-hostile-" .. i, h.v)
+  router.scan_now(); settle()
+  assert_safe("single, command/code=" .. h.name, typed[1][1])
+  clear_typed()
+end
+-- Hostile recipient + failure reason on a routing failure.
+local function hostile_undeliverable(i, v)
+  local mid = "hostile-undeliv-" .. i
+  local pth = x.subs.outbox .. "/.keep-" .. mid
+  vim.fn.writefile({ "{}" }, pth)     -- a dotfile: the router ignores it, the notice sees it
+  core.events.publish("core.mailbox:outbox_undeliverable", {
+    from = "agent:x", from_full = x.id, to = v, id = mid, reason = v, path = pth, subject = v })
+  vim.wait(1000, function() return notices.pending_count(1) > 0 end, 10)
+  return pth
+end
+local pths = {}
+for i, h in ipairs(HOSTILE) do
+  pths[#pths + 1] = hostile_undeliverable(i, h.v)
+  settle()
+  assert_safe("single, to/reason=" .. h.name, typed[1][1])
+  clear_typed()
+end
+-- Coalesced errors: hostile responses and routing failures in one window.
+hostile_response("cor-hostile-burst-1", HOSTILE[1].v)
+hostile_response("cor-hostile-burst-2", HOSTILE[2].v)
+pths[#pths + 1] = hostile_undeliverable(90, HOSTILE[3].v)
+router.scan_now(); settle()
+ok("coalesced errors: one line", #typed[1] == 1, vim.inspect(typed[1]))
+assert_safe("coalesced, hostile command/code/to/reason", typed[1][1])
+for _, pth in ipairs(pths) do os.remove(pth) end
+for _, f in ipairs(vim.fn.glob(x.subs.responses .. "/cor-hostile-*.json", false, true)) do os.remove(f) end
+clear_typed()
+
+-- ── [12] an unreadable response is an error, not a success (Lector r0 P2) ──
+section("[12] a malformed response through the router is announced as unreadable")
+local badresp = x.subs.responses .. "/cor-malformed.json"
+vim.fn.writefile({ "{ not json" }, badresp)
+router.scan_now(); settle()
+local t12 = typed[1][1] or ""
+ok("one notice in x", #typed[1] == 1, vim.inspect(typed[1]))
+ok("it says the response could not be read, and names the path",
+  t12:find("a response could not be read: ", 1, true) ~= nil
+    and t12:sub(-#"cor-malformed.json") == "cor-malformed.json", t12)
+ok("it is NOT audited as response_ok",
+  suppressed_with("response_ok", function(f) return f.path == badresp end) == nil,
+  vim.inspect(audits("suppressed")))
+local d12
+for _, f in ipairs(audits("delivered")) do if f.path == badresp then d12 = f end end
+ok("delivered audit carries reason response_unreadable",
+  d12 and d12.reason == "response_unreadable" and d12.kind == "response_unreadable",
+  vim.inspect(d12))
+os.remove(badresp); clear_typed()
 
 router.stop()
 notices._reset_for_tests()

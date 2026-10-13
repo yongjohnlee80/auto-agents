@@ -188,7 +188,9 @@ args = { slot: string, text: string?, submit: boolean? }
     the recipient.
   - **response** — silent when `ok: true`. An error (`ok: false`, or a
     non-empty `code` / `error`) types `ATTENTION: [auto-agents] <command>
-    failed (<code>): <error> — read it with the Read tool: <path>`.
+    failed (<code>): <error> — read it with the Read tool: <path>`. A
+    response that cannot be read or decoded is an error too:
+    `ATTENTION: [auto-agents] a response could not be read: <path>`.
   - **routing failure** — the sender gets `ATTENTION: [auto-agents] your
     message to <to> was not delivered (<reason>): <subject> — it is still
     in your outbox: <path>`, once per message and reason. Successful
@@ -210,8 +212,12 @@ args = { slot: string, text: string?, submit: boolean? }
   message starting with `[…]` as a bracketed composer entry and refuse
   to submit it until the user presses ESC + ENTER. A path is only ever
   the last token, never the first, and the generic and coalesced forms
-  are prose only. Sender text (subject, error) has its control
-  characters stripped and is truncated.
+  are prose only. Every field taken from a message or envelope is
+  sanitized before rendering: ESC sequences, C0/DEL/C1 controls and
+  invalid UTF-8 are removed; identity fields (sender, recipient,
+  command, code, failure reason) must be letters, digits and `:._-@/`
+  (at most 64 characters) or they render as `(unprintable)`; subject
+  and error are truncated.
 - `submit` — whether to follow the text with a CR (default
   `true`).
 
@@ -225,8 +231,8 @@ Returns:
 ```
 
 The `text` form is returned when `args.text` was given. Suppression
-reasons are `nothing_unread`, `response_ok`, `archived_before_delivery`
-and `response_unreadable`.
+reasons are `nothing_unread`, `response_ok` and
+`archived_before_delivery`.
 
 Used both as the router's wake hook (registered per-agent at
 spawn time as `wake = { command = "wake", args = { slot = "<name>" } }`)
