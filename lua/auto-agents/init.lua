@@ -509,23 +509,6 @@ function M.setup(opts)
       require("auto-agents.log").warn("init",
         "review.* mailbox surface unavailable: " .. tostring(rev_mod))
     end
-
-    -- ADR-0035 Phase 2: register auto-agents-owned execute primitives
-    -- with the auto-core automation engine, and install the KB-audit
-    -- subscriber. Auto-core knows nothing about slots, terminals, or
-    -- the KB — that knowledge stays here, behind the hook/executor
-    -- registry boundary per ADR-0035 §"Plugin boundaries (recap)".
-    local ok_aa_auto, aa_auto = pcall(require, "auto-agents.todo_automation")
-    if ok_aa_auto then
-      local ok_install, install_err = pcall(aa_auto.install)
-      if not ok_install then
-        require("auto-agents.log").warn("init",
-          "todo automation install failed: " .. tostring(install_err))
-      end
-    else
-      require("auto-agents.log").warn("init",
-        "todo_automation module unavailable: " .. tostring(aa_auto))
-    end
   end)
   if not ok_mailbox_wire then
     require("auto-agents.log").error("init",
