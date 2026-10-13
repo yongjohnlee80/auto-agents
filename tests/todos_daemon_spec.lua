@@ -290,33 +290,71 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────
-section("a project switch while the read waits: the write goes to the store it read (Lector #26 r0 P2 2)")
-do
-  local sid = run("todos.add", { title = "Bound to its store" }).value.id
-  local proj2 = sb .. "/proj-switched"
-  vim.fn.mkdir(proj2, "p")
-  local switch_on_get = true
+section("a project switch during any wait: the handler's whole sequence stays on its store (Lector #26 r0 P2 2, r1 P2)")
+---switch_during runs fn while a spy switches the workspace root to `to` the
+---moment `hook_verb` answers, and records the `at` of every verb sent after it.
+local function switch_during(hook_verb, to, fn)
+  local switched, after = false, {}
   local spy = ad_todos.call
   ad_todos.call = function(verb, params, cb)
+    if switched then after[#after + 1] = { verb = verb, at = params[1] } end
     spy(verb, params, function(r, e)
-      if verb == "get" and switch_on_get then
-        switch_on_get = false
-        worktree.set_workspace_root(proj2) -- the user switched projects meanwhile
+      if verb == hook_verb and not switched then
+        switched = true
+        worktree.set_workspace_root(to) -- the user switched projects meanwhile
       end
       cb(r, e)
     end)
   end
-  last_params = {}
-  local r = run("todos.update", { id = sid, patch = { priority = "high" } })
+  local okr, r = pcall(fn)
   ad_todos.call = spy
-  local wrote_at = last_params["update"] and last_params["update"][1]
-  ok("fixture: the project switched during the read", switch_on_get == false)
-  ok("the update succeeded", r.ok and r.value.priority == "high", vim.inspect(r))
-  ok("… sent to the store the task was read from, not the new project's",
-    type(wrote_at) == "table" and wrote_at.root == proj, vim.inspect(wrote_at))
-  ok("… and the new project got no store", vim.fn.isdirectory(proj2 .. "/.todo-list") == 0)
+  if not okr then r = { ok = false, code = "raised", error = tostring(r) } end
+  return r, switched, after
+end
+---stayed says every verb sent after the switch named `root`'s store.
+local function stayed(after, root)
+  if #after == 0 then return false end
+  for _, a in ipairs(after) do
+    if type(a.at) ~= "table" or a.at.root ~= root then return false end
+  end
+  return true
+end
+do
+  local proj2 = sb .. "/proj-switched"
+  vim.fn.mkdir(proj2, "p")
+  local function cases(name, hook, fn, check)
+    local r, switched, after = switch_during(hook, proj2, fn)
+    worktree.set_workspace_root(proj)
+    ok(name .. ": fixture — the project switched while " .. hook .. " waited", switched)
+    ok(name .. ": the handler answered", r.ok, vim.inspect(r))
+    ok(name .. ": every later verb went to the store it started on", stayed(after, proj), vim.inspect(after))
+    ok(name .. ": the new project got no store", vim.fn.isdirectory(proj2 .. "/.todo-list") == 0)
+    if check then check(r) end
+  end
+
+  local sid = run("todos.add", { title = "Bound to its store" }).value.id
+  cases("update", "get", function() return run("todos.update", { id = sid, patch = { priority = "high" } }) end,
+    function(r) ok("update: … and it landed", r.value and r.value.priority == "high") end)
+  cases("status", "get", function() return run("todos.status", { id = sid, status = "deferred" }) end,
+    function(r) ok("status: … and it moved", r.value and r.value.status == "deferred") end)
+  cases("archive", "get", function() return run("todos.archive", { id = sid }) end,
+    function(r) ok("archive: … and it archived", r.value and r.value.status == "archived") end)
+
+  -- add on a project with no store yet: the switch lands as the daemon answers
+  -- not_a_store, between the add and the scaffold
+  local proj3 = sb .. "/proj-new"
+  vim.fn.mkdir(proj3, "p")
+  worktree.set_workspace_root(proj3)
+  local r, switched, after = switch_during("add", proj2, function()
+    return run("todos.add", { title = "Made in proj-new" })
+  end)
   worktree.set_workspace_root(proj)
-  run("todos.remove", { id = sid })
+  ok("add: fixture — the project switched after the first add answered", switched)
+  ok("add: the handler answered", r.ok, vim.inspect(r))
+  ok("add: the scaffold and the retried add went to proj-new's store", stayed(after, proj3)
+    and #after == 2, vim.inspect(after))
+  ok("add: proj-new has its store and the task", vim.fn.isdirectory(proj3 .. "/.todo-list/open") == 1)
+  ok("add: the project switched to got no store", vim.fn.isdirectory(proj2 .. "/.todo-list") == 0)
 end
 
 -- ─────────────────────────────────────────────────────────────

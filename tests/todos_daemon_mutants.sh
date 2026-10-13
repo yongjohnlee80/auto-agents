@@ -44,6 +44,8 @@ mutants=(
   "$D|open buffers stay on the old path|  if from ~= to then pcall(buffers.retarget, from, to) else pcall(buffers.reload, to) end|  local _ = buffers"
   "$H|the caller's rev is ignored (a stale patch overwrites)|  local t, err = store.call_at(ctx, verb, id, rev or cur.rev, ...)|  local t, err = store.call_at(ctx, verb, id, cur.rev, ...)"
   "$H|the write re-resolves the project after the read|  local t, err = store.call_at(ctx, verb, id, rev or cur.rev, ...)|  local t, err = store.call(verb, id, rev or cur.rev, ...)"
+  "$H|status re-resolves the project after its no-op read|  local failure, _, task = move(ctx, \"status\", args.id, args.rev, args.status)|  local failure, _, task = move(store.context(), \"status\", args.id, args.rev, args.status)"
+  "$H|add re-resolves the project for the scaffold|    local _, serr = store.call_at(ctx, \"scaffold\")|    local _, serr = store.call_at(store.context(), \"scaffold\")"
   "$D|refs go to AutoDoc with Neovim's vars unresolved|  local ok, vars = pcall(require, \"auto-core.todo.vars\")\n  if not ok or type(vars.resolve_path) ~= \"function\" then return end|  do return end\n  local ok, vars = pcall(require, \"auto-core.todo.vars\")"
 )
 

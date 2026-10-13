@@ -101,10 +101,24 @@ local function need_id(args)
   end
 end
 
+-- ONE STORE PER CALL. Every handler resolves the project's store once, at its
+-- start (`resolve`), and sends every daemon verb of its sequence to that ctx
+-- (`store.call_at`), never resolving again: the project can switch while any
+-- of the handler's waits runs, and a later step must not land in the new
+-- project's store (Lector #26 r0 P2 2, r1 P2). Handlers never use store.call.
+
+---resolve is a handler's one store resolution.
+---@return table|nil ctx, table|nil envelope  the error envelope when it failed
+local function resolve()
+  local ctx, err = store.context()
+  if not ctx then return nil, err end
+  return ctx
+end
+
 ---current reads one task, with its rev and absolute file_path.
 ---@return table|nil task, table|nil err, table|nil ctx
-local function current(id)
-  local t, err, ctx = store.call("get", id)
+local function current(ctx, id)
+  local t, err = store.call_at(ctx, "get", id)
   if err then return nil, err end
   t.file_path = store.file_path(ctx, t)
   return t, nil, ctx
@@ -121,8 +135,8 @@ end
 ---to accept (the no-rev convenience).
 ---@param rev string|nil the caller's rev
 ---@return table|nil before, table|nil after, table|nil err
-local function mutate(verb, id, rev, ...)
-  local cur, gerr, ctx = current(id)
+local function mutate(ctx, verb, id, rev, ...)
+  local cur, gerr = current(ctx, id)
   if not cur then return nil, nil, gerr end
   local t, err = store.call_at(ctx, verb, id, rev or cur.rev, ...)
   if err then return nil, nil, err end
@@ -132,10 +146,9 @@ end
 
 ---list_bucket lists one bucket, the archive month by month.
 ---@return table[]|nil tasks, table|nil err
-local function list_bucket(status, ctx_out)
+local function list_bucket(ctx, status)
   local tasks = {}
-  local function add(listing, ctx)
-    ctx_out.ctx = ctx
+  local function add(listing)
     for _, t in ipairs((listing and listing.tasks) or {}) do
       t.file_path = store.file_path(ctx, t)
       tasks[#tasks + 1] = t
@@ -143,20 +156,20 @@ local function list_bucket(status, ctx_out)
   end
   if status ~= "archived" then
     local opts = status and { buckets = { status } } or nil
-    local l, err, ctx = store.call("list", opts)
+    local l, err = store.call_at(ctx, "list", opts)
     if err and err.code == store.NOT_A_STORE then return tasks end -- no store yet: no tasks
     if err then return nil, err end
-    add(l, ctx)
+    add(l)
     return tasks
   end
-  local months, merr = store.call("list", { buckets = { "archived" } })
+  local months, merr = store.call_at(ctx, "list", { buckets = { "archived" } })
   if merr and merr.code == store.NOT_A_STORE then return tasks end
   if merr then return nil, merr end
   for _, p in ipairs((months and months.partitions) or {}) do
     if type(p) == "table" and type(p.month) == "string" then
-      local l, err, ctx = store.call("list", { buckets = { "archived/" .. p.month } })
+      local l, err = store.call_at(ctx, "list", { buckets = { "archived/" .. p.month } })
       if err then return nil, err end
-      add(l, ctx)
+      add(l)
     end
   end
   return tasks
@@ -185,16 +198,18 @@ local function h_list(args)
       .. "open, in-progress, deferred, completed, archived, all; got " .. tostring(status_filter))
   end
 
-  local list, holder = {}, {}
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local list = {}
   if status_filter == "all" then
-    local active, err = list_bucket(nil, holder)
+    local active, err = list_bucket(ctx, nil)
     if not active then return failed(err) end
-    local archived, aerr = list_bucket("archived", holder)
+    local archived, aerr = list_bucket(ctx, "archived")
     if not archived then return failed(aerr) end
     vim.list_extend(list, active)
     vim.list_extend(list, archived)
   else
-    local got, err = list_bucket(status_filter, holder)
+    local got, err = list_bucket(ctx, status_filter)
     if not got then return failed(err) end
     list = got
   end
@@ -211,7 +226,9 @@ end
 
 local function h_show(args)
   local bad = need_id(args); if bad then return bad end
-  local task, err = current(args.id)
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local task, err = current(ctx, args.id)
   if not task then
     if err.envelope == "not_found" then
       return err_response("not_found", "task '" .. args.id .. "' not found in active todo dir")
@@ -256,12 +273,14 @@ local function h_add(args)
     if args[k] ~= nil and args[k] ~= vim.NIL then spec[k] = vim.deepcopy(args[k]) end
   end
   store.absolute_refs(spec)
-  local task, err = store.call("add", spec)
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local task, err = store.call_at(ctx, "add", spec)
   if err and err.code == store.NOT_A_STORE then
     -- a new project's store: auto-core registered and claimed it; scaffold it
-    local _, serr = store.call("scaffold")
+    local _, serr = store.call_at(ctx, "scaffold")
     if serr then return failed(serr) end
-    task, err = store.call("add", spec)
+    task, err = store.call_at(ctx, "add", spec)
   end
   if err then return failed(err) end
   store.publish("core.todo:changed", { kind = "add", id = task.id })
@@ -284,7 +303,9 @@ local function h_update(args)
   end
   local patch = vim.deepcopy(args.patch)
   store.absolute_refs(patch)
-  local before, task, err = mutate("update", args.id, args.rev, patch)
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local before, task, err = mutate(ctx, "update", args.id, args.rev, patch)
   if err then return failed(err) end
   store.follow(before, task)
   store.publish("core.todo:changed", { kind = "update", id = args.id })
@@ -293,8 +314,8 @@ end
 
 ---move runs a status-changing write and its effects: open buffers follow the
 ---file, and the panel hears of the move.
-local function move(verb, id, rev, ...)
-  local before, task, err = mutate(verb, id, rev, ...)
+local function move(ctx, verb, id, rev, ...)
+  local before, task, err = mutate(ctx, verb, id, rev, ...)
   if err then return failed(err) end
   store.follow(before, task)
   if before.status ~= task.status then
@@ -311,12 +332,14 @@ local function h_status(args)
     return err_response("invalid_args",
       "args.status must be one of open/in-progress/completed/deferred/archived")
   end
-  local cur, gerr = current(args.id)
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local cur, gerr = current(ctx, args.id)
   if not cur then return failed(gerr) end
   if cur.status == args.status and (args.rev == nil or args.rev == cur.rev) then
     return ok_response(cur) -- the same status is a no-op
   end
-  local failure, _, task = move("status", args.id, args.rev, args.status)
+  local failure, _, task = move(ctx, "status", args.id, args.rev, args.status)
   if failure then return failure end
   return ok_response(task)
 end
@@ -333,7 +356,9 @@ local function h_assign(args)
   local who = type(args.assignee) == "string" and args.assignee or ""
   local extra = { who }
   if args.reason and args.reason ~= "" then extra[2] = args.reason end
-  local failure, _, task = move("assign", args.id, args.rev, unpack(extra))
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local failure, _, task = move(ctx, "assign", args.id, args.rev, unpack(extra))
   if failure then return failure end
   store.publish("core.todo:changed", { kind = "assign", id = args.id })
   if who ~= "" then store.poke_notifier() end
@@ -346,14 +371,18 @@ end
 
 local function h_remove(args)
   local bad = need_id(args); if bad then return bad end
-  local _, _, err = mutate("remove", args.id, args.rev)
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local _, _, err = mutate(ctx, "remove", args.id, args.rev)
   if err then return failed(err) end
   store.publish("core.todo:changed", { kind = "remove", id = args.id })
   return ok_response({ removed = args.id })
 end
 
 local function h_refresh(_args)
-  local summary, err = store.call("refresh")
+  local ctx, cerr = resolve()
+  if not ctx then return failed(cerr) end
+  local summary, err = store.call_at(ctx, "refresh")
   if err and err.code == store.NOT_A_STORE then summary, err = {}, nil end -- nothing yet
   if err then return failed(err) end
   store.publish("core.todo:refreshed", { summary = summary, at = os.date("!%Y-%m-%dT%H:%M:%SZ") })
