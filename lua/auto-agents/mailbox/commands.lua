@@ -90,8 +90,15 @@ end
 ---     popup opens and the bare `<CR>` submits cleanly. The agent knows
 ---     where its mailbox lives from bootstrap-mailbox.md; the path was
 ---     never load-bearing.
+---
+---Who `origin` is: the SENDER of the arriving file (`ctx.arrival_from`,
+---auto-core's wake ctx) or, for an explicit `wake`, the agent that asked
+---for it. It used to be `ctx.mailbox`, the mailbox the hook fired for: the
+---recipient, so every notice named the agent it was typed into (KB todo
+---2026-10-13). Notices are now built and gated in
+---`auto-agents.mailbox.notices`; this function is the single-arrival form.
 ---@param kind string          -- arrival kind ("inbox" | "responses")
----@param origin string        -- originating mailbox name
+---@param origin string        -- who sent it (bare mailbox id)
 ---@param arrival_path string? -- full path of the new message file
 ---@return string
 function M.default_wake_nudge(kind, origin, arrival_path)
@@ -114,9 +121,25 @@ function M.default_wake_nudge(kind, origin, arrival_path)
 end
 
 ---`wake` handler. `args = { slot: string, text: string?, submit: boolean? }`.
----`ctx` carries `mailbox`, `mailbox_full`, `arrival_kind`, `arrival_id`
----when fired by the router as a wake hook (see auto-core
----router.lua:dispatch_wake).
+---`ctx` carries `mailbox`, `mailbox_full`, `arrival_kind`, `arrival_id`,
+---`arrival_path` and (auto-core with arrival facts) `arrival_from`,
+---`arrival_subject`, `arrival_ok`, `arrival_code`, `arrival_error`,
+---`arrival_command` when fired by the router as a wake hook (see auto-core
+---router.lua:dispatch_wake); `sender` / `sender_bare` when an agent sends
+---`wake` through the executioner.
+---
+---Without `args.text` the wake no longer types at once. It hands an item to
+---`auto-agents.mailbox.notices`, which:
+---  * stays silent for a successful response, an arrival already archived,
+---    and an explicit wake when the target's inbox has nothing unread;
+---  * waits `notices.config.coalesce_ms`, folding further arrivals for the
+---    slot into one line, then re-checks that each file is still there;
+---  * logs every notice, typed or suppressed, with the reason.
+---The response is `{ ok = true, value = { slot, queued = true } }` or
+---`{ ok = true, value = { slot, suppressed = true, reason } }`.
+---
+---With `args.text` the caller's text is typed immediately, as before: that
+---is a deliberate message, not a "you have mail" notice.
 ---@param args table
 ---@param ctx  table
 ---@return table
@@ -130,41 +153,58 @@ local function handle_wake(args, ctx)
     return err("slot_not_found", "no bootstrap entry for slot name '" .. args.slot .. "'")
   end
 
-  local text = args.text
-  if type(text) ~= "string" or text == "" then
-    -- Default nudge: short directive that fits in one terminal line.
-    -- See M.default_wake_nudge for the codex composer hazards (leading
-    -- `[` + path-token popup) that constrain the wording.
-    local origin = ctx and ctx.mailbox or "?"
-    local kind   = ctx and ctx.arrival_kind or "inbox"
-    local arrival_path = ctx and ctx.arrival_path or nil
-    text = M.default_wake_nudge(kind, origin, arrival_path)
-  end
-
   local submit = args.submit
   if submit == nil then submit = true end
 
-  -- v0.2.45 (follow-up #1): a wake is a NUDGE, not a command — it
-  -- must never interrupt the agent's in-flight work. send_slot's
-  -- default submit sequence for codex is `Esc` + `CR` (Esc closes
-  -- the composer picker so CR submits). But if codex is mid-
-  -- generation, that Esc CANCELS the generation — the reported
-  -- bug. Force `submit_keys = { "<CR>" }` for wake so only a bare
-  -- Enter is sent, regardless of kind. The leading-`[` codex
-  -- bracketed-entry hazard is already dodged by the `ATTENTION:`
-  -- prefix above, so the Esc isn't needed for the nudge to land.
-  -- (claude/antigravity already default to bare `<CR>`, so this is
-  -- a no-op for them.)
-  local ok = aa.send_slot(slot, text, {
-    submit      = submit == true,
-    submit_keys = { "<CR>" },
-  })
-  if not ok then
+  local term = aa.state and aa.state.slot_terminals and aa.state.slot_terminals[slot]
+  local alive = false
+  if term and type(term.is_alive) == "function" then
+    local ok_a, a = pcall(term.is_alive, term)
+    alive = ok_a and a == true
+  end
+  local function unavailable()
     return err("terminal_unavailable",
       "wake failed for slot " .. tostring(slot)
         .. " (terminal dead or out of range)")
   end
-  return { ok = true, value = { slot = slot, text = text, submit = submit == true } }
+
+  local text = args.text
+  if type(text) == "string" and text ~= "" then
+    -- v0.2.45 (follow-up #1): a wake is a NUDGE, not a command — it
+    -- must never interrupt the agent's in-flight work. send_slot's
+    -- default submit sequence for codex is `Esc` + `CR` (Esc closes
+    -- the composer picker so CR submits). But if codex is mid-
+    -- generation, that Esc CANCELS the generation — the reported
+    -- bug. Force `submit_keys = { "<CR>" }` for wake so only a bare
+    -- Enter is sent, regardless of kind. The leading-`[` codex
+    -- bracketed-entry hazard is already dodged by the `ATTENTION:`
+    -- prefix of the default nudge, so the Esc isn't needed for the
+    -- nudge to land. notices.flush sends with the same keys.
+    local ok = aa.send_slot(slot, text, {
+      submit      = submit == true,
+      submit_keys = { "<CR>" },
+    })
+    if not ok then return unavailable() end
+    return { ok = true, value = { slot = slot, text = text, submit = submit == true } }
+  end
+
+  local notices = require("auto-agents.mailbox.notices")
+  local item, why, info = notices.item_from_wake(args, ctx)
+  if not item then
+    notices._audit("suppressed", slot, args.slot, info or {
+      kind    = ctx and ctx.arrival_kind or "wake",
+      from    = ctx and (ctx.arrival_from_bare or ctx.arrival_from or ctx.sender_bare) or nil,
+      subject = ctx and ctx.arrival_subject or nil,
+      path    = ctx and ctx.arrival_path or nil,
+      command = ctx and ctx.arrival_command or nil,
+      code    = ctx and ctx.arrival_code or nil,
+      error   = ctx and ctx.arrival_error or nil,
+    }, why)
+    return { ok = true, value = { slot = slot, suppressed = true, reason = why } }
+  end
+  if not alive then return unavailable() end
+  notices.enqueue(slot, item, { submit = submit == true, agent = args.slot })
+  return { ok = true, value = { slot = slot, queued = true, submit = submit == true } }
 end
 
 ---`peek` handler. `args = { slot: number, lines: number? }`. Returns
@@ -761,7 +801,7 @@ end
 local SPECS = {
   wake = {
     owner       = "auto-agents",
-    description = "Wake an auto-agents slot terminal by agent name. Used by the router as the default inbox/responses wake hook.",
+    description = "Wake an auto-agents slot terminal by agent name. Used by the router as the default inbox/responses wake hook. Without `text` the notice is coalesced and typed only if something is unread (a successful response, an archived arrival or an empty inbox stays silent: value.suppressed + reason); with `text` the text is typed at once.",
     schema      = { slot = "string", text = "string?", submit = "boolean?" },
     handler     = handle_wake,
   },
@@ -826,6 +866,9 @@ local SPECS = {
 function M.register_all()
   local mailbox = require("auto-core").mailbox
   local out = { registered = {}, skipped = {} }
+  -- Routing failures are announced to the sender (successful routing is
+  -- silent); see auto-agents.mailbox.notices.
+  pcall(function() require("auto-agents.mailbox.notices").attach() end)
   for name, spec in pairs(SPECS) do
     local ok, regerr = mailbox.commands.register(name, spec)
     if ok then
@@ -843,6 +886,7 @@ end
 ---Unregister every command owned by auto-agents. Does NOT touch
 ---commands owned by other plugins.
 function M.unregister_all()
+  pcall(function() require("auto-agents.mailbox.notices").detach() end)
   local ok, core = pcall(require, "auto-core")
   if not ok then return end
   for name in pairs(_registered) do
