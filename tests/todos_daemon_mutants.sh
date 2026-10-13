@@ -37,7 +37,7 @@ mutants=(
   "$H|update lets a patch assign (no notice)|  if args.patch.assignee ~= nil then|  if false then"
   "$H|update lets a patch change status|  if args.patch.status ~= nil then|  if false then"
   "$H|a new project's add does not scaffold|  if err and err.code == store.NOT_A_STORE then\n    -- a new project's store|  if false then\n    -- a new project's store"
-  "$H|the same status writes anyway|  if cur.status == args.status then return ok_response(cur) end -- the same status is a no-op|  -- (no no-op)"
+  "$H|the same status writes anyway|  if cur.status == args.status and (args.rev == nil or args.rev == cur.rev) then|  if false then"
   "$H|list defaults to every bucket|    status_filter = \"open\"|    status_filter = \"all\""
   "$H|the assignee-routing subscriber comes back|---Return the absolute filesystem path to the bundled|function M.install_assignee_routing() end\n\n---Return the absolute filesystem path to the bundled"
   "$D|AutoDoc missing becomes an internal_error|      envelope = \"dependency_unavailable\"|      envelope = \"internal_error\""
