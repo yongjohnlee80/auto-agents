@@ -366,6 +366,23 @@ do
   ok("set_dir points the project there", r.ok and r.value.todo_dir == other, vim.inspect(r))
   r = run("todos.list")
   ok("… and lists that store (empty)", r.ok and r.value.count == 0, vim.inspect(r))
+  -- a project switch while set_dir waits for the daemon: the answer (and the
+  -- store it resolves and claims) is the starting project's (Lector #26 r2 P2)
+  local proj4 = sb .. "/proj-set-dir-switched"
+  vim.fn.mkdir(proj4, "p")
+  local r4, switched4, after4 = switch_during("set_dir", proj4, function()
+    return run("todos.set_dir", { path = other })
+  end)
+  worktree.set_workspace_root(proj)
+  ok("set_dir: fixture — the project switched while set_dir waited", switched4)
+  ok("set_dir: it answers the starting project's store", r4.ok and r4.value.todo_dir == other, vim.inspect(r4))
+  local touched = false
+  for _, a in ipairs(after4) do
+    if a.verb == "register" or (type(a.at) == "table" and a.at.root == proj4) then touched = true end
+  end
+  ok("set_dir: nothing was resolved, registered or claimed for the project switched to",
+    not touched, vim.inspect(after4))
+  ok("set_dir: the project switched to got no store", vim.fn.isdirectory(proj4 .. "/.todo-list") == 0)
   r = run("todos.set_dir", { path = sb .. "/does-not-exist" })
   ok("a directory that does not exist is refused", r.ok == false, vim.inspect(r))
   r = run("todos.set_dir", { path = "" })
