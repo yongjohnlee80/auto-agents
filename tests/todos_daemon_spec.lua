@@ -186,7 +186,10 @@ do
   ok("a patch naming assignee is refused (todos.assign notifies)",
     r.ok == false and r.code == "invalid_args" and r.error:find("todos.assign", 1, true), vim.inspect(r))
   r = run("todos.update", { id = id, patch = { status = "completed" } })
-  ok("a patch naming status is refused", r.ok == false and r.code == "invalid_args", vim.inspect(r))
+  ok("a patch naming status is refused, pointing at todos.status (the mailbox verb, which the daemon cannot name)",
+    r.ok == false and r.code == "invalid_args" and r.error:find("todos.status", 1, true), vim.inspect(r))
+  ok("… before anything reaches the daemon", last_params["update"] == nil or
+    last_params["update"][4].status == nil, vim.inspect(last_params["update"]))
   local kb = sb .. "/kb"
   vim.fn.mkdir(kb .. "/adrs", "p")
   vim.fn.writefile({ "# adr" }, kb .. "/adrs/0001-x.md")
