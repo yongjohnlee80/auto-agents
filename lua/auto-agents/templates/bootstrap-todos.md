@@ -1,5 +1,5 @@
 ---
-revision: 3
+revision: 4
 title: auto-agents todos command surface — bootstrap guide
 ---
 
@@ -35,6 +35,12 @@ together in `commands_list` output, distinct from the existing
 | `todos.refresh`   | Reconcile the dir (move misplaced files, run validation, auto-archive) |
 | `todos.set_dir`   | Point this workspace at a different `.todo-list/`                      |
 | `todos.import`    | Bulk import from KB / legacy / Asana sources                           |
+
+These thirteen are the whole surface. ADR-0035's automation verbs,
+`todos.fire` and `todos.automation_set`, were removed together with
+automation itself (the `automated` status, `condition` / `execute`,
+firing): ADR 1791532020 §3 step 3. A call to either is rejected with
+`code = "unknown_command"`.
 
 ---
 
