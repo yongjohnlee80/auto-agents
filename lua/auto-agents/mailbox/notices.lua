@@ -339,9 +339,11 @@ function M.flush(slot)
   -- A notice must never interrupt in-flight work: bare <CR>, no Esc (see
   -- commands.lua handle_wake, v0.2.45 follow-up #1).
   local sent = aa.send_slot(slot, text, { submit = p.submit, submit_keys = { "<CR>" } })
+  local reason
+  if not sent then reason = "terminal_unavailable"
+  elseif #keep > 1 then reason = "coalesced" end
   for _, it in ipairs(keep) do
-    audit(sent and "delivered" or "send_failed", slot, p.agent, it,
-      sent and (#keep > 1 and "coalesced" or nil) or "terminal_unavailable", text)
+    audit(sent and "delivered" or "send_failed", slot, p.agent, it, reason, text)
   end
   return sent and text or nil
 end

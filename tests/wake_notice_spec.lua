@@ -158,7 +158,7 @@ local d1
 for _, f in ipairs(audits("delivered")) do if f.path and f.path:find(m1.id, 1, true) then d1 = f end end
 ok("the delivered notice is logged with time, slot, kind, from, subject, path",
   d1 and d1.at and d1.slot == 2 and d1.kind == "inbox" and d1.from == "agent:x"
-    and d1.subject == "Ready for review" and d1.text == t1,
+    and d1.subject == "Ready for review" and d1.text == t1 and d1.reason == nil,
   vim.inspect(d1))
 archive_inbox(y); clear_typed()
 
