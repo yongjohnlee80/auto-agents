@@ -632,7 +632,7 @@ end
 ---@field kind string             -- agent kind or "shell" for fallback
 ---@field name string|nil
 ---@field title string|nil
----@field model string|nil        -- preferred model id (--model for claude/codex/junie/opencode; GOOSE_MODEL env for goose; silently ignored for antigravity/copilot/generic)
+---@field model string|nil        -- preferred model id (--model for claude/junie/opencode; GOOSE_MODEL env for goose; roster metadata only for codex, which is spawned without --model; silently ignored for antigravity/copilot/generic)
 ---@field cmd string[]
 ---@field configured boolean      -- false → empty-slot shell fallback
 

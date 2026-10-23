@@ -54,26 +54,56 @@ ok("sandbox policy comes first, then every dir",
   "got: " .. joined(g))
 ok("one -s only", count(g, "-s") == 1, "got: " .. joined(g))
 
-print("\n[2] codex — an explicit sandbox choice in cmd wins")
+print("\n[2] codex — an explicit sandbox choice in cmd wins, in every spelling")
 
+-- Every form below was accepted by codex-cli 0.155.1, and a SECOND -s is a
+-- hard error there ("the argument --sandbox <SANDBOX_MODE> cannot be used
+-- multiple times", exit 2) — so a missed spelling does not cost an
+-- optimisation, it stops the slot from starting. `-p/--profile` is in the
+-- list because a profile may carry sandbox_mode and a CLI -s would override
+-- the user's choice.
 for _, cmd in ipairs({
   { "codex", "-s", "workspace-write" },
-  { "codex", "--sandbox", "danger-full-access" },
   { "codex", "-s", "read-only" },
+  { "codex", "-sread-only" },
+  { "codex", "--sandbox", "danger-full-access" },
+  { "codex", "--sandbox=read-only" },
   { "codex", "--dangerously-bypass-approvals-and-sandbox" },
-  { "codex", "-c", "sandbox_mode=workspace-write" },
-  { "codex", "-c", "sandbox_permissions=[\"disk-full-read-access\"]" },
+  { "codex", "-c", "sandbox_mode=read-only" },
+  { "codex", "--config", "sandbox_mode=read-only" },
+  { "codex", "-csandbox_mode=read-only" },
+  { "codex", "-c=sandbox_mode=read-only" },
+  { "codex", "--config=sandbox_mode=read-only" },
+  { "codex", "-c", 'sandbox_mode = "read-only"' },
+  { "codex", "-p", "myprofile" },
+  { "codex", "-pmyprofile" },
+  { "codex", "--profile", "myprofile" },
+  { "codex", "--profile=myprofile" },
 }) do
   local out = perms.argv_for_kind("codex", { MB }, cmd)
   ok("cmd '" .. joined(cmd) .. "' gets no added policy",
     joined(out) == "--add-dir " .. MB,
     "got: " .. joined(out))
+  ok("cmd '" .. joined(cmd) .. "' never yields a second -s",
+    count(out, "-s") == 0 and count(out, "--sandbox") == 0,
+    "got: " .. joined(out))
 end
 
-local plain = perms.argv_for_kind("codex", { MB }, { "codex", "--model", "o3" })
-ok("a cmd with no sandbox flag still gets the policy",
-  joined(plain) == "-s workspace-write --add-dir " .. MB,
-  "got: " .. joined(plain))
+-- sandbox_permissions is NOT a mode selector: suppressing on it left the
+-- spawn read-only with the grant inert, which is the bug this strategy
+-- exists to fix. codex takes it alongside an explicit -s (exit 0), so the
+-- policy goes in.
+for _, cmd in ipairs({
+  { "codex", "-c", 'sandbox_permissions=["disk-full-read-access"]' },
+  { "codex", "-csandbox_permissions=[\"disk-full-read-access\"]" },
+  { "codex", "--model", "o3" },
+  { "codex" },
+}) do
+  local out = perms.argv_for_kind("codex", { MB }, cmd)
+  ok("cmd '" .. joined(cmd) .. "' still gets the policy",
+    joined(out) == "-s workspace-write --add-dir " .. MB,
+    "got: " .. joined(out))
+end
 
 print("\n[3] nothing granted — nothing widened")
 
