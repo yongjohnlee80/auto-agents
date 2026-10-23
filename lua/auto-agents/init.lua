@@ -850,7 +850,7 @@ local function build_agent_env(spec, cwd)
       end
 
       local perms = require("auto-agents.permissions")
-      local extra_argv = perms.argv_for_kind(spec.kind, dirs)
+      local extra_argv = perms.argv_for_kind(spec.kind, dirs, spec.cmd)
       if #extra_argv > 0 and type(spec.cmd) == "table" then
         spec.cmd = vim.list_slice(spec.cmd)
         for _, a in ipairs(extra_argv) do
