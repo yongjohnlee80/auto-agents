@@ -1762,6 +1762,8 @@ do
 
   -- 22b. antigravity now ships a permissions strategy. --add-dir
   -- is the same flag claude/codex use (confirmed in `agy --help`).
+  -- codex additionally carries `-s workspace-write`, without which it
+  -- discards the grant; tests/permissions_spec.lua covers that kind.
   local grants = perms.argv_for_kind("antigravity",
     { "/tmp/mb", "/tmp/kb" })
   ok("antigravity: permissions strategy emits --add-dir per dir",
@@ -1770,7 +1772,7 @@ do
       and grants[3] == "--add-dir" and grants[4] == "/tmp/kb",
     vim.inspect(grants))
   local claude_grants = perms.argv_for_kind("claude", { "/tmp/mb" })
-  ok("v0.2.32: antigravity grants match claude/codex shape",
+  ok("v0.2.32: antigravity grants match claude's --add-dir shape",
     type(claude_grants) == "table" and claude_grants[1] == "--add-dir"
       and claude_grants[2] == "/tmp/mb",
     vim.inspect(claude_grants))
