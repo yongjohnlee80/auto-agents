@@ -29,9 +29,10 @@
 ---                                      #   claude/junie →
 ---                                      #     passed as --model <id>
 ---                                      #   codex → NO model option: codex
----                                      #     rejects these ids and keeps its
----                                      #     own model (its default, or the
----                                      #     last /model). A `model` on a
+---                                      #     rejects these ids; a fresh spawn
+---                                      #     takes its default from codex's
+---                                      #     own config (/model affects only
+---                                      #     a running session). A `model` on a
 ---                                      #     codex entry is ignored with one
 ---                                      #     warning and dropped on the next
 ---                                      #     save, like any retired key; pin
@@ -140,9 +141,10 @@ function M._reset_codex_model_warning() _codex_model_warned = false end
 ---Drop `model` from a codex entry.
 ---
 ---codex has no model option: it rejects the ids this config carries, the
----adapter passes no `--model`, and the CLI keeps its own model anyway — its
----default, or whatever `/model` last selected. A value here therefore decided
----nothing while reading as if it did, so it is treated exactly like the keys
+---adapter passes no `--model`, and the CLI resolves its own model anyway: a
+---fresh spawn takes its default from codex's own config, and `/model` affects
+---only a running session. A value here therefore decided nothing while reading
+---as if it did, so it is treated exactly like the keys
 ---v0.3.0 retired: ignored with ONE warning per session, and gone from the file
 ---on the next save. `cmd = {"codex", "-m", "<id>"}` is how a codex slot pins a
 ---model.

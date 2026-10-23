@@ -75,6 +75,12 @@ end
 
 ---Check whether the running model differs from the TOML config and,
 ---if so, sync the TOML and notify the user.
+---
+---`codex` is observed but never synced: the kind has no model option, so
+---`agent.set_model` refuses it and `config.store` drops the key. Without the
+---guard below, every check (MODEL_CHECK_TICKS, ~7.5s) called a refusing API,
+---warned "model sync failed", and left `last_synced_model` unset — so it
+---repeated for the life of the session.
 ---@param obs AutoAgentsStatusObserver
 local function check_model_drift(obs)
   local ok, reader = pcall(require, "auto-agents.status.model_reader")
@@ -96,6 +102,18 @@ local function check_model_drift(obs)
   -- Drift detected — running model ≠ TOML. Auto-sync.
   local name = name_for_slot(obs.slot)
   if not name then return end
+
+  -- Nothing to sync a codex drift INTO (see this function's note): record what
+  -- the TUI reports so the check settles, and tell the user once where that
+  -- model actually comes from.
+  if obs.kind == "codex" then
+    obs.last_synced_model = running
+    require("auto-agents.log").notify(
+      string.format("%s is running %s (codex has no model option here;"
+        .. " it comes from codex's own config or an explicit -m)", name, running),
+      { component = "status.observer", level = "info", title = "auto-agents" })
+    return
+  end
 
   local agent = require("auto-agents.agent")
   local synced_ok, msg = agent.set_model(name, running)
@@ -207,6 +225,9 @@ end
 ---@param bufnr integer
 ---@param kind string  -- "claude"|"codex"|"antigravity"|"junie"|"goose"|"opencode"|"copilot"|"generic"
 ---@return boolean attached
+---@private test helper: the drift check, normally driven by the tick loop.
+M._check_model_drift = check_model_drift
+
 function M.attach(slot, bufnr, kind)
   if not (slot and bufnr and vim.api.nvim_buf_is_valid(bufnr)) then return false end
 

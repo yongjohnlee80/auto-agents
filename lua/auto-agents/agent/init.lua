@@ -282,14 +282,15 @@ function M.set_model(name, model)
   -- that decides nothing is what this replaced.
   if entry.kind == "codex" then
     if model == nil then
-      return true, name .. " → (codex has no model option; codex keeps its own"
-        .. " — its default, or the last /model)"
+      return true, name .. " → (codex has no model option; a fresh spawn takes"
+        .. " codex's own default — /model affects only the running session)"
     end
     if model == "-" or model == "" then
       return true, name .. " → (nothing to clear; codex has no model option)"
     end
-    return false, name .. " is a codex slot, which has no model option: codex"
-      .. " starts on its own default or last /model selection. Pin one with"
+    return false, name .. " is a codex slot, which has no model option: a fresh"
+      .. " spawn takes its default from codex's own config, and /model affects"
+      .. " only a running session. Pin one with"
       .. " cmd = [\"codex\", \"-m\", \"<id>\"] in the auto-agents TOML."
   end
 
