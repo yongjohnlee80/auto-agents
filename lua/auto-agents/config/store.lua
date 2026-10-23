@@ -28,10 +28,14 @@
 ---    model         = "..."             # optional, per-kind handling:
 ---                                      #   claude/junie →
 ---                                      #     passed as --model <id>
----                                      #   codex → NOT passed: codex rejects
----                                      #     these ids, so the flag was
----                                      #     dropped. Roster metadata only;
----                                      #     pin one with an explicit
+---                                      #   codex → NO model option: codex
+---                                      #     rejects these ids and keeps its
+---                                      #     own model (its default, or the
+---                                      #     last /model). A `model` on a
+---                                      #     codex entry is ignored with one
+---                                      #     warning and dropped on the next
+---                                      #     save, like any retired key; pin
+---                                      #     one with an explicit
 ---                                      #     cmd = ["codex", "-m", "<id>"]
 ---                                      #   goose → exported as GOOSE_MODEL env
 ---                                      #   opencode → passed as --model <id>
@@ -124,9 +128,44 @@ end
 
 -- One warning per session for the retired KB keys, however many files carry them.
 local _retired_warned = false
+-- Same, for a `model` on a codex entry (the kind has no model option).
+local _codex_model_warned = false
 
 ---Test hook: re-arm the one-time retired-keys warning.
 function M._reset_retired_warning() _retired_warned = false end
+
+---Test hook: re-arm the one-time codex-model warning.
+function M._reset_codex_model_warning() _codex_model_warned = false end
+
+---Drop `model` from a codex entry.
+---
+---codex has no model option: it rejects the ids this config carries, the
+---adapter passes no `--model`, and the CLI keeps its own model anyway — its
+---default, or whatever `/model` last selected. A value here therefore decided
+---nothing while reading as if it did, so it is treated exactly like the keys
+---v0.3.0 retired: ignored with ONE warning per session, and gone from the file
+---on the next save. `cmd = {"codex", "-m", "<id>"}` is how a codex slot pins a
+---model.
+---@param agents table[]
+local function drop_codex_model(agents)
+  local found = {}
+  for _, a in ipairs(agents) do
+    if a.kind == "codex" and a.model ~= nil and a.model ~= "" then
+      found[#found + 1] = (a.name or "?") .. "=" .. tostring(a.model)
+      a.model = nil
+    elseif a.kind == "codex" then
+      a.model = nil
+    end
+  end
+  if #found > 0 and not _codex_model_warned then
+    _codex_model_warned = true
+    require("auto-agents.log").warn("config.store",
+      "ignoring `model` on codex agent(s) (" .. table.concat(found, ", ")
+      .. "): codex has no model option — it starts on its own default or last"
+      .. " /model. Pin one with cmd = [\"codex\", \"-m\", \"<id>\"]."
+      .. " The key is dropped on the next save.")
+  end
+end
 
 ---Strip the keys v0.3.0 retired (`[kb] type`/`seed`, per-agent `kb_scope`)
 ---from a decoded TOML table, in place. Warns once per session.
@@ -181,6 +220,7 @@ local function normalize(content)
     end
     agents[#agents + 1] = clone
   end
+  drop_codex_model(agents)
   return {
     project = data.project,
     kb = data.kb,

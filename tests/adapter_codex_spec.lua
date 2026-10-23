@@ -7,8 +7,17 @@ local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
 
+-- Sections [3]/[4] reach config.store and agent.set_model, which log through
+-- auto-core; resolve it as the other suites do. $AUTO_CORE_ROOT overrides the
+-- sibling resolution (see tests/run-all.sh).
+local core_root = vim.env.AUTO_CORE_ROOT or (plugins_root .. "/auto-core.nvim/main")
+if not vim.env.AUTO_CORE_ROOT and vim.fn.isdirectory(core_root) == 0 then
+  core_root = plugins_root .. "/auto-core.nvim"
+end
+
 for _, p in ipairs({
   project_root,
+  core_root,
 }) do
   if vim.fn.isdirectory(p) == 1 then
     vim.opt.runtimepath:prepend(p)
@@ -88,6 +97,81 @@ ok("explicit cmd is returned verbatim",
   "got: " .. table.concat(argv_override, " "))
 argv_override[#argv_override + 1] = "mutated"
 ok("explicit cmd is copied, not aliased", #override == 3, "override was mutated")
+
+print("\n[3] codex has no model OPTION — the store drops the key")
+
+-- codex keeps its own model (its default, or the last /model), so a `model` on
+-- a codex entry decided nothing while reading as if it did. It is treated like
+-- the keys v0.3.0 retired: ignored with one warning, gone on the next save.
+local store = require("auto-agents.config.store")
+store._reset_codex_model_warning()
+local loaded = store._normalize([==[
+[[agents]]
+slot = 1
+kind = "claude"
+name = "exia"
+model = "claude-opus-5"
+
+[[agents]]
+slot = 2
+kind = "codex"
+name = "virtue"
+model = "gpt-5-codex"
+
+[[agents]]
+slot = 3
+kind = "codex"
+name = "pinned"
+cmd = ["codex", "-m", "gpt-5-codex"]
+]==])
+
+local by_name = {}
+for _, a in ipairs(loaded.agents) do by_name[a.name] = a end
+
+ok("codex entry loses its model", by_name.virtue and by_name.virtue.model == nil,
+  "got: " .. tostring(by_name.virtue and by_name.virtue.model))
+ok("claude entry keeps its model",
+  by_name.exia and by_name.exia.model == "claude-opus-5",
+  "got: " .. tostring(by_name.exia and by_name.exia.model))
+ok("an explicit cmd survives the drop",
+  by_name.pinned and by_name.pinned.cmd
+    and table.concat(by_name.pinned.cmd, " ") == "codex -m gpt-5-codex",
+  "got: " .. vim.inspect(by_name.pinned and by_name.pinned.cmd))
+-- The dropped key must not come back through the adapter either.
+ok("the dropped entry spawns bare",
+  table.concat(codex.cmd(by_name.virtue), " ") == "codex",
+  "got: " .. table.concat(codex.cmd(by_name.virtue), " "))
+
+print("\n[4] :AutoAgentsModel refuses a codex slot")
+
+-- set_model reads the live bootstrap, so stand one in. The codex paths return
+-- before any write, so no TOML is touched by this suite.
+package.loaded["auto-agents"] = {
+  state = { config = { agents = { bootstrap = {
+    { slot = 1, kind = "claude", name = "exia" },
+    { slot = 2, kind = "codex",  name = "virtue" },
+  } } } },
+}
+local agent = require("auto-agents.agent")
+
+local set_ok, msg = agent.set_model("virtue", "gpt-5-codex")
+ok("setting a model on codex is refused", set_ok == false, "msg: " .. tostring(msg))
+ok("the refusal says where codex gets its model",
+  type(msg) == "string" and msg:find("/model", 1, true) ~= nil,
+  "msg: " .. tostring(msg))
+ok("the refusal names the supported escape hatch",
+  type(msg) == "string" and msg:find("-m", 1, true) ~= nil,
+  "msg: " .. tostring(msg))
+
+local show_ok, show_msg = agent.set_model("virtue", nil)
+ok("showing a codex slot's model says there is no option",
+  show_ok == true and show_msg:find("no model option", 1, true) ~= nil,
+  "msg: " .. tostring(show_msg))
+
+local clear_ok, clear_msg = agent.set_model("virtue", "-")
+ok("clearing a codex slot is a no-op success",
+  clear_ok == true and clear_msg:find("nothing to clear", 1, true) ~= nil,
+  "msg: " .. tostring(clear_msg))
 
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
