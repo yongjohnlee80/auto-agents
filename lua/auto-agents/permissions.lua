@@ -67,25 +67,46 @@ local function repeatable_flag(flag)
   end
 end
 
----Sandbox selectors a codex `cmd` override may already carry. Any of them
----means the user chose a policy, so we add none.
-local CODEX_SANDBOX_FLAGS = {
-  ["-s"] = true,
-  ["--sandbox"] = true,
-  ["--dangerously-bypass-approvals-and-sandbox"] = true,
-}
-
+---True when a codex `cmd` override already decides the sandbox policy.
+---
+---Every spelling clap accepts has to be recognised, because a miss is not a
+---missed optimisation — appending a second `-s` makes codex exit 2 ("the
+---argument --sandbox <SANDBOX_MODE> cannot be used multiple times"), so the
+---slot would not start at all. Verified against codex-cli 0.155.1:
+---
+---    -s read-only                  ok      -s read-only -s workspace-write   exit 2
+---    -sread-only                   ok      --sandbox=read-only --sandbox …   exit 2
+---    --sandbox=read-only           ok
+---    -c sandbox_mode=read-only     ok      -csandbox_mode=…  --config=…      ok
+---
+---`-p/--profile` counts too: a profile layers `$CODEX_HOME/<name>.config.toml`
+---over the user config and may set `sandbox_mode` there, and a CLI `-s` would
+---override that choice. We cannot resolve the profile's effective policy from
+---here without reimplementing codex's config layering, so a profile is read as
+---"the user chose" and the grant goes in bare — see M.argv_for_kind's note.
+---
+---`sandbox_permissions=…` is deliberately NOT in here: it is a permissions
+---list, not a mode selector, so suppressing on it left the spawn on the
+---default read-only policy and the grant inert — the very bug this strategy
+---exists to fix. It also coexists with an explicit `-s` (exit 0), so pairing
+---the two is safe.
 ---@param cmd string[]|nil
 ---@return boolean
 local function codex_cmd_sets_sandbox(cmd)
   if type(cmd) ~= "table" then return false end
   for _, a in ipairs(cmd) do
     if type(a) == "string" then
-      if CODEX_SANDBOX_FLAGS[a] then return true end
-      -- `-c sandbox_mode=…` / `--config sandbox_mode=…`: the value is its own
-      -- argv entry, so matching the entry is enough — no need to pair it with
-      -- the flag before it.
-      if a:match("^sandbox_mode=") or a:match("^sandbox_permissions=") then return true end
+      if a == "--dangerously-bypass-approvals-and-sandbox" then return true end
+      -- `-s <mode>` / `-s<mode>` / `--sandbox <mode>` / `--sandbox=<mode>`,
+      -- and the same four shapes for `-p`/`--profile`.
+      if a == "-s" or a == "--sandbox" or a == "-p" or a == "--profile" then return true end
+      if a:match("^%-s.") or a:match("^%-%-sandbox=") then return true end
+      if a:match("^%-p.") or a:match("^%-%-profile=") then return true end
+      -- A `sandbox_mode` config override, whether it rides on the flag
+      -- (`-csandbox_mode=…`, `-c=sandbox_mode=…`, `--config=sandbox_mode=…`)
+      -- or is the next argv entry after a bare `-c` / `--config`.
+      local cfg = a:match("^%-c=?(.*)$") or a:match("^%-%-config=(.*)$") or a
+      if cfg:match("^sandbox_mode%s*=") then return true end
     end
   end
   return false
@@ -95,6 +116,15 @@ end
 ---grant carries `-s workspace-write` with it. No dirs to grant → no policy
 ---flag either: we are here to remove prompt friction for paths we grant, not
 ---to widen a spawn that was granted nothing.
+---
+---A cmd that already decides the policy gets the grants bare. For `-s` /
+---`--sandbox` / the bypass flag that is exactly right. For `-p/--profile` it
+---is the safe reading rather than the complete one: if that profile does not
+---select `workspace-write` (or wider), codex will discard the `--add-dir`
+---entries as it did before this strategy existed. Overriding a profile from
+---here would be worse — we would silently widen a policy the user wrote down
+---— so the spawn log records the grant and the user pairs the profile with a
+---sandbox mode if they want the paths writable.
 ---@type AutoAgentsPermissionStrategy
 local function codex_strategy(dirs, cmd)
   local out = repeatable_flag("--add-dir")(dirs)
