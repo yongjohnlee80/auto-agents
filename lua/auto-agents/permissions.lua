@@ -85,6 +85,14 @@ end
 ---here without reimplementing codex's config layering, so a profile is read as
 ---"the user chose" and the grant goes in bare — see M.argv_for_kind's note.
 ---
+---`default_permissions=<profile>` IS a policy choice: codex's configuration
+---reference documents it as the named permission-profile selector
+---(`:read-only`, `:workspace`, `:danger-full-access`, or a custom profile) and
+---says not to combine it with `sandbox_mode`. codex-cli 0.155.1 accepts
+---`-c default_permissions=":read-only" -s workspace-write` without complaint
+---(exit 0), so appending our flag would not fail the spawn — it would quietly
+---win over a read-only choice the user wrote down. Found by Virtue, PR #28 r1.
+---
 ---`sandbox_permissions=…` is deliberately NOT in here: it is a permissions
 ---list, not a mode selector, so suppressing on it left the spawn on the
 ---default read-only policy and the grant inert — the very bug this strategy
@@ -107,6 +115,7 @@ local function codex_cmd_sets_sandbox(cmd)
       -- or is the next argv entry after a bare `-c` / `--config`.
       local cfg = a:match("^%-c=?(.*)$") or a:match("^%-%-config=(.*)$") or a
       if cfg:match("^sandbox_mode%s*=") then return true end
+      if cfg:match("^default_permissions%s*=") then return true end
     end
   end
   return false

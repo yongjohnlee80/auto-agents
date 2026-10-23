@@ -75,6 +75,12 @@ for _, cmd in ipairs({
   { "codex", "-c=sandbox_mode=read-only" },
   { "codex", "--config=sandbox_mode=read-only" },
   { "codex", "-c", 'sandbox_mode = "read-only"' },
+  { "codex", "-c", 'default_permissions=":read-only"' },
+  { "codex", "--config", 'default_permissions=":workspace"' },
+  { "codex", "-cdefault_permissions=\":read-only\"" },
+  { "codex", "-c=default_permissions=\":read-only\"" },
+  { "codex", "--config=default_permissions=\":danger-full-access\"" },
+  { "codex", "-c", 'default_permissions = ":read-only"' },
   { "codex", "-p", "myprofile" },
   { "codex", "-pmyprofile" },
   { "codex", "--profile", "myprofile" },
@@ -89,6 +95,13 @@ for _, cmd in ipairs({
     "got: " .. joined(out))
 end
 
+-- default_permissions IS a policy selector (codex's config reference: the named
+-- permission profile — :read-only, :workspace, :danger-full-access or a custom
+-- one — and not to be combined with sandbox_mode). codex-cli 0.155.1 takes
+-- `-c default_permissions=":read-only" -s workspace-write` at exit 0, so our
+-- flag would not fail the spawn, it would quietly beat a read-only choice the
+-- user wrote down. Found by Virtue, PR #28 r1.
+--
 -- sandbox_permissions is NOT a mode selector: suppressing on it left the
 -- spawn read-only with the grant inert, which is the bug this strategy
 -- exists to fix. codex takes it alongside an explicit -s (exit 0), so the
