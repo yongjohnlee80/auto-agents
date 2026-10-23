@@ -398,7 +398,28 @@ local function render_block(spec, kb)
     end
   end
 
-  if show_model then
+  if show_model and kind == "codex" then
+    -- codex is spawned WITHOUT --model (adapters/codex.lua): it rejected the
+    -- ids this config carries. Telling a codex agent to persist a model it
+    -- will never be given is worse than saying nothing, so this kind gets its
+    -- own section instead of the shared one below.
+    vim.list_extend(lines, {
+      "### Model preference",
+      "",
+      "The roster's Model column records what the TOML holds, but **it is not",
+      "passed to you**: codex rejects the ids this config carries, so",
+      "auto-agents spawns codex with no `--model` flag. The model you are",
+      "running is the one codex resolved itself — `/model` in-session, or",
+      "`model` in `~/.codex/config.toml`.",
+      "",
+      "So if the user asks you to switch models, switch it in codex (`/model`)",
+      "and leave the TOML alone: `:AutoAgentsModel` would persist a value that",
+      "nothing reads for your slot. To pin one across restarts, the user sets",
+      "it in codex's own config, or gives this slot an explicit",
+      "`cmd = [\"codex\", \"-m\", \"<id>\"]` in the auto-agents TOML.",
+      "",
+    })
+  elseif show_model then
     vim.list_extend(lines, {
       "### Model preference",
       "",

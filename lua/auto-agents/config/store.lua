@@ -26,8 +26,13 @@
 ---    title         = "Claude"
 ---    role          = "..."             # optional
 ---    model         = "..."             # optional, per-kind handling:
----                                      #   claude/codex/junie →
+---                                      #   claude/junie →
 ---                                      #     passed as --model <id>
+---                                      #   codex → NOT passed: codex rejects
+---                                      #     these ids, so the flag was
+---                                      #     dropped. Roster metadata only;
+---                                      #     pin one with an explicit
+---                                      #     cmd = ["codex", "-m", "<id>"]
 ---                                      #   goose → exported as GOOSE_MODEL env
 ---                                      #   opencode → passed as --model <id>
 ---                                      #     (format: "<provider>/<model>")
