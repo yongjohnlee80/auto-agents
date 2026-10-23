@@ -86,12 +86,20 @@ do
   ok("file is AGENTS.md for codex kind", path == cwd .. "/AGENTS.md", path)
   ok("renders diff_review column header",
     content:find("| diff_review |", 1, true) ~= nil, "missing column header")
+  -- The codex roster carries no Model column: the kind has no model option
+  -- (config.store drops the key, the adapter passes no --model), so the rows
+  -- are Slot | Name | diff_review and the configured `model = "gpt-5"` above
+  -- must not appear anywhere in the block.
   ok("renders diff_review ✓ for codex-a row",
-    content:find("| `codex-a` | `gpt-5` | ✓ |", 1, true) ~= nil,
+    content:find("| `codex-a` | ✓ |", 1, true) ~= nil,
     "missing ✓ in codex-a row")
   ok("renders diff_review – for codex-b row",
-    content:find("| `codex-b` | `gpt-5` | – |", 1, true) ~= nil,
+    content:find("| `codex-b` | – |", 1, true) ~= nil,
     "missing – in codex-b row")
+  ok("codex roster has no Model column",
+    content:find("| Model |", 1, true) == nil
+      and content:find("`gpt-5`", 1, true) == nil,
+    "a model leaked into the codex block")
   ok("renders Interactive diff review section",
     content:find("### Interactive diff review", 1, true) ~= nil,
     "missing section header")

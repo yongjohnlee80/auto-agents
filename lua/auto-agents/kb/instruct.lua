@@ -107,6 +107,9 @@ local INTERACTIVE_KINDS = {
   goose = true, opencode = true,
 }
 
+---Interactive kinds that nonetheless have no model to configure here.
+local NO_MODEL_OPTION = { codex = true }
+
 ---Render the auto-agents block content for a kind. The block is
 ---agent-neutral: it lists every configured peer of the same kind in a
 ---roster table and tells each reader to resolve its own identity from
@@ -169,7 +172,12 @@ local function render_block(spec, kb)
   end
   local inject_diff_protocol = any_diff_review and kind ~= "claude"
 
-  local show_model = INTERACTIVE_KINDS[kind] and true or false
+  -- codex is the one interactive kind with NO model option: the adapter passes
+  -- no --model, config.store drops the key and :AutoAgentsModel refuses it. So
+  -- neither the roster's Model column nor the shared "Model preference"
+  -- section applies to it; a short note takes their place below, so an agent
+  -- asked to switch models knows where its model actually comes from.
+  local show_model = INTERACTIVE_KINDS[kind] and not NO_MODEL_OPTION[kind] and true or false
   if #peers > 0 then
     vim.list_extend(lines, {
       "### Roster (agents sharing this file)",
@@ -398,26 +406,16 @@ local function render_block(spec, kb)
     end
   end
 
-  if show_model and kind == "codex" then
-    -- codex is spawned WITHOUT --model (adapters/codex.lua): it rejected the
-    -- ids this config carries. Telling a codex agent to persist a model it
-    -- will never be given is worse than saying nothing, so this kind gets its
-    -- own section instead of the shared one below.
+  if INTERACTIVE_KINDS[kind] and NO_MODEL_OPTION[kind] then
     vim.list_extend(lines, {
-      "### Model preference",
+      "### Model",
       "",
-      "The roster's Model column records what the TOML holds, but **it is not",
-      "passed to you**: codex rejects the ids this config carries, so",
-      "auto-agents spawns codex with no `--model` flag — unless the slot's own",
-      "`cmd` passes `-m`/`--model` itself, which is honoured verbatim. Absent",
-      "that, the model you are running is the one codex resolved — `/model`",
-      "in-session, or `model` in `~/.codex/config.toml`.",
-      "",
-      "So if the user asks you to switch models, switch it in codex (`/model`)",
-      "and leave the TOML alone: `:AutoAgentsModel` would persist a value that",
-      "nothing reads for your slot. To pin one across restarts, the user sets",
-      "it in codex's own config, or gives this slot an explicit",
-      "`cmd = [\"codex\", \"-m\", \"<id>\"]` in the auto-agents TOML.",
+      "There is no model setting for you here: auto-agents passes codex no",
+      "`--model`, and a `model` in its TOML is ignored and dropped. You start",
+      "on codex's own model — its default, or whatever `/model` last selected",
+      "— and `/model` is how it changes. Don't reach for `:AutoAgentsModel`;",
+      "it refuses a codex slot. The exception is a slot whose `cmd` passes",
+      "`-m`/`--model` itself, which is honoured verbatim.",
       "",
     })
   elseif show_model then

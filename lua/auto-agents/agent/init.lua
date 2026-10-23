@@ -256,8 +256,8 @@ end
 ---
 ---Effect on running session: none. The new value is read by adapters on
 ---the next spawn (M.cmd_for builds argv from the bootstrap entry) — except
----for `codex`, whose adapter passes no `--model` at all, so a value set here
----is roster metadata and the returned message says so.
+---for `codex`, which has no model option at all: setting one is refused, and
+---`config.store` drops the key from a codex entry on load.
 ---
 ---@param name string
 ---@param model string|nil   nil = show, "-" = clear, anything else = set
@@ -276,6 +276,23 @@ function M.set_model(name, model)
     return false, "no agent named '" .. tostring(name) .. "'"
   end
 
+  -- codex has no model option (config.store drops the key, the adapter passes
+  -- no --model): codex starts on its own default or whatever /model last
+  -- selected. Refusing to set one is the honest answer — persisting a value
+  -- that decides nothing is what this replaced.
+  if entry.kind == "codex" then
+    if model == nil then
+      return true, name .. " → (codex has no model option; codex keeps its own"
+        .. " — its default, or the last /model)"
+    end
+    if model == "-" or model == "" then
+      return true, name .. " → (nothing to clear; codex has no model option)"
+    end
+    return false, name .. " is a codex slot, which has no model option: codex"
+      .. " starts on its own default or last /model selection. Pin one with"
+      .. " cmd = [\"codex\", \"-m\", \"<id>\"] in the auto-agents TOML."
+  end
+
   if model == nil then
     return true, name .. " → " .. (entry.model or "(none — CLI default)")
   end
@@ -289,14 +306,6 @@ function M.set_model(name, model)
   local ok, _path = require("auto-agents.config.store").save_current()
   if not ok then
     return false, "failed to write config TOML"
-  end
-  -- A codex slot takes no --model (see adapters/codex.lua): the value is
-  -- persisted, the roster shows it, and nothing passes it. Say that here
-  -- rather than report an effective change that will not happen.
-  if entry.kind == "codex" and entry.model then
-    return true, name .. " → " .. entry.model
-      .. " (recorded, but codex is spawned without --model: set the model in"
-      .. " codex itself, or give the slot cmd = [\"codex\", \"-m\", \"<id>\"])"
   end
   return true, name .. " → " .. (entry.model or "(none — CLI default)")
     .. " (effective on next " .. name .. " restart)"
