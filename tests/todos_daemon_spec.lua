@@ -125,7 +125,7 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────
-section("a new project: add scaffolds the store, then writes the task")
+section("a new project: add makes the store and writes the task (ADR 1791532020 r13)")
 local id
 do
   ok("no store yet", vim.fn.isdirectory(proj .. "/.todo-list") == 0)
@@ -138,7 +138,8 @@ do
   id = r.value and r.value.id
   ok("AutoDoc made the store (scaffold) and the task file",
     vim.fn.isdirectory(proj .. "/.todo-list/open") == 1, vim.inspect(sent))
-  ok("… through todos.scaffold", count("scaffold") == 1, vim.inspect(sent))
+  ok("… in the add itself: the daemon makes a missing store at its first write, no todos.scaffold",
+    count("scaffold") == 0 and count("add") == 1, vim.inspect(sent))
   ok("add published core.todo:changed", #seen["core.todo:changed"] == before + 1)
   ok("the store is claimed and marked", vim.uv.fs_stat(proj .. "/.todo-list/.autodoc-owner") ~= nil)
 end
@@ -313,8 +314,8 @@ do
   r = run("todos.update", { id = sid, rev = now.rev, patch = { priority = "low" } })
   ok("at the current rev the update lands", r.ok and r.value.priority == "low", vim.inspect(r))
   r = run("todos.update", { id = sid, patch = { priority = "normal" } })
-  ok("without a rev it still works (the no-rev convenience)", r.ok and r.value.priority == "normal",
-    vim.inspect(r))
+  ok("without a rev it still works (the no-rev convenience); normal is read as medium (r14)",
+    r.ok and r.value.priority == "medium", vim.inspect(r))
   r = run("todos.update", { id = sid, rev = 42, patch = { priority = "low" } })
   ok("a rev that is not a string is invalid_args", r.ok == false and r.code == "invalid_args", vim.inspect(r))
   run("todos.remove", { id = sid })
@@ -371,8 +372,8 @@ do
   cases("archive", "get", function() return run("todos.archive", { id = sid }) end,
     function(r) ok("archive: … and it archived", r.value and r.value.status == "archived") end)
 
-  -- add on a project with no store yet: the switch lands as the daemon answers
-  -- not_a_store, between the add and the scaffold
+  -- add on a project with no store yet: the daemon makes it in the add itself (r13), so the
+  -- switch, landing as that add answers, has no later step of the add to misdirect
   local proj3 = sb .. "/proj-new"
   vim.fn.mkdir(proj3, "p")
   worktree.set_workspace_root(proj3)
@@ -382,8 +383,8 @@ do
   worktree.set_workspace_root(proj)
   ok("add: fixture — the project switched after the first add answered", switched)
   ok("add: the handler answered", r.ok, vim.inspect(r))
-  ok("add: the scaffold and the retried add went to proj-new's store", stayed(after, proj3)
-    and #after == 2, vim.inspect(after))
+  ok("add: one call made proj-new's store and the task; nothing was sent after the switch",
+    #after == 0, vim.inspect(after))
   ok("add: proj-new has its store and the task", vim.fn.isdirectory(proj3 .. "/.todo-list/open") == 1)
   ok("add: the project switched to got no store", vim.fn.isdirectory(proj2 .. "/.todo-list") == 0)
 end
