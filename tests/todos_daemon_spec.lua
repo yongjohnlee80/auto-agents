@@ -98,6 +98,15 @@ ad_todos.call = function(verb, params, cb)
   last_params[verb] = vim.deepcopy(params)
   real_call(verb, params, cb)
 end
+-- What the daemon this suite runs against does, from autodoc.nvim's contracts (the plugin and the
+-- binary ship from one commit): from protocol 29 (ADR 1791532020 r13) a store is made at its first
+-- write, so add sends no todos.scaffold.
+local PROTOCOL = (function()
+  local okc, c = pcall(require, "autodoc.contracts")
+  return okc and type(c) == "table" and tonumber(c.protocol) or 0
+end)()
+local MAKES_STORE = PROTOCOL >= 29
+
 local function count(verb)
   local n = 0
   for _, v in ipairs(sent) do if v == verb then n = n + 1 end end
@@ -125,7 +134,7 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────
-section("a new project: add makes the store and writes the task (ADR 1791532020 r13)")
+section("a new project: add makes the store (scaffolding it below protocol 29), then writes the task")
 local id
 do
   ok("no store yet", vim.fn.isdirectory(proj .. "/.todo-list") == 0)
@@ -138,8 +147,12 @@ do
   id = r.value and r.value.id
   ok("AutoDoc made the store (scaffold) and the task file",
     vim.fn.isdirectory(proj .. "/.todo-list/open") == 1, vim.inspect(sent))
-  ok("… in the add itself: the daemon makes a missing store at its first write, no todos.scaffold",
-    count("scaffold") == 0 and count("add") == 1, vim.inspect(sent))
+  if MAKES_STORE then
+    ok("… in the add itself: the daemon makes a missing store at its first write (r13), no todos.scaffold",
+      count("scaffold") == 0 and count("add") == 1, vim.inspect(sent))
+  else
+    ok("… through todos.scaffold, then the add again", count("scaffold") == 1, vim.inspect(sent))
+  end
   ok("add published core.todo:changed", #seen["core.todo:changed"] == before + 1)
   ok("the store is claimed and marked", vim.uv.fs_stat(proj .. "/.todo-list/.autodoc-owner") ~= nil)
 end
@@ -232,22 +245,25 @@ end
 -- ─────────────────────────────────────────────────────────────
 section("an assignment carries this project's scope (ADR 1791532020 §2.5a)")
 do
-  -- as auto-agents' setup sets it, from the project key
-  local sc = require("auto-core.todo.scope")
-  sc.set("auto-agents:spec")
-  ok("AutoDoc and auto-core carry a scope here", sc.scoped(), "autodoc.nvim protocol " .. tostring(sc.protocol()))
+  -- as auto-agents' setup sets it, from the project key. Scoped where auto-core has the scope and
+  -- AutoDoc takes it (protocol 30); otherwise every assignment is made as before, with none.
+  local ok_sc, sc = pcall(require, "auto-core.todo.scope")
+  if ok_sc then sc.set("auto-agents:spec") end
+  local scoped = ok_sc and sc.scoped()
+  local want = scoped and "auto-agents:spec" or nil
   local r = run("todos.assign", { id = id, assignee = "agent:someone", reason = "scoped" })
   local p = last_params["assign"]
-  ok("assign sends the bare name, the reason and this project's scope, and the daemon takes it",
-    r.ok and p and p[4] == "agent:someone" and p[5] == "scoped" and p[6] == "auto-agents:spec", vim.inspect({ r, p }))
+  ok(scoped and "assign sends the bare name, the reason and this project's scope, and the daemon takes it"
+      or "without the scope (auto-core or AutoDoc older): assign sends the name and the reason only",
+    r.ok and p and p[4] == "agent:someone" and p[5] == "scoped" and p[6] == want, vim.inspect({ r, p }))
   r = run("todos.assign", { id = id, assignee = "agent:someone" })
   p = last_params["assign"]
-  ok("… with no reason, an empty one holds the scope's place",
-    r.ok and p and p[5] == "" and p[6] == "auto-agents:spec", vim.inspect({ r, p }))
+  ok(scoped and "… with no reason, an empty one holds the scope's place" or "… with no reason, none",
+    r.ok and p and p[5] == (scoped and "" or nil) and p[6] == want, vim.inspect({ r, p }))
   r = run("todos.add", { title = "Created assigned, scoped", assignee = "agent:someone" })
   p = last_params["add"]
-  ok("add with an assignee is an assignment: it sends the scope", r.ok and p and p[3] == "auto-agents:spec",
-    vim.inspect({ r, p }))
+  ok(scoped and "add with an assignee is an assignment: it sends the scope" or "add with an assignee: no scope",
+    r.ok and p and p[3] == want, vim.inspect({ r, p }))
   local made = {}
   if r.ok then made[#made + 1] = r.value.id end
   r = run("todos.add", { title = "Created unassigned" })
@@ -257,7 +273,7 @@ do
   -- the store as the sections after expect it: the task unassigned, these two gone
   run("todos.assign", { id = id })
   for _, mid in ipairs(made) do run("todos.remove", { id = mid }) end
-  sc.set(nil)
+  if ok_sc then sc.set(nil) end
 end
 
 -- ─────────────────────────────────────────────────────────────
@@ -313,9 +329,9 @@ do
   ok("a status at the old rev is refused as stale too", r.ok == false and r.code == "stale", vim.inspect(r))
   r = run("todos.update", { id = sid, rev = now.rev, patch = { priority = "low" } })
   ok("at the current rev the update lands", r.ok and r.value.priority == "low", vim.inspect(r))
-  r = run("todos.update", { id = sid, patch = { priority = "normal" } })
-  ok("without a rev it still works (the no-rev convenience); normal is read as medium (r14)",
-    r.ok and r.value.priority == "medium", vim.inspect(r))
+  r = run("todos.update", { id = sid, patch = { priority = "high" } })
+  ok("without a rev it still works (the no-rev convenience)", r.ok and r.value.priority == "high",
+    vim.inspect(r))
   r = run("todos.update", { id = sid, rev = 42, patch = { priority = "low" } })
   ok("a rev that is not a string is invalid_args", r.ok == false and r.code == "invalid_args", vim.inspect(r))
   run("todos.remove", { id = sid })
@@ -372,8 +388,9 @@ do
   cases("archive", "get", function() return run("todos.archive", { id = sid }) end,
     function(r) ok("archive: … and it archived", r.value and r.value.status == "archived") end)
 
-  -- add on a project with no store yet: the daemon makes it in the add itself (r13), so the
-  -- switch, landing as that add answers, has no later step of the add to misdirect
+  -- add on a project with no store yet. Below protocol 29 the switch lands as the daemon answers
+  -- not_a_store, between the add and the scaffold; from 29 the add makes the store itself, so the
+  -- switch has no later step of the add to misdirect
   local proj3 = sb .. "/proj-new"
   vim.fn.mkdir(proj3, "p")
   worktree.set_workspace_root(proj3)
@@ -383,8 +400,13 @@ do
   worktree.set_workspace_root(proj)
   ok("add: fixture — the project switched after the first add answered", switched)
   ok("add: the handler answered", r.ok, vim.inspect(r))
-  ok("add: one call made proj-new's store and the task; nothing was sent after the switch",
-    #after == 0, vim.inspect(after))
+  if MAKES_STORE then
+    ok("add: one call made proj-new's store and the task; nothing was sent after the switch",
+      #after == 0, vim.inspect(after))
+  else
+    ok("add: the scaffold and the retried add went to proj-new's store", stayed(after, proj3)
+      and #after == 2, vim.inspect(after))
+  end
   ok("add: proj-new has its store and the task", vim.fn.isdirectory(proj3 .. "/.todo-list/open") == 1)
   ok("add: the project switched to got no store", vim.fn.isdirectory(proj2 .. "/.todo-list") == 0)
 end
