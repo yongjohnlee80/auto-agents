@@ -247,10 +247,15 @@ do
   p = last_params["add"]
   ok("add with an assignee is an assignment: it sends the scope", r.ok and p and p[3] == "auto-agents:spec",
     vim.inspect({ r, p }))
+  local made = {}
+  if r.ok then made[#made + 1] = r.value.id end
   r = run("todos.add", { title = "Created unassigned" })
   p = last_params["add"]
   ok("add without one sends none", r.ok and p and p[3] == nil, vim.inspect({ r, p }))
-  run("todos.assign", { id = id }) -- cleared, as the sections after expect it
+  if r.ok then made[#made + 1] = r.value.id end
+  -- the store as the sections after expect it: the task unassigned, these two gone
+  run("todos.assign", { id = id })
+  for _, mid in ipairs(made) do run("todos.remove", { id = mid }) end
   sc.set(nil)
 end
 
