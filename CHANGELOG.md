@@ -2,7 +2,7 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## [Unreleased] — an assignment is scoped to this project
+## [v0.3.8] — 2026-10-27 — an assignment is scoped to this project
 
 ADR 1791532020 r15 §2.5a. **Scoping needs auto-core with `auto-core.todo.scope` and AutoDoc
 protocol 30**; with either older, assignments are made as before.
