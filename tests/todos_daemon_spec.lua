@@ -464,6 +464,36 @@ do
   package.loaded["auto-core.todo.where"] = real_where
 end
 
+-- ─────────────────────────────────────────────────────────────
+section("setup gives auto-core this project's scope, and an assignment carries it (ADR 1791532020 §2.5a)")
+do
+  -- the real setup, from the project's directory: the scope is its own work, never set by hand
+  -- here. Last, so no section after it sees setup's state.
+  local cwd = vim.fn.getcwd()
+  vim.fn.chdir(proj)
+  local root = vim.fn.getcwd()
+  local okset, serr = pcall(require("auto-agents").setup, { log_level = "error" })
+  vim.fn.chdir(cwd)
+  worktree.set_workspace_root(proj) -- the store this suite resolves, whatever setup touched
+  ok("auto-agents' setup ran", okset, serr)
+  local ok_sc, sc = pcall(require, "auto-core.todo.scope")
+  if ok_sc then
+    -- the key as setup's rule makes it, computed here from the directory, not read back
+    local want = "auto-agents:" .. vim.fn.sha256(root):sub(1, 16)
+    ok("setup gave auto-core this project's scope, from its root's key", sc.get() == want,
+      vim.inspect({ got = sc.get(), want = want }))
+    local made = run("todos.add", { title = "Assigned after setup" })
+    local r = made.ok and run("todos.assign", { id = made.value.id, assignee = "agent:someone", reason = "go" })
+    local p = last_params["assign"]
+    ok("… and an assignment made through the verb carries it",
+      r and r.ok and p and p[6] == (sc.scoped() and want or nil), vim.inspect({ r, p }))
+    if made.ok then run("todos.remove", { id = made.value.id }) end
+    sc.set(nil)
+  else
+    ok("an auto-core without the scope: setup sets none and assignments are made as before", true)
+  end
+end
+
 ok("auto-core.todo was never required (auto-core v0.4.1 removes it)",
   package.loaded["auto-core.todo"] == nil)
 
