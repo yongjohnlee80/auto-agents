@@ -229,6 +229,32 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────
+section("an assignment carries this project's scope (ADR 1791532020 §2.5a)")
+do
+  -- as auto-agents' setup sets it, from the project key
+  local sc = require("auto-core.todo.scope")
+  sc.set("auto-agents:spec")
+  ok("AutoDoc and auto-core carry a scope here", sc.scoped(), "autodoc.nvim protocol " .. tostring(sc.protocol()))
+  local r = run("todos.assign", { id = id, assignee = "agent:someone", reason = "scoped" })
+  local p = last_params["assign"]
+  ok("assign sends the bare name, the reason and this project's scope, and the daemon takes it",
+    r.ok and p and p[4] == "agent:someone" and p[5] == "scoped" and p[6] == "auto-agents:spec", vim.inspect({ r, p }))
+  r = run("todos.assign", { id = id, assignee = "agent:someone" })
+  p = last_params["assign"]
+  ok("… with no reason, an empty one holds the scope's place",
+    r.ok and p and p[5] == "" and p[6] == "auto-agents:spec", vim.inspect({ r, p }))
+  r = run("todos.add", { title = "Created assigned, scoped", assignee = "agent:someone" })
+  p = last_params["add"]
+  ok("add with an assignee is an assignment: it sends the scope", r.ok and p and p[3] == "auto-agents:spec",
+    vim.inspect({ r, p }))
+  r = run("todos.add", { title = "Created unassigned" })
+  p = last_params["add"]
+  ok("add without one sends none", r.ok and p and p[3] == nil, vim.inspect({ r, p }))
+  run("todos.assign", { id = id }) -- cleared, as the sections after expect it
+  sc.set(nil)
+end
+
+-- ─────────────────────────────────────────────────────────────
 section("status, archive, refresh, remove")
 do
   local r = run("todos.status", { id = id, status = "automated" })

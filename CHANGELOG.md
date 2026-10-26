@@ -2,6 +2,20 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [Unreleased] — an assignment is scoped to this project
+
+ADR 1791532020 r15 §2.5a. **Scoping needs auto-core with `auto-core.todo.scope` and AutoDoc
+protocol 30**; with either older, assignments are made as before.
+
+- **setup sets this project's todo scope**, `"auto-agents:" .. session_project_key`, the key the
+  per-project TOML is keyed by: a restart keeps it, where the mailbox instance id changes.
+- **`todos.assign` and `todos.add` (with an assignee) carry it**, through auto-core's
+  `assign_params` / `add_params`. auto-core's notifier then delivers a bare `agent:<name>` only in
+  this project; a full `agent:<name>:<instance>` still reaches that instance.
+- **`bootstrap-todos.md` revision 6** says how to reach an agent: this verb with a bare name for
+  this project's agents, a full id for one exact instance; a hand edit of `assignee:` or a raw
+  `autodoc --call todos.assign` with no scope reaches no one.
+
 ## [v0.3.6] — 2026-10-14 — the todos.* verbs call AutoDoc itself
 
 ADR 1791532020 §3 step 4 (r12). **Requires auto-core v0.4.0 or later and

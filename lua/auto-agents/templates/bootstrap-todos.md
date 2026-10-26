@@ -1,5 +1,5 @@
 ---
-revision: 5
+revision: 6
 title: auto-agents todos command surface — bootstrap guide
 ---
 
@@ -106,7 +106,7 @@ mutation needs side effects.**
 | Read anything                         | direct file read    | none — preferred                          |
 | Edit `title` / `description` / `tags` | direct YAML edit    | none — preferred                          |
 | Edit `priority` / `due`               | direct YAML edit    | **no event fires** — silent              |
-| Edit `assignee:` by hand              | direct YAML edit    | metadata only: **nobody is notified**    |
+| Edit `assignee:` by hand              | direct YAML edit    | metadata only: **nobody is notified**, and the scope is dropped |
 | Transition `status:`                  | `todos.status`      | fires `core.todo.status:changed`         |
 | Notify someone of an assignment       | `todos.assign`      | mailbox message to recipient's inbox     |
 | Add / remove a task                   | `todos.add` / `.remove` | events; AutoDoc journals it          |
@@ -252,9 +252,21 @@ have already seen is a duplicate.** The recipient must be registered
 in the same Neovim (its addressbook); a recipient that registers
 within a grace window still gets it.
 
-The recipient mailbox is the same form you'd use anywhere in
-the auto-agents protocol (e.g. `agent:lector` or the full
-`agent:lector:<instance>` form — both resolve via the router).
+**A bare name is this project's agent** (ADR 1791532020 §2.5a). Several
+Neovims, of several projects, can share one store (the global KB's). An
+assignment made through this verb carries this project's scope, so a
+bare `agent:lector` (or `lector`) is delivered only by a Neovim of the
+project that made it, and survives its restarts. Two ways reach an agent:
+
+- **This verb, with a bare name**, for this project's agents. Prefer it:
+  the task file keeps the bare name, never an instance id.
+- **A full id**, `agent:lector:<instance>`, for one exact instance (another
+  project's agent, say). It is delivered by that instance alone.
+
+A bare assignee with no scope reaches **no one**, never everyone: a hand
+edit of `assignee:`, an assignment made before AutoDoc protocol 30, or a
+raw `autodoc --call todos.assign` that passes no scope. Re-assign through
+this verb to deliver it.
 
 Pass `args.assignee = null` to **clear** the assignee. Clearing
 does NOT emit a message (no one to notify).
