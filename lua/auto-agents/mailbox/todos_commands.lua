@@ -175,6 +175,13 @@ local function list_bucket(ctx, status)
   return tasks
 end
 
+---todo_scope is auto-core's assignment scope (ADR 1791532020 §2.5a), nil with an auto-core
+---before it: then an assignment is built as before, with no scope.
+local function todo_scope()
+  local ok, m = pcall(require, "auto-core.todo.scope")
+  return ok and type(m) == "table" and m or nil
+end
+
 -- ─── handlers ─────────────────────────────────────────────────
 
 ---@param args table
@@ -275,12 +282,15 @@ local function h_add(args)
   store.absolute_refs(spec)
   local ctx, cerr = resolve()
   if not ctx then return failed(cerr) end
-  local task, err = store.call_at(ctx, "add", spec)
+  -- with an assignee, an assignment: it carries this project's scope (ADR 1791532020 §2.5a)
+  local sc = todo_scope()
+  local params = sc and sc.add_params(spec) or { spec }
+  local task, err = store.call_at(ctx, "add", unpack(params))
   if err and err.code == store.NOT_A_STORE then
     -- a new project's store: auto-core registered and claimed it; scaffold it
     local _, serr = store.call_at(ctx, "scaffold")
     if serr then return failed(serr) end
-    task, err = store.call_at(ctx, "add", spec)
+    task, err = store.call_at(ctx, "add", unpack(params))
   end
   if err then return failed(err) end
   store.publish("core.todo:changed", { kind = "add", id = task.id })
@@ -354,10 +364,12 @@ local function h_assign(args)
     return err_response("invalid_args", "args.reason, when provided, must be a string")
   end
   local who = type(args.assignee) == "string" and args.assignee or ""
-  local extra = { who }
-  if args.reason and args.reason ~= "" then extra[2] = args.reason end
   local ctx, cerr = resolve()
   if not ctx then return failed(cerr) end
+  -- the assignee, the reason and this project's scope, as every writer builds them: a bare
+  -- assignee reaches this project's agent only (ADR 1791532020 §2.5a)
+  local sc = todo_scope()
+  local extra = sc and sc.assign_params(who, args.reason) or { who, (args.reason ~= "" and args.reason) or nil }
   local failure, _, task = move(ctx, "assign", args.id, args.rev, unpack(extra))
   if failure then return failure end
   store.publish("core.todo:changed", { kind = "assign", id = args.id })

@@ -186,6 +186,11 @@ function M.setup(opts)
   M.state.session_cwd = raw_cwd
   M.state.session_project_root = root
   M.state.session_project_key = vim.fn.sha256(root):sub(1, 16)
+  -- this project's todo scope (ADR 1791532020 §2.5a): an assignment made here carries it, and
+  -- auto-core's notifier delivers a bare assignee only in the project that made it. The key, not
+  -- the mailbox instance id, so a restart keeps it.
+  local ok_scope, todo_scope = pcall(require, "auto-core.todo.scope") -- absent before auto-core v0.5.1
+  if ok_scope then todo_scope.set("auto-agents:" .. M.state.session_project_key) end
 
   -- M6: TOML config store replaces the lazy-spec bootstrap entirely.
   -- Resolution order: per-project file → global file → empty.
