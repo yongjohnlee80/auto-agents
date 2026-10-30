@@ -406,6 +406,9 @@ local function ensure_gateway(st)
   -- registered on another store (the daemon swapped stores, at the same epoch or not): that
   -- credential names nothing here, so it is dropped and the gateway registered again (Lector #5 F2)
   if g.r and g.r.store ~= store and not g.r.inflight then g.r, g.s, g.credential = nil, nil, nil end
+  -- the addressbook is the current store's and claim's only (Lector #5 r1 F2): another's says
+  -- nothing about who holds the codename here
+  if g.book and (g.book_store ~= store or g.book_epoch ~= st.epoch) then g.book = nil end
   if g.s or (g.r and g.r.inflight) then return end
   -- the codename is this Neovim's own: an agent's profile of that name (an older registration, not
   -- a host) is never taken over, nor its mail (Lector #5 F3); the addressbook says, so it comes first
@@ -464,20 +467,28 @@ end
 
 -- refresh_addressbook keeps the codenames crew.list answers, for the gateway's sender to check a
 -- recipient against before it takes a message (an unknown one stays on the file route).
-local function refresh_addressbook(st)
+local refresh_addressbook
+refresh_addressbook = function(st)
   local g = st.gateway
   if not g or not live(st) or g.listing_book then return end
+  local store, epoch = store_of(st.session), st.epoch
+  if not store then return end
   g.listing_book = true
   st.session.call("crew.list", {}, function(res, err)
     g.listing_book = false
     if _s ~= st or st.gateway ~= g or err or type(res) ~= "table" then return end
+    -- answered for a store or claim no longer current: dropped, and asked again for this one
+    if store_of(st.session) ~= store or st.epoch ~= epoch then
+      g.book = nil
+      return refresh_addressbook(st)
+    end
     local book = {}
     for _, e in ipairs(res) do
       if type(e) == "table" and e.scope == st.scope and type(e.codename) == "string" then
         book[e.codename] = type(e.kind) == "string" and e.kind or "?"
       end
     end
-    g.book = book
+    g.book, g.book_store, g.book_epoch = book, store, epoch
     ensure_gateway(st) -- the gateway registers once the addressbook says its codename is free
   end)
 end
@@ -502,6 +513,16 @@ function M.gateway_credential()
   if not g or not g.s or st.status ~= "held" or g.s.epoch ~= st.epoch then return nil end
   if store_of(st.session) ~= g.r.store then return nil end -- a credential of another store names nothing here
   return g.credential
+end
+
+---gateway_identity is the authority the gateway sends under, while it is held: the store, the
+---scope and the gateway's profile. A send's idempotency key dedups only under the same one.
+---@return { store: string, scope: string, profile: string }|nil
+function M.gateway_identity()
+  local st = _s
+  if not M.gateway_credential() then return nil end
+  local g = st.gateway
+  return { store = g.r.store, scope = g.r.scope, profile = g.s.profile }
 end
 
 ---in_addressbook is whether codename is a profile in this scope, as crew.list last said.

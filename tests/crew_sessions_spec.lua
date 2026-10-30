@@ -32,7 +32,9 @@
 ---       registered again at a new epoch, replayed when its answer was lost, ended by release
 ---  [17] the gateway is fenced by its store: another store answering drops its credential and it
 ---       registers there (Lector #5 F2); its codename is reserved: an agent of that name gets no
----       session, and an agent profile of that name keeps its mail, the gateway off (F3)
+---       session, and an agent profile of that name keeps its mail, the gateway off (F3); the
+---       addressbook is the current store's and claim's only: an answer for the old store is dropped,
+---       so the new store's profile of that name is still protected (Lector #5 r1 F2)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -667,6 +669,29 @@ do
   ok("[17] an agent named gateway starts without a crew session, and says why",
     h == nil and why ~= nil and #w.of("crew.register") == 0)
   vim.fn.delete(cwd, "rf")
+end
+
+do
+  local w = new_world()
+  w.answer["crew.list"] = { { codename = "gold", scope = "autovim:alpha", kind = "claude" } }
+  crew.enable_gateway("/proj")
+  ok("[17] held on store-1, its book store-1's", #w.of("crew.register") == 1)
+  w.store = "store-2"
+  w.answer["crew.list"] = { { codename = "gateway", scope = "autovim:alpha", kind = "claude" } }
+  w.tick()
+  ok("[17] another store: its old book is not used; the new store's profile named gateway keeps the gateway off",
+    #w.of("crew.register") == 1 and crew.gateway_credential() == nil and #w.notices == 1, vim.inspect(w.notices))
+end
+
+do
+  local w = new_world()
+  w.deferred["crew.list"] = true
+  crew.enable_gateway("/proj")
+  w.store = "store-2" -- the store changes while the list is answered
+  w.reply("crew.list", { { codename = "gold", scope = "autovim:alpha", kind = "claude" } })
+  ok("[17] a list answered for the old store is dropped, and asked again", #w.of("crew.list") == 2 and #w.of("crew.register") == 0)
+  w.reply("crew.list", { { codename = "gateway", scope = "autovim:alpha", kind = "claude" } })
+  ok("[17] the new store's answer protects its profile named gateway", #w.of("crew.register") == 0 and #w.notices == 1)
 end
 
 crew.stop()
