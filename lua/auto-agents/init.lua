@@ -998,6 +998,9 @@ local function ensure_main_slot_terminal(slot, winid)
   if term and term:is_alive() then
     return term:get_bufnr()
   end
+  -- a crew registration waits for the daemon, and timers run meanwhile: one spawn per slot at a time
+  M.state.slot_spawning = M.state.slot_spawning or {}
+  if M.state.slot_spawning[slot] then return nil end
 
   local logger = require("auto-agents.log")
   local spec = resolve_slot_spec(slot)
@@ -1014,11 +1017,38 @@ local function ensure_main_slot_terminal(slot, winid)
   -- M5: explicit `resource cwd` grant > first path grant > cwd.resolve default.
   cwd = require("auto-agents.resources").cwd_for(slot, cwd)
   local env = build_agent_env(spec, cwd)
+  -- registered first (ADR 1793271500 §4.4): the agent starts with its crew session's context, or,
+  -- with no scope held, no workspace served or a registration that failed, as before without one
+  local crew_session
+  if spec.configured ~= false and spec.name then
+    M.state.slot_spawning[slot] = true
+    local ok, handle, why = pcall(function()
+      return require("auto-agents.crew").begin({ codename = spec.name, kind = spec.kind, cwd = cwd })
+    end)
+    M.state.slot_spawning[slot] = nil
+    if not ok then
+      logger.warn("crew", "crew session for " .. spec.name .. " failed: " .. tostring(handle))
+    elseif handle then
+      crew_session = handle
+      env = env or {}
+      for k, v in pairs(handle.env) do env[k] = v end
+    elseif why then
+      vim.notify(("%s starts without a crew session: %s"):format(spec.name, why), vim.log.levels.WARN,
+        { title = "auto-agents" })
+    end
+    -- the wait let other work run: a spawn that won meanwhile is this slot's
+    local won = M.state.slot_terminals[slot]
+    if won and won:is_alive() then
+      require("auto-agents.crew").finish(crew_session, "start_failed")
+      return won:get_bufnr()
+    end
+  end
   term = require("auto-agents.terminal").new(cfg, {
     cmd = spec.cmd,
     cwd = cwd,
     env = env,
     on_exit = function(code)
+      require("auto-agents.crew").finish(crew_session, "exit")
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
       pcall(function() require("auto-agents.status.observer").detach(slot) end)
       if M.state.agent_status then M.state.agent_status[slot] = nil end
@@ -1041,8 +1071,12 @@ local function ensure_main_slot_terminal(slot, winid)
       M.refresh_dock()
     end,
   })
-  local bufnr = term:start(winid)
-  if not bufnr then return nil end
+  local started, bufnr = pcall(term.start, term, winid)
+  if not started or not bufnr then
+    require("auto-agents.crew").finish(crew_session, "start_failed")
+    if not started then error(bufnr, 0) end
+    return nil
+  end
   M.state.slot_terminals[slot] = term
   pcall(function()
     require("auto-agents.status.observer").attach(slot, bufnr, spec.kind)
