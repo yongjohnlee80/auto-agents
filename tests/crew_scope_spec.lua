@@ -259,18 +259,33 @@ do -- a reattach answered after release resurrects nothing
   crew.stop()
 end
 
-do -- stop, then a new setup: the old state's late reply and timers touch nothing of the new one
+do -- stop, then a new setup: the old state's late claim reply touches nothing of the new one
   local w = new_world({ deferred = true })
   w.connect()
-  local old_timers = w.timers
   local w2 = new_world() -- setup again: the first state is stopped
   w2.answer["crew.claim"] = { epoch = 1 }
   w2.connect()
   w.reply("crew.claim", { epoch = 50 }) -- the old state's claim, late
-  for _, fn in ipairs(old_timers) do fn() end
   local _, epoch = crew.held()
   ok("[9] a stopped state's late claim leaves the new state's epoch alone", epoch == 1, tostring(epoch))
   ok("[9] and is given back, not left held", #w.of("crew.release") == 1 and w.of("crew.release")[1].params[3] == 50)
+  crew.stop()
+end
+
+do -- a held state's renewal timer, fired after a new setup at the same attempt count, renews nothing
+  local w = new_world()
+  w.answer["crew.claim"] = { epoch = 3 }
+  w.connect() -- held: one renewal timer pending, at this state's attempt
+  local old_timers = w.timers
+  w.timers = {}
+  ok("[9] the held state has its renewal timer pending", #old_timers == 1)
+  local w2 = new_world() -- a new state, whose attempt counter starts where the old one's did
+  w2.answer["crew.claim"] = { epoch = 3 }
+  w2.connect()
+  for _, fn in ipairs(old_timers) do fn() end
+  ok("[9] the stopped state's timer sends nothing, through either session",
+    #w.of("crew.renew") == 0 and #w2.of("crew.renew") == 0)
+  ok("[9] and the new state is still held", select(2, crew.held()) == 3)
   crew.stop()
 end
 
