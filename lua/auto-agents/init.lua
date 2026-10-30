@@ -614,6 +614,15 @@ function M.setup(opts)
   -- immediately, not just after the first rename/move/remove.
   M.refresh_keymaps()
 
+  -- The crew scope this Neovim's agents will live under in the AutoDoc daemon (ADR 1793271500,
+  -- phase 4c). Quiet without AutoDoc, or with a daemon that serves no crew verbs.
+  local crew_ok, crew_err = pcall(function()
+    require("auto-agents.crew").setup({ project_key = M.state.session_project_key })
+  end)
+  if not crew_ok then
+    require("auto-agents.log").warn("crew", "crew scope setup failed: " .. tostring(crew_err))
+  end
+
   require("auto-agents.log").info("init",
     string.format("auto-agents v%s initialized; config_source=%s, agents=%d",
       M.version, source, #config.agents.bootstrap))
