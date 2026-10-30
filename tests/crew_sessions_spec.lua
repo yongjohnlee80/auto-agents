@@ -35,6 +35,9 @@
 ---       session, and an agent profile of that name keeps its mail, the gateway off (F3); the
 ---       addressbook is the current store's and claim's only: an answer for the old store is dropped,
 ---       so the new store's profile of that name is still protected (Lector #5 r1 F2)
+---  [18] the crew guide for the instruction block: none while no scope is held or the daemon lacks
+---       crew.guide; asked by crew's kind and cached per store, daemon version and kind; an answer
+---       that fails or doesn't come within the wait is none, not cached, and asked again
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -63,7 +66,7 @@ local function new_world(opts)
   local function new_client(addr)
     return {
       can = function() return true end,
-      hello = function() return { store_id = w.store } end,
+      hello = function() return { store_id = w.store, version = w.version } end,
       addr = function() return addr end,
     }
   end
@@ -692,6 +695,56 @@ do
   ok("[17] a list answered for the old store is dropped, and asked again", #w.of("crew.list") == 2 and #w.of("crew.register") == 0)
   w.reply("crew.list", { { codename = "gateway", scope = "autovim:alpha", kind = "claude" } })
   ok("[17] the new store's answer protects its profile named gateway", #w.of("crew.register") == 0 and #w.notices == 1)
+end
+
+-- ── [18] the crew guide ─────────────────────────────────────────────────────
+
+do
+  local w = new_world({ claim = false })
+  ok("[18] no scope held: no guide, and nothing asked", crew.guide("claude") == nil and #w.of("crew.guide") == 0)
+end
+
+do
+  local w = new_world()
+  w.answer["crew.guide"] = function(p) return { markdown = "guide for " .. p[1], protocol = 41 } end
+  local g = crew.guide("antigravity")
+  ok("[18] the daemon's markdown, asked by crew's kind", g == "guide for agy" and w.of("crew.guide")[1].params[1] == "agy",
+    tostring(g))
+  crew.guide("antigravity")
+  ok("[18] asked once per store, build and kind", #w.of("crew.guide") == 1)
+  crew.guide("claude")
+  ok("[18] another kind is asked", #w.of("crew.guide") == 2)
+  w.version = "v2"
+  crew.guide("antigravity")
+  ok("[18] another daemon build is asked again", #w.of("crew.guide") == 3)
+  w.store = "store-2"
+  crew.guide("antigravity")
+  ok("[18] another store is asked again", #w.of("crew.guide") == 4)
+end
+
+do
+  local w = new_world()
+  w.deferred["crew.guide"] = true
+  ok("[18] no answer within the wait: no guide", crew.guide("claude") == nil)
+  w.reply("crew.guide", { markdown = "late" }) -- answered after the wait gave up
+  w.deferred["crew.guide"] = nil
+  w.answer["crew.guide"] = { markdown = "now" }
+  ok("[18] nothing cached: asked again, and the late answer is not the guide",
+    crew.guide("claude") == "now" and #w.of("crew.guide") == 2)
+end
+
+do
+  local w = new_world()
+  w.answer["crew.guide"] = function() return nil, { code = -32603, message = "busy" } end
+  ok("[18] a failed answer: no guide", crew.guide("claude") == nil)
+  w.answer["crew.guide"] = { markdown = "ok" }
+  ok("[18] a failure isn't cached: asked again", crew.guide("claude") == "ok" and #w.of("crew.guide") == 2)
+end
+
+do
+  local w = new_world()
+  w.client.can = function(_, m) return m ~= "crew.guide" end
+  ok("[18] a daemon without crew.guide is not asked", crew.guide("claude") == nil and #w.of("crew.guide") == 0)
 end
 
 crew.stop()

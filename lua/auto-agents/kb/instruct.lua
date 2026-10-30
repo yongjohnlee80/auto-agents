@@ -110,6 +110,19 @@ local INTERACTIVE_KINDS = {
 ---Interactive kinds that nonetheless have no model to configure here.
 local NO_MODEL_OPTION = { codex = true }
 
+---cutover is `crew.cutover` as the block names it: "*" for every agent, a sorted list of
+---codenames, or nil when no mail goes through the AutoDoc daemon.
+---@param cfg table auto-agents' config
+---@return string|string[]|nil
+local function cutover(cfg)
+  local cut = (cfg.crew or {}).cutover
+  if cut == "*" then return "*" end
+  if type(cut) ~= "table" or #cut == 0 then return nil end
+  local names = vim.deepcopy(cut)
+  table.sort(names)
+  return names
+end
+
 ---Render the auto-agents block content for a kind. The block is
 ---agent-neutral: it lists every configured peer of the same kind in a
 ---roster table and tells each reader to resolve its own identity from
@@ -118,8 +131,10 @@ local NO_MODEL_OPTION = { codex = true }
 ---previous one's personalized text).
 ---@param spec table  -- { kind, name, slot, model }
 ---@param kb { root: string, workspace: string|nil }|nil  -- the primary KB
+---@param crew { guide: string|nil, editor: boolean }|nil  -- the daemon's crew guide for the kind
+---  (only when `crew.cutover` names someone), and whether Neovim's editor socket serves
 ---@return string
-local function render_block(spec, kb)
+local function render_block(spec, kb, crew)
   local aa_state  = (require("auto-agents").state or {}).config or {}
   local bootstrap = (aa_state.agents or {}).bootstrap or {}
   local kind      = spec.kind or "?"
@@ -244,6 +259,59 @@ local function render_block(spec, kb)
     vim.list_extend(lines, {
       "This project has no primary KB. Ask the user which KB to use before",
       "reading or writing one.",
+      "",
+    })
+  end
+
+  crew = crew or {}
+  local cut = crew.guide and cutover(aa_state) or nil
+  if cut then
+    local who
+    if cut == "*" then
+      who = "every agent"
+    else
+      local quoted = {}
+      for i, n in ipairs(cut) do quoted[i] = "`" .. n .. "`" end
+      who = #quoted == 1 and quoted[1]
+        or (table.concat(quoted, ", ", 1, #quoted - 1) .. " and " .. quoted[#quoted])
+    end
+    vim.list_extend(lines, {
+      "### Crew mail (AutoDoc)",
+      "",
+      "Mail to " .. who .. " goes through the AutoDoc daemon (`crew.cutover`).",
+      "If that includes you and `$AUTODOC_CREW_CONTEXT` is set (your crew",
+      "session), receive, answer and send mail with the `autodoc` CLI, as",
+      "below, and not through the mailbox's `inbox/` and `outbox/`.",
+    })
+    if cut ~= "*" then
+      vim.list_extend(lines, {
+        "Mail to anyone else still goes through `outbox/`; Neovim forwards",
+        "mail for a listed recipient to the daemon.",
+      })
+    end
+    lines[#lines + 1] = ""
+    for line in (crew.guide:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
+      lines[#lines + 1] = line
+    end
+    vim.list_extend(lines, {
+      "",
+      "Without `$AUTODOC_CREW_CONTEXT`, or when `autodoc crew whoami` fails,",
+      "use the mailbox below for mail too, and tell the user.",
+      "",
+    })
+  end
+
+  if crew.editor then
+    vim.list_extend(lines, {
+      "### Neovim's editor",
+      "",
+      "When `$AUTODOC_EDITOR` is set, Neovim answers `autodoc --editor <verb>",
+      "'[…]'` directly, with no mail: `editor.workspace`, `editor.buffers`,",
+      "`editor.read`, `editor.find`, `editor.open`, `peek`, `diff_queue` and",
+      "`review.create` / `list` / `show` / `validate`, as far as your grants",
+      "allow (the roster entry's `editor_grants`; a verb outside them is",
+      "refused, naming the grant). Prefer it to the mailbox commands of the",
+      "same names.",
       "",
     })
   end
@@ -512,7 +580,13 @@ function M.ensure(spec, kb, cwd)
 
   local filename = M.filename_for(spec.kind or "generic")
   local path = cwd .. "/" .. filename
-  local block = render_block(spec, kb)
+  local cfg = (require("auto-agents").state or {}).config or {}
+  local crew = {
+    -- asked only when someone is cut over: otherwise the block has no crew section to fill
+    guide = cutover(cfg) and require("auto-agents.crew").guide(spec.kind or "generic") or nil,
+    editor = require("auto-agents.editor_socket").path() ~= nil,
+  }
+  local block = render_block(spec, kb, crew)
 
   -- P1 bail-out: same rendered block + untouched file → identical
   -- outcome to the previous call; skip the file read and splice.
