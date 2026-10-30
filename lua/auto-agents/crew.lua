@@ -495,7 +495,8 @@ end
 ---ended, since nobody starts it; one whose answer was lost is replayed as it was by the codename's
 ---next start, or ended by the next renewal.
 ---@param opts { codename: string, kind: string|nil, cwd: string }
----@return table|nil handle { session, context, env }, string|nil why
+---@return table|nil handle the session, its context's path and the env to add
+---@return string|nil why
 function M.begin(opts)
   local st = _s
   if not st or st.status ~= "held" or not st.session then return nil, nil end
