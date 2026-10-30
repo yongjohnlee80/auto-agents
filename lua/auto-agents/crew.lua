@@ -166,8 +166,10 @@ end
 function M.write_context(folder, c)
   if not plain_name(c.session) then return nil, "session id " .. tostring(c.session) end
   local dir = vim.fs.joinpath(folder, M.CONTEXT_DIR)
-  if vim.fn.mkdir(dir, "p", tonumber("700", 8)) == 0 and vim.fn.isdirectory(dir) == 0 then
-    return nil, "could not make " .. dir
+  -- mkdir raises (E739) when it can't make the folder: an error here, never a raise mid-spawn
+  local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
+  if not made or vim.fn.isdirectory(dir) == 0 then
+    return nil, "could not make " .. dir .. (made and "" or (": " .. tostring(merr)))
   end
   local body = vim.json.encode({ store = c.store, socket = c.socket, scope = c.scope, profile = c.profile,
     session = c.session, credential = c.credential, kind = c.kind })

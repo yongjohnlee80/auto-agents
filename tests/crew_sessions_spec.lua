@@ -67,7 +67,7 @@ local function new_world(opts)
     return false
   end
   w.session = {
-    is_ready = function() return true end,
+    is_ready = function() return opts.claim ~= false end,
     client = function() return w.client end,
     call = function(method, params, cb)
       w.calls[#w.calls + 1] = { method = method, params = vim.deepcopy(params) }
