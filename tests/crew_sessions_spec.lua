@@ -28,6 +28,8 @@
 ---       exit (Juliet #4 r0 F2)
 ---  [15] the spawn's terminal: a constructor or a start that throws, or no buffer, ends the
 ---       registered session start_failed once and raises the error as it was (Lector #4 r1 F3)
+---  [16] the gateway session: registered when asked for (gateway, host), kept across renewals,
+---       registered again at a new epoch, replayed when its answer was lost, ended by release
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -578,6 +580,44 @@ do
   ok("[15] a terminal that starts keeps its session", okg and term4 ~= nil and buf4 == 42 and #w.of("crew.exit") == 3)
   crew.finish(h4, "exit")
   vim.fn.delete(cwd, "rf")
+end
+
+-- ── [16] the gateway session (phase 4e) ─────────────────────────────────────
+
+do
+  local w = new_world()
+  w.answer["crew.list"] = { { codename = "gold", scope = "autovim:alpha" }, { codename = "far", scope = "nvim:other" } }
+  ok("[16] no gateway credential before it is asked for", crew.gateway_credential() == nil)
+  crew.enable_gateway("/proj")
+  local reg = w.of("crew.register")[1]
+  local p = reg and reg.params or {}
+  ok("[16] asked for, the gateway is registered: codename gateway, kind host, the workspace's id",
+    p[4] == "gateway" and p[5] == "host" and p[6] == "7" and p[3] == 5 and #p[8] == 64, vim.inspect(p))
+  ok("[16] its credential is <session>.<secret>, held in memory only", crew.gateway_credential() == "s1." .. p[8])
+  ok("[16] the addressbook holds this scope's codenames alone", crew.in_addressbook("gold") and not crew.in_addressbook("far"))
+  w.tick()
+  ok("[16] a renewal keeps it: no second registration", #w.of("crew.register") == 1 and crew.gateway_credential() ~= nil)
+  w.answer["crew.renew"] = function() return nil, { code = crew.CODE_STALE_EPOCH, message = "stale" } end
+  w.answer["crew.claim"] = { epoch = 6 }
+  w.tick()
+  local regs = w.of("crew.register")
+  ok("[16] a claim at another epoch registers it again, under the new epoch",
+    #regs == 2 and regs[2].params[3] == 6 and crew.gateway_credential() == "s2." .. regs[2].params[8], vim.inspect(regs))
+  crew.release()
+  ok("[16] release ends it: no credential", crew.gateway_credential() == nil)
+end
+
+do
+  local w = new_world()
+  w.answer["crew.list"] = {}
+  w.answer["crew.register"] = function() return nil, { message = "connection lost" } end
+  crew.enable_gateway("/proj")
+  ok("[16] a lost registration holds no credential", crew.gateway_credential() == nil)
+  w.answer["crew.register"] = { session = "g9", profile = "p" }
+  w.tick()
+  local regs = w.of("crew.register")
+  ok("[16] it is replayed as it was at the next renewal, and held",
+    #regs == 2 and vim.deep_equal(regs[1].params, regs[2].params) and crew.gateway_credential() == "g9." .. regs[1].params[8])
 end
 
 crew.stop()
