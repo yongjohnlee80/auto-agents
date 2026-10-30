@@ -15,6 +15,8 @@
 ---   [6] framing: a request split across writes is answered once, two in one write both, and bytes
 ---       that aren't msgpack close the connection
 ---   [7] an unknown verb is method-not-found
+---   [8] a restart: the old process's late forget, by its own token, leaves the new process's
+---       token and grants alone (Juliet #7 r0 F1)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -210,6 +212,21 @@ do
   local tok = es.agent_env("x").AUTODOC_EDITOR_TOKEN
   local _, err = call(path, "editor.nope", { tok })
   ok("[7] an unknown verb is method-not-found", err and err.code == es.CODE_METHOD_NOT_FOUND)
+end
+
+-- ── [8] a restart's late forget (Juliet #7 r0 F1) ───────────────────────────
+
+do
+  local t1 = es.agent_env("gold", { "editor.read", "commands" }).AUTODOC_EDITOR_TOKEN
+  local t2 = es.agent_env("gold", { "editor.read", "commands" }).AUTODOC_EDITOR_TOKEN -- the restart's
+  es.forget("gold", t1) -- the old process's exit, reaped after the new one started
+  local res, err = call(path, "editor.read", { t2 })
+  ok("[8] the old process's forget leaves the new token working", err == nil and res ~= nil, vim.inspect(err))
+  local _, oerr = call(path, "editor.open", { t2, "nowhere-that-exists.md" })
+  ok("[8] and its grants", not oerr or oerr.code ~= es.CODE_ACCESS_DENIED, vim.inspect(oerr))
+  es.forget("gold", t2)
+  local _, gerr = call(path, "editor.read", { t2 })
+  ok("[8] its own forget, by its token, revokes it", gerr and gerr.code == es.CODE_ACCESS_DENIED)
 end
 
 es.stop()
