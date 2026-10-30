@@ -678,3 +678,23 @@ end, {
     .. "agent's inbox so it re-reads on next wake. Use when the agent itself "
     .. "hasn't detected the drift yet.",
 })
+
+-- The crew gateway's held messages (ADR 1793271500 phase 4e): sent through the daemon, their
+-- outcome unknown. With no argument, list them; with a key, or `all`, hand them to the file
+-- mailbox, the user's decision that the daemon never delivered them.
+vim.api.nvim_create_user_command("AutoAgentsGatewayRelease", function(opts)
+  local gw = require("auto-agents.crew_gateway")
+  local arg = vim.trim(opts.args or "")
+  if arg == "" then
+    local held = gw.held()
+    vim.notify(#held == 0 and "No crew gateway message waits." or ("Waiting:\n" .. table.concat(held, "\n")),
+      vim.log.levels.INFO, { title = "auto-agents" })
+    return
+  end
+  local n = gw.release(arg)
+  vim.notify(("%d message(s) handed to the file mailbox."):format(n), vim.log.levels.INFO, { title = "auto-agents" })
+end, {
+  nargs = "?",
+  desc = "List the crew gateway's waiting messages, or hand one (or all) to the file mailbox",
+  complete = function() return vim.list_extend({ "all" }, require("auto-agents.crew_gateway").held()) end,
+})

@@ -15,6 +15,10 @@
 ---       the addressbook entry lost it waits in the outbox, never the file route; after a restart
 ---       with nothing cut over it is still sent again with its key; a marker that can't be
 ---       written leaves a first send on the file route (Lector #5 F1)
+---   [8] a waiting message is resent under its own authority only: another store holds it, said
+---       once, and :AutoAgentsGatewayRelease hands it to the file route; a delivered message is
+---       never sent again, and stays the gateway's until its file is archived, a restart included
+---       (Lector #5 r1 F1)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -36,11 +40,13 @@ local gw = require("auto-agents.crew_gateway")
 
 local function new_world(opts)
   opts = opts or {}
-  local w = { calls = {}, book = opts.book or { gold = true, vision = true }, cred = "g1.secret", answer = {} }
+  local w = { calls = {}, book = opts.book or { gold = true, vision = true }, cred = "g1.secret", answer = {}, notices = {},
+    who = { store = "st1", scope = "autovim:alpha", profile = "pg" } }
   w.router = { set_gateway = function(fn) w.hook = fn end }
   w.crew = {
     enable_gateway = function(cwd) w.enabled = cwd end,
     gateway_credential = function() return w.cred end,
+    gateway_identity = function() return w.cred and w.who or nil end,
     in_addressbook = function(name) return w.book[name] == true end,
   }
   w.call = function(method, params, cb)
@@ -53,7 +59,8 @@ local function new_world(opts)
   w.answer["mail.send"] = { message = {} }
   w.sent_dir = opts.sent_dir or vim.fn.tempname()
   w.installed = gw.setup({ cutover = opts.cutover == nil and { "gold" } or opts.cutover, cwd = "/proj",
-    router = opts.router or w.router, crew = w.crew, call = w.call, sent_dir = w.sent_dir })
+    router = opts.router or w.router, crew = w.crew, call = w.call, sent_dir = w.sent_dir,
+    after = function(_, fn) fn() end, notify = function(m) w.notices[#w.notices + 1] = m end })
   -- offer runs the hook as auto-core's router does: took, and what done was given
   w.offer = function(rec, mid, msg)
     local settled, gerr = false, nil
@@ -63,7 +70,9 @@ local function new_world(opts)
   return w
 end
 
-local rec = { id = "agent:jarvis:123-4" }
+local outbox = vim.fn.tempname()
+vim.fn.mkdir(outbox, "p")
+local rec = { id = "agent:jarvis:123-4", subs = { outbox = outbox } }
 local function msg(over)
   return vim.tbl_extend("force", { kind = "message", from = "agent:jarvis:123-4", to = "agent:gold:123-4", subject = "hi",
     body = "hello" }, over or {})
@@ -206,6 +215,58 @@ do
   local took = w.offer(rec, "m1", msg())
   ok("[7] a marker that can't be written leaves a first send on the file route, and sends nothing",
     took == false and #w.calls == 0)
+  gw.stop()
+end
+
+-- ── [8] authority and archival (Lector #5 r1 F1) ────────────────────────────
+
+do
+  local w = new_world()
+  w.answer["mail.send"] = function() return nil, { message = "connection lost after the write" } end
+  w.offer(rec, "a1", msg())
+  w.who = { store = "st2", scope = "autovim:alpha", profile = "pg" } -- the daemon swapped stores
+  w.answer["mail.send"] = { message = {} }
+  local took, settled, gerr = w.offer(rec, "a1", msg())
+  ok("[8] under another store's authority it is not resent: it waits (done(err)), never the file route",
+    took and settled and gerr ~= nil and #w.calls == 1 and #w.notices == 1)
+  w.offer(rec, "a1", msg())
+  ok("[8] the wait is said once", #w.notices == 1)
+  ok("[8] it is listed as waiting", vim.deep_equal(gw.held(), { "legacy:agent:jarvis:123-4/a1" }))
+  w.who = { store = "st1", scope = "autovim:alpha", profile = "pg" }
+  local took2, _, gerr2 = w.offer(rec, "a1", msg())
+  ok("[8] its own store back, it is resent with the same key", took2 and gerr2 == nil and #w.calls == 2
+    and w.calls[2].params[4] == w.calls[1].params[4])
+  gw.stop()
+end
+
+do
+  local w = new_world()
+  w.answer["mail.send"] = function() return nil, { message = "connection lost" } end
+  w.offer(rec, "a2", msg())
+  ok("[8] release hands a waiting message to the file route", gw.release("all") == 1 and #gw.held() == 0
+    and w.offer(rec, "a2", msg()) == false)
+  gw.stop()
+end
+
+do
+  local w = new_world()
+  local src = outbox .. "/d1.json"
+  vim.fn.writefile({ "{}" }, src) -- its file not yet archived (the archive failed)
+  local took = w.offer(rec, "d1", msg())
+  ok("[8] delivered", took and #w.calls == 1)
+  local took2, settled2, gerr2 = w.offer(rec, "d1", msg())
+  ok("[8] a delivered message still in the outbox is never sent again: only archived (done(nil))",
+    took2 and settled2 and gerr2 == nil and #w.calls == 1)
+  gw.stop()
+  local w2 = new_world({ cutover = {}, sent_dir = w.sent_dir })
+  local took3 = w2.offer(rec, "d1", msg())
+  ok("[8] after a restart with nothing cut over, it still never takes the file route",
+    w2.installed and took3 == true and #w2.calls == 0)
+  vim.fn.delete(src)
+  gw.sweep()
+  local names = {}
+  for name in vim.fs.dir(w.sent_dir) do names[#names + 1] = name end
+  ok("[8] once its file is archived, its record goes", #names == 0, vim.inspect(names))
   gw.stop()
 end
 
