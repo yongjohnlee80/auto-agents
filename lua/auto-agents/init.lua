@@ -622,6 +622,14 @@ function M.setup(opts)
   if not crew_ok then
     require("auto-agents.log").warn("crew", "crew scope setup failed: " .. tostring(crew_err))
   end
+  -- the recipients cut over to crew mail take it through the daemon (phase 4e); none by default
+  local gw_ok, gw_err = pcall(function()
+    local cut = M.state.config.crew and M.state.config.crew.cutover
+    require("auto-agents.crew_gateway").setup({ cutover = cut, cwd = vim.fn.getcwd() })
+  end)
+  if not gw_ok then
+    require("auto-agents.log").warn("crew", "crew gateway setup failed: " .. tostring(gw_err))
+  end
 
   require("auto-agents.log").info("init",
     string.format("auto-agents v%s initialized; config_source=%s, agents=%d",

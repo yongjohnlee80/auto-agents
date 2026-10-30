@@ -40,6 +40,11 @@ M.defaults = {
     primary_kind = "claude",
     bootstrap = {},
   },
+  -- The crew (ADR 1793271500 phase 4e): the recipients whose legacy mailbox mail goes through the
+  -- AutoDoc daemon instead of the file move, by codename, or "*" for all. Empty: none, as before.
+  crew = {
+    cutover = {},
+  },
   -- `kb.root_override` / `kb.path` feed only the legacy resolution
   -- (`auto-agents.kb.legacy_root`), which auto-core.kb imports once as
   -- the project's primary KB (ADR 1791209946 §7).
@@ -186,6 +191,10 @@ function M.validate(cfg)
   end
   if type(p.bottom_margin) ~= "number" or p.bottom_margin < 0 then
     return "panel.bottom_margin must be a non-negative integer"
+  end
+  local cut = cfg.crew and cfg.crew.cutover
+  if cut ~= nil and cut ~= "*" and not vim.islist(cut) then
+    return "crew.cutover must be a list of codenames or \"*\""
   end
   local a = cfg.agents
   if not KINDS[a.default_kind] then
