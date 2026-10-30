@@ -12,9 +12,14 @@
 ---    scope while this one was away) claims again and says so;
 ---  * a clean exit releases the scope, so a successor can claim it at once.
 ---
+---Each agent is registered under the scope before it starts (phase 4d, §4.4, §4.5): `begin` sends
+---`crew.register` with a fresh 32-byte secret, waits for the answer at most REGISTER_WAIT_MS, and
+---writes the session's context (0600, through a rename) under <cwd>/.auto-agents/crew/.autodoc-crew/,
+---which the agent is told by $AUTODOC_CREW_CONTEXT; `finish` ends it (`exit`, or `start_failed`).
+---An agent whose registration fails or times out starts as before, without a session.
+---
 ---Everything here is quiet on a daemon without the crew verbs, or with no AutoDoc at all: the scope
----is only claimed where `crew.claim` is served. Registering the agents themselves under the scope
----is phase 4d; this module only holds the scope they will live under.
+---is only claimed where `crew.claim` is served, and agents are registered only while it is held.
 local M = {}
 
 M.RENEW_MS = 30000
@@ -26,6 +31,23 @@ M.CODE_STALE_EPOCH = -32091
 M.CODE_METHOD_NOT_FOUND = -32601
 
 M.TOPIC_CLAIMED = "auto-agents.crew:claimed"
+
+-- How long a spawn waits for its session's registration before starting the agent without one.
+M.REGISTER_WAIT_MS = 3000
+
+-- The refusals that mean a registration or an exit is settled, never to be sent again: crew's own
+-- (core/crew/errors.go), and a daemon that can't take the call at all.
+M.CODE_CODENAME_BUSY = -32092
+M.CODE_INSTANCE_REUSED = -32093
+M.CODE_BAD_CREDENTIAL = -32094
+M.CODE_INVALID_PARAMS = -32602
+
+-- The session contexts' folder (core/crew's ContextDir), under <cwd>/.auto-agents/crew/: inside the
+-- workspace's gitignored .auto-agents/, never the project's own tree.
+M.CONTEXT_DIR = ".autodoc-crew"
+
+-- crew's name for an auto-agents kind, where they differ.
+M.KIND = { antigravity = "agy" }
 
 local _s -- the module's state; nil before setup
 
@@ -74,6 +96,66 @@ function M.proc_ref(root)
   local start = fields[22 - 2] -- field 22, counted from field 3 (state) after the command
   if not start or start == "" then return "" end
   return table.concat({ boot, ns, tostring(pid), start }, ":")
+end
+
+---crew_kind is crew's name for an auto-agents kind: agy for antigravity, else the kind itself.
+---@param kind string|nil
+---@return string
+function M.crew_kind(kind)
+  if type(kind) ~= "string" or kind == "" then return "generic" end
+  return M.KIND[kind] or kind
+end
+
+---context_folder is the folder whose .autodoc-crew/ holds the session contexts of the agents
+---started in cwd.
+---@param cwd string
+---@return string
+function M.context_folder(cwd)
+  return vim.fs.joinpath(cwd, ".auto-agents", "crew")
+end
+
+-- a session id names its context's file: a plain file name, never a dot file
+local function plain_name(session)
+  return type(session) == "string" and session ~= "" and session:sub(1, 1) ~= "." and not session:find("[/\\]")
+end
+
+---write_context writes c as its session's context file in folder (core/crew's WriteContext): mode
+---0600, through a dot file renamed over it, so a reader sees the whole context or none. It answers
+---the file's path, which the agent is told ($AUTODOC_CREW_CONTEXT).
+---@param folder string
+---@param c { store: string, socket: string, scope: string, profile: string, session: string, credential: string, kind: string }
+---@return string|nil path, string|nil err
+function M.write_context(folder, c)
+  if not plain_name(c.session) then return nil, "session id " .. tostring(c.session) end
+  local dir = vim.fs.joinpath(folder, M.CONTEXT_DIR)
+  if vim.fn.mkdir(dir, "p", tonumber("700", 8)) == 0 and vim.fn.isdirectory(dir) == 0 then
+    return nil, "could not make " .. dir
+  end
+  local body = vim.json.encode({ store = c.store, socket = c.socket, scope = c.scope, profile = c.profile,
+    session = c.session, credential = c.credential, kind = c.kind })
+  local tmp = vim.fs.joinpath(dir, "." .. c.session .. "." .. M.run_token():sub(1, 12))
+  local fd, oerr = vim.uv.fs_open(tmp, "wx", tonumber("600", 8))
+  if not fd then return nil, oerr end
+  local _, werr = vim.uv.fs_write(fd, body)
+  vim.uv.fs_close(fd)
+  local path = vim.fs.joinpath(dir, c.session)
+  if not werr then
+    local ok, rerr = vim.uv.fs_rename(tmp, path)
+    if ok then return path, nil end
+    werr = rerr
+  end
+  vim.uv.fs_unlink(tmp)
+  return nil, werr
+end
+
+---remove_context removes session's context file from folder once the session has ended, so no
+---later process reads its credential: that file alone, by its session's name. One already gone is
+---no error.
+---@param folder string
+---@param session string
+function M.remove_context(folder, session)
+  if not plain_name(session) then return end
+  vim.uv.fs_unlink(vim.fs.joinpath(folder, M.CONTEXT_DIR, session))
 end
 
 -- The state of one setup, st, is never reached through a global by a callback or a timer: each
@@ -139,6 +221,110 @@ local function later(st, a, ms, fn)
   end)
 end
 
+-- ── sessions (phase 4d): each agent registered before it starts ─────────────
+--
+-- st.sessions  the agents' sessions registered and not yet ended, by id
+-- st.pending   each codename's registration whose answer was lost: the daemon may have committed
+--              it, so its exact tuple is replayed, by the codename's next start or by settle, never
+--              a fresh one that would find the session it left as busy
+-- st.owed      each ended session whose crew.exit the daemon has not confirmed, by id: asked again
+--              until it answers
+
+-- refused is an answer that settles a registration or an exit: never to be sent again.
+local function refused(err)
+  local c = code(err)
+  return c == M.CODE_SCOPE_BUSY or c == M.CODE_STALE_EPOCH or c == M.CODE_CODENAME_BUSY or c == M.CODE_INSTANCE_REUSED
+    or c == M.CODE_BAD_CREDENTIAL or c == M.CODE_METHOD_NOT_FOUND or c == M.CODE_INVALID_PARAMS
+end
+
+local function send_exit(st, id)
+  local o = st.owed[id]
+  if not o or o.inflight then return end
+  o.inflight = true
+  st.session.call("crew.exit", { o.s.scope, st.run, o.s.epoch, o.s.id, o.why }, function(_, err)
+    if _s ~= st or st.owed[id] ~= o then return end
+    if not err or refused(err) then -- ended, or ended already by the scope changing hands
+      st.owed[id] = nil
+      return
+    end
+    o.inflight = false
+  end)
+end
+
+-- end_session ends s, why: its context file goes at once, so no later process reads its credential,
+-- and the daemon is told; until it answers, the exit is owed.
+local function end_session(st, s, why)
+  M.remove_context(s.folder, s.id)
+  st.sessions[s.id] = nil
+  st.owed[s.id] = { s = s, why = why }
+  send_exit(st, s.id)
+end
+
+local function forget(st, r)
+  if st.pending[r.codename] == r then st.pending[r.codename] = nil end
+end
+
+-- send_register sends r's crew.register; then(s, err) gets the session, now counted live, or why
+-- there is none. r stays pending only when the answer was lost.
+local function send_register(st, r, then_)
+  r.inflight = true
+  st.session.call("crew.register", { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret },
+    function(res, err)
+      r.inflight = false
+      if _s ~= st then return end
+      local id = not err and type(res) == "table" and res.session or nil
+      if not id then
+        err = err or { message = "the registration answered no session" }
+        if refused(err) then forget(st, r) end
+        return then_(nil, err)
+      end
+      forget(st, r)
+      local s = { id = id, profile = res.profile, scope = r.scope, epoch = r.epoch, folder = r.folder, kind = r.kind }
+      st.sessions[id] = s
+      then_(s, nil)
+    end)
+end
+
+-- resolve ends lost registration r, which nobody is starting: replayed as it was, the session the
+-- daemon committed comes back and is ended (start_failed), so its codename is free.
+local function resolve(st, r)
+  if r.inflight then return end
+  send_register(st, r, function(s)
+    if s then end_session(st, s, "start_failed") end
+  end)
+end
+
+-- settle asks the daemon again for what this Neovim owes it, each time a renewal or a claim answers:
+-- every exit not yet confirmed, and every lost registration nobody is starting. One under a scope
+-- or epoch no longer held was ended by the claim that changed it.
+local function settle(st)
+  for id, o in pairs(st.owed) do
+    if o.s.scope ~= st.scope or o.s.epoch ~= st.epoch then
+      st.owed[id] = nil
+    else
+      send_exit(st, id)
+    end
+  end
+  for codename, r in pairs(st.pending) do
+    if r.scope ~= st.scope or r.epoch ~= st.epoch then
+      if not r.inflight then st.pending[codename] = nil end
+    else
+      resolve(st, r)
+    end
+  end
+end
+
+-- drop_sessions forgets the sessions of an epoch no longer held: the claim that changed it ended
+-- them, so their contexts go too.
+local function drop_sessions(st)
+  for id, s in pairs(st.sessions) do
+    if s.epoch ~= st.epoch then
+      M.remove_context(s.folder, id)
+      st.sessions[id] = nil
+    end
+  end
+end
+
 local function renew_later(st, a)
   later(st, a, M.RENEW_MS, function()
     st.session.call("crew.renew", { st.scope, st.run, st.epoch }, function(_, err)
@@ -154,6 +340,7 @@ local function renew_later(st, a)
         later(st, r, M.RENEW_MS, function() claim(st, st.epoch) end)
         return
       end
+      settle(st)
       renew_later(st, a)
     end)
   end)
@@ -211,7 +398,9 @@ claim = function(st, lost)
         :format(st.scope, epoch), vim.log.levels.WARN)
     end
     st.epoch, st.status = epoch, "held"
+    drop_sessions(st)
     st.publish(M.TOPIC_CLAIMED, { scope = st.scope, epoch = epoch, reattached = before == epoch })
+    settle(st)
     renew_later(st, a)
   end)
 end
@@ -228,10 +417,121 @@ function M.release()
   next_attempt(st) -- every pending callback and timer is now superseded
   -- a reattach in flight still has the epoch it held: give that up now; a late accepted claim is
   -- given back when it arrives (a second release of one epoch is harmless)
+  -- the agents stop with this Neovim: their contexts go now, and the release ends their sessions
+  for id, s in pairs(st.sessions) do M.remove_context(s.folder, id) end
+  st.sessions, st.pending, st.owed = {}, {}, {}
   if not epoch then return end
   local done = false
   st.session.call("crew.release", { st.scope, st.run, epoch }, function() done = true end)
   st.wait(M.RELEASE_WAIT_MS, function() return done end)
+end
+
+local _instances = 0 -- the spawns this process made: each registration's instance id
+
+-- workspace_id is the id (in the daemon's store) of the AutoDoc workspace holding cwd, else the
+-- project's primary KB's; nil when neither is served. The workspaces are listed first when they
+-- were not yet, within the spawn's wait.
+local function workspace_id(st, sess, cwd, deadline)
+  local function find()
+    local name = sess.workspace_of and sess.workspace_of(cwd) or nil
+    name = name or (sess.primary_workspace and sess.primary_workspace()) or nil
+    local w = name and sess.workspace and sess.workspace(name) or nil
+    local n = w and tonumber(w.id) or nil
+    return n and n > 0 and tostring(n) or nil
+  end
+  local id = find()
+  if id or not sess.workspaces then return id end
+  local listed = false
+  sess.workspaces(function() listed = true end)
+  st.wait(math.max(deadline - vim.uv.now(), 0), function() return listed end)
+  return find()
+end
+
+---begin registers an agent's session before it starts (ADR 1793271500 §4.4, §4.5), waiting at most
+---REGISTER_WAIT_MS, and writes its context once the session is still this Neovim's. It answers the
+---session's handle, whose env (AUTODOC_CREW_CONTEXT) the spawn adds; finish ends it. nil when no
+---scope is held or no workspace is served (the agent starts as before, without a crew session),
+---with why when the registration was tried and failed. A registration answered after the wait is
+---ended, since nobody starts it; one whose answer was lost is replayed as it was by the codename's
+---next start, or ended by the next renewal.
+---@param opts { codename: string, kind: string|nil, cwd: string }
+---@return table|nil handle { session, context, env }, string|nil why
+function M.begin(opts)
+  local st = _s
+  if not st or st.status ~= "held" or not st.session then return nil, nil end
+  if vim.in_fast_event() then return nil, "a crew session can't be registered from a fast event" end
+  local sess = st.session
+  local c = sess.client and sess.client()
+  if not c then return nil, nil end
+  local h = c.hello and c:hello() or {}
+  local store, socket = h.store_id, c.addr and c:addr() or nil
+  if type(store) ~= "string" or store == "" or type(socket) ~= "string" or socket == "" then return nil, nil end
+  local deadline = vim.uv.now() + M.REGISTER_WAIT_MS
+  local ws = workspace_id(st, sess, opts.cwd, deadline)
+  if not ws then return nil, nil end
+  -- the wait may have outlived the scope, the epoch or the connection: start nothing under them
+  if _s ~= st or st.status ~= "held" or sess.client() ~= c then return nil, nil end
+
+  local codename, kind, folder = opts.codename, M.crew_kind(opts.kind), M.context_folder(opts.cwd)
+  local r = st.pending[codename]
+  if r and r.inflight then return nil, "its last registration is still unanswered" end
+  if r and (r.scope ~= st.scope or r.epoch ~= st.epoch or r.store ~= store) then
+    st.pending[codename] = nil -- the claim that changed the epoch ended its session; another store has none
+    r = nil
+  end
+  if r and (r.kind ~= kind or r.workspace ~= ws) then
+    resolve(st, r) -- its profile changed since: the session it left is ended first
+    return nil, "its last registration is still being ended"
+  end
+  if not r then
+    _instances = _instances + 1
+    r = { codename = codename, kind = kind, workspace = ws, instance = ("nvim-%d-%d"):format(vim.uv.os_getpid(), _instances),
+      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder }
+    st.pending[codename] = r
+  end
+  r.folder = folder
+
+  local waiting, answered, s, err = true, false, nil, nil
+  send_register(st, r, function(got, e)
+    if not waiting then
+      if got then end_session(st, got, "start_failed") end -- answered after the spawn gave up: nobody starts it
+      return
+    end
+    answered, s, err = true, got, e
+  end)
+  st.wait(math.max(deadline - vim.uv.now(), 0), function() return answered end)
+  waiting = false
+  if not answered then return nil, "the daemon did not answer the registration in time" end
+  if not s then return nil, message(err) end
+  -- still this Neovim's: the scope held at the epoch it was registered under, on the same connection
+  if _s ~= st or st.status ~= "held" or st.epoch ~= s.epoch or sess.client() ~= c then
+    if _s == st then end_session(st, s, "start_failed") end
+    return nil, "the crew scope changed while the session was registered"
+  end
+  local path, werr = M.write_context(folder, { store = store, socket = socket, scope = s.scope, profile = s.profile,
+    session = s.id, credential = s.id .. "." .. r.secret, kind = kind })
+  r.secret = nil -- kept no longer than it is needed
+  if not path then
+    end_session(st, s, "start_failed")
+    return nil, "its session context could not be written: " .. tostring(werr)
+  end
+  return { session = s, context = path, env = { AUTODOC_CREW_CONTEXT = path } }, nil
+end
+
+---finish ends handle's session, why: "exit" when the agent's process ended, "start_failed" when it
+---never started. Its context file goes at once; the daemon is told, and asked again until it
+---answers. A second finish is nothing.
+---@param handle table|nil
+---@param why string|nil
+function M.finish(handle, why)
+  if not handle or handle.ended then return end
+  handle.ended = true
+  local s, st = handle.session, _s
+  if st and st.sessions[s.id] == s then
+    end_session(st, s, why or "exit")
+  else
+    M.remove_context(s.folder, s.id) -- the scope changed hands or was released: its session ended with it
+  end
 end
 
 ---setup starts holding the scope. opts (all optional, for tests): session (autodoc.session), events
@@ -256,6 +556,9 @@ function M.setup(opts)
     wait = opts.wait or function(ms, cond) vim.wait(ms, cond, 20) end,
     publish = function() end,
     subs = {},
+    sessions = {},
+    pending = {},
+    owed = {},
   }
   _s = st
   local events = opts.events
