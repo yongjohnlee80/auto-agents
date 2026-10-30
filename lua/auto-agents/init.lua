@@ -983,6 +983,27 @@ local function _with_unfixed_buf(winid, fn)
   return ok, result
 end
 
+---start_terminal builds a slot's terminal and starts it. From the crew registration on, every
+---failure is the session's (ADR 1793271500 §4.4): a constructor that throws, a start that throws
+---or answers no buffer, each ends the crew session start_failed once, and a throw is raised again
+---as it was. Answers the terminal and its buffer, or nil.
+---@return table|nil term, integer|nil bufnr
+function M._start_terminal(cfg, opts, winid, crew_session)
+  local crew = require("auto-agents.crew")
+  local built, term = pcall(require("auto-agents.terminal").new, cfg, opts)
+  if not built then
+    crew.finish(crew_session, "start_failed")
+    error(term, 0)
+  end
+  local started, bufnr = pcall(term.start, term, winid)
+  if not started or not bufnr then
+    crew.finish(crew_session, "start_failed")
+    if not started then error(bufnr, 0) end
+    return nil, nil
+  end
+  return term, bufnr
+end
+
 ---Spawn or recover the terminal for a main slot (1..4). When `winid` is
 ---supplied, fresh spawns place the buffer in that window BEFORE
 ---termopen — terminal inherits correct dimensions and TUIs render with
@@ -1056,7 +1077,7 @@ local function ensure_main_slot_terminal(slot, winid)
       return won:get_bufnr()
     end
   end
-  term = require("auto-agents.terminal").new(cfg, {
+  local term_opts = {
     cmd = spec.cmd,
     cwd = cwd,
     env = env,
@@ -1083,13 +1104,10 @@ local function ensure_main_slot_terminal(slot, winid)
       M.refresh_winbar()
       M.refresh_dock()
     end,
-  })
-  local started, bufnr = pcall(term.start, term, winid)
-  if not started or not bufnr then
-    require("auto-agents.crew").finish(crew_session, "start_failed")
-    if not started then error(bufnr, 0) end
-    return nil
-  end
+  }
+  local bufnr
+  term, bufnr = M._start_terminal(cfg, term_opts, winid, crew_session)
+  if not term then return nil end
   term.crew_session = crew_session
   M.state.slot_terminals[slot] = term
   pcall(function()

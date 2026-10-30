@@ -26,6 +26,8 @@
 ---       registration, and its exit is waited for within the spawn's wait (Juliet #4 r0 F1)
 ---  [14] an answer after release, or after a claim at another epoch, counts nothing and owes no
 ---       exit (Juliet #4 r0 F2)
+---  [15] the spawn's terminal: a constructor or a start that throws, or no buffer, ends the
+---       registered session start_failed once and raises the error as it was (Lector #4 r1 F3)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -531,6 +533,50 @@ do
   w.tick() -- claimed again at epoch 6, which ended epoch 5's sessions
   w.reply("crew.register", { session = "late", profile = "p1" })
   ok("[14] an answer from an earlier epoch owes no exit", #w.of("crew.exit") == 0)
+  vim.fn.delete(cwd, "rf")
+end
+
+-- ── [15] the spawn's terminal (Lector #4 r1 F3) ─────────────────────────────
+
+do
+  local aa = require("auto-agents")
+  local real_terminal = package.loaded["auto-agents.terminal"]
+  local function with_terminal(fake, fn)
+    package.loaded["auto-agents.terminal"] = fake
+    local ok_, a, b = pcall(fn)
+    package.loaded["auto-agents.terminal"] = real_terminal
+    return ok_, a, b
+  end
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+
+  local h = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local okc, err = with_terminal({ new = function() error("terminal provider 'snacks': module not found", 0) end },
+    function() return aa._start_terminal({}, {}, nil, h) end)
+  local exits = w.of("crew.exit")
+  ok("[15] a constructor that throws ends the session start_failed, and its error is raised as it was",
+    okc == false and err == "terminal provider 'snacks': module not found" and #exits == 1
+      and exits[1].params[5] == "start_failed" and #ctx_files(cwd) == 0, vim.inspect({ okc, err, exits }))
+
+  local h2 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local oks, term, buf = with_terminal({ new = function() return { start = function() return nil end } end },
+    function() return aa._start_terminal({}, {}, nil, h2) end)
+  ok("[15] a start that answers no buffer ends it start_failed once, and answers nothing",
+    oks and term == nil and buf == nil and #w.of("crew.exit") == 2 and w.of("crew.exit")[2].params[5] == "start_failed")
+  crew.finish(h2, "exit")
+  ok("[15] the exit's own finish afterwards sends nothing more", #w.of("crew.exit") == 2)
+
+  local h3 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local okt, terr = with_terminal({ new = function() return { start = function() error("termopen failed", 0) end } end },
+    function() return aa._start_terminal({}, {}, nil, h3) end)
+  ok("[15] a start that throws ends it start_failed and raises its error",
+    okt == false and terr == "termopen failed" and #w.of("crew.exit") == 3)
+
+  local h4 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local okg, term4, buf4 = with_terminal({ new = function() return { start = function() return 42 end } end },
+    function() return aa._start_terminal({}, {}, nil, h4) end)
+  ok("[15] a terminal that starts keeps its session", okg and term4 ~= nil and buf4 == 42 and #w.of("crew.exit") == 3)
+  crew.finish(h4, "exit")
   vim.fn.delete(cwd, "rf")
 end
 
