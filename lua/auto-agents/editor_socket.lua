@@ -302,12 +302,24 @@ function M.agent_env(agent, grants)
   return { AUTODOC_EDITOR = _s.path, AUTODOC_EDITOR_TOKEN = token, AUTODOC_AGENT = agent }
 end
 
----forget drops agent's token: its process ended, so nothing reaches the page in its name.
+---forget drops agent's token: its process ended, so nothing reaches the page in its name. Given
+---token (the one agent_env minted for that process), it drops that token only, and nothing when
+---the agent holds another: a restart's new process minted it before the old one's exit was reaped,
+---and the old exit must never revoke the new process's token or grants (Juliet #7 r0 F1).
 ---@param agent string
-function M.forget(agent)
+---@param token string|nil
+function M.forget(agent, token)
   if not _s then return end
-  for t, a in pairs(_s.tokens) do
-    if a == agent then _s.tokens[t] = nil end
+  if token ~= nil then
+    if _s.tokens[token] ~= agent then return end -- already replaced or forgotten: the agent's current token stays
+    _s.tokens[token] = nil
+  else
+    for t, a in pairs(_s.tokens) do
+      if a == agent then _s.tokens[t] = nil end
+    end
+  end
+  for _, a in pairs(_s.tokens) do
+    if a == agent then return end -- still holds a token: its grants stay
   end
   _s.grants[agent], _s.spawn_ws[agent] = nil, nil
 end

@@ -1057,14 +1057,6 @@ local function ensure_main_slot_terminal(slot, winid)
   -- M5: explicit `resource cwd` grant > first path grant > cwd.resolve default.
   cwd = require("auto-agents.resources").cwd_for(slot, cwd)
   local env = build_agent_env(spec, cwd)
-  -- the page's verbs for this agent, by its own token (autodoc --editor)
-  if spec.configured ~= false and spec.name then
-    local eenv = require("auto-agents.editor_socket").agent_env(spec.name, spec.editor_grants)
-    if eenv then
-      env = env or {}
-      for k, v in pairs(eenv) do env[k] = v end
-    end
-  end
   -- registered first (ADR 1793271500 §4.4): the agent starts with its crew session's context, or,
   -- with no scope held, no workspace served or a registration that failed, as before without one
   local crew_session
@@ -1104,13 +1096,24 @@ local function ensure_main_slot_terminal(slot, winid)
       return won:get_bufnr()
     end
   end
+  -- the page's verbs for this agent, by a token of this process's own (autodoc --editor): minted only
+  -- now, once this spawn is the slot's, and forgotten by that token alone (Juliet #7 r0 F1)
+  local editor_token
+  if spec.configured ~= false and spec.name then
+    local eenv = require("auto-agents.editor_socket").agent_env(spec.name, spec.editor_grants)
+    if eenv then
+      editor_token = eenv.AUTODOC_EDITOR_TOKEN
+      env = env or {}
+      for k, v in pairs(eenv) do env[k] = v end
+    end
+  end
   local term_opts = {
     cmd = spec.cmd,
     cwd = cwd,
     env = env,
     on_exit = function(code)
       require("auto-agents.crew").finish(crew_session, "exit")
-      if spec.name then require("auto-agents.editor_socket").forget(spec.name) end
+      if spec.name and editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
       pcall(function() require("auto-agents.status.observer").detach(slot) end)
       if M.state.agent_status then M.state.agent_status[slot] = nil end
@@ -1134,8 +1137,15 @@ local function ensure_main_slot_terminal(slot, winid)
     end,
   }
   local bufnr
-  term, bufnr = M._start_terminal(cfg, term_opts, winid, crew_session)
-  if not term then return nil end
+  local started, start_err = pcall(function()
+    term, bufnr = M._start_terminal(cfg, term_opts, winid, crew_session)
+  end)
+  if not started or not term then
+    if editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
+    if not started then error(start_err, 0) end
+    return nil
+  end
+  term.editor_token = editor_token
   term.crew_session = crew_session
   M.state.slot_terminals[slot] = term
   pcall(function()
@@ -1298,6 +1308,11 @@ function M.kill_slot(slot)
     -- its crew session ends now, not when the exit is reaped: a restart registers the codename
     -- again on the next tick (the exit's finish is then nothing)
     require("auto-agents.crew").finish(term.crew_session, "exit")
+    -- and its editor token, by that token: the restart's new process gets one of its own
+    if term.editor_token then
+      local entry = resolve_slot_spec(slot)
+      if entry and entry.name then require("auto-agents.editor_socket").forget(entry.name, term.editor_token) end
+    end
     if term.kill then term:kill() end
     local buf = term.get_bufnr and term:get_bufnr() or nil
     if buf and vim.api.nvim_buf_is_valid(buf) then
