@@ -1032,6 +1032,19 @@ local function ensure_main_slot_terminal(slot, winid)
       crew_session = handle
       env = env or {}
       for k, v in pairs(handle.env) do env[k] = v end
+      -- a wake starts a turn only with these (§4.9); a command that brings its own --settings
+      -- keeps it, and its session receives when it asks
+      local crew = require("auto-agents.crew")
+      local extra = crew.wake_argv(crew.crew_kind(spec.kind), crew.autodoc_binary())
+      if #extra > 0 and type(spec.cmd) == "table" then
+        local own = vim.iter(spec.cmd):any(function(a) return a == "--settings" or vim.startswith(a, "--settings=") end)
+        if own then
+          logger.warn("crew", spec.name .. "'s command sets --settings: its crew wakes need the SessionStart hook there")
+        else
+          spec.cmd = vim.list_slice(spec.cmd)
+          vim.list_extend(spec.cmd, extra)
+        end
+      end
     elseif why then
       vim.notify(("%s starts without a crew session: %s"):format(spec.name, why), vim.log.levels.WARN,
         { title = "auto-agents" })

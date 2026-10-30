@@ -106,6 +106,44 @@ function M.crew_kind(kind)
   return M.KIND[kind] or kind
 end
 
+---endpoint_command is the SessionStart hook that registers a Claude session's endpoint (§4.7), run
+---by the autodoc binary at bin: what it prints (the endpoint's generation) is not for the agent's
+---context, which a SessionStart hook's output joins; a failure still says why, on stderr.
+---@param bin string
+---@return string
+function M.endpoint_command(bin)
+  return vim.fn.shellescape(bin) .. " crew endpoint --claude >/dev/null"
+end
+
+---wake_argv is what a crew session's CLI of kind starts with, so the crew's fixed notice can start a
+---turn (ADR 1793271500 §4.9): for Claude Code, `--settings` carrying the SessionStart hook that
+---registers its endpoint and crossSessionInbound "accept"; nothing for the others yet. Given on the
+---command line, so the project's own settings are never edited; never approval policies,
+---permission modes, or allow or deny rules: a turn a wake starts runs under the agent's own policy.
+---@param kind string crew's kind
+---@param bin string|nil the autodoc binary
+---@return string[]
+function M.wake_argv(kind, bin)
+  if kind ~= "claude" or type(bin) ~= "string" or bin == "" then return {} end
+  local settings = {
+    hooks = { SessionStart = { { hooks = { { type = "command", command = M.endpoint_command(bin) } } } } },
+    crossSessionInbound = "accept",
+  }
+  return { "--settings", vim.json.encode(settings) }
+end
+
+---autodoc_binary is the autodoc binary AutoDoc's plugin runs (its opts.bin, else its own build,
+---else PATH), or nil.
+---@return string|nil
+function M.autodoc_binary()
+  local ok, lifecycle = pcall(require, "autodoc.lifecycle")
+  if not ok then return nil end
+  local ok_ad, autodoc = pcall(require, "autodoc")
+  local configured = ok_ad and type(autodoc.options) == "function" and (autodoc.options() or {}).bin or nil
+  local path = lifecycle.resolve_binary(configured)
+  return path
+end
+
 ---context_folder is the folder whose .autodoc-crew/ holds the session contexts of the agents
 ---started in cwd.
 ---@param cwd string
