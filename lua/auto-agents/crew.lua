@@ -216,9 +216,10 @@ claim = function(st, lost)
   end)
 end
 
----release gives the scope up, waiting at most RELEASE_WAIT_MS: a clean exit lets a successor claim
----it at once, and its run can't reattach after. A claim still in flight is given back when it
----answers. Nothing claims again in this process after it.
+---release gives the scope up, waiting at most RELEASE_WAIT_MS, so a successor can claim it at once
+---and this run can't reattach after. Nothing claims again in this process after it. A claim still
+---in flight is given back when it answers; if the process exits first (the first claim had not
+---answered, so no epoch was known), the scope is freed only when its lease lapses.
 function M.release()
   local st = _s
   if not st or st.status == "released" or st.status == "stopped" then return end
