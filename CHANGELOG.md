@@ -2,6 +2,32 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.9] — 2026-10-30 — this Neovim's agents join AutoDoc's crew
+
+ADR 1793271500, phases 4c–4e. **It needs auto-core v0.5.3 or later (the router's gateway hook)
+and an AutoDoc daemon that serves the crew verbs.** With an older daemon, or none, everything runs
+as before, quietly.
+
+- **The crew scope** (4c, #3): Neovim claims `autovim:$AUTOVIM_PROJECT` (else `nvim:<project key>`)
+  with an in-memory run token, reattaches on every reconnect, renews every 30 s, re-claims at a
+  stale epoch (saying the agents moved), and releases it on exit.
+- **Agents are registered before they start** (4d, #4):
+  - each spawn registers a session with a fresh 32-byte secret (waiting at most 3 s), then writes its
+    context (0600) under `<cwd>/.auto-agents/crew/.autodoc-crew/`, named by `$AUTODOC_CREW_CONTEXT`;
+  - the agent's exit ends it, as does a failed start; a lost registration is replayed exactly, a late
+    answer is ended, and unconfirmed exits are asked again at each renewal;
+  - a restart ends the codename's previous session first;
+  - Claude starts with `--settings` carrying the SessionStart hook that registers its endpoint and
+    `crossSessionInbound: "accept"`, so the project's own settings are never edited;
+  - with no scope, no workspace or a failed registration, the agent starts as before.
+- **The mail gateway** (4e, #5): `crew.cutover` (a list of codenames, or `"*"`; empty by default)
+  sends a cut-over recipient's legacy mail through the daemon as this Neovim's `gateway` session.
+  - A send is recorded first, durably. It's resent under its own store, scope and profile only; with
+    no session, or another store, it waits in the outbox. Delivered mail is never filed again.
+  - `:AutoAgentsGatewayRelease` lists waiting messages, or hands them to the file mailbox.
+  - The gateway is fenced by its store; `gateway` is a reserved codename; anything it can't send
+    for sure keeps the file route.
+
 ## [v0.3.8] — 2026-10-27 — an assignment is scoped to this project
 
 ADR 1791532020 r15 §2.5a. **Scoping needs auto-core with `auto-core.todo.scope` and AutoDoc
