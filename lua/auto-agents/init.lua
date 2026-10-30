@@ -1090,6 +1090,7 @@ local function ensure_main_slot_terminal(slot, winid)
     if not started then error(bufnr, 0) end
     return nil
   end
+  term.crew_session = crew_session
   M.state.slot_terminals[slot] = term
   pcall(function()
     require("auto-agents.status.observer").attach(slot, bufnr, spec.kind)
@@ -1248,6 +1249,9 @@ function M.kill_slot(slot)
       logger.info("lifecycle", "slot " .. slot .. " has no running terminal")
       return false
     end
+    -- its crew session ends now, not when the exit is reaped: a restart registers the codename
+    -- again on the next tick (the exit's finish is then nothing)
+    require("auto-agents.crew").finish(term.crew_session, "exit")
     if term.kill then term:kill() end
     local buf = term.get_bufnr and term:get_bufnr() or nil
     if buf and vim.api.nvim_buf_is_valid(buf) then

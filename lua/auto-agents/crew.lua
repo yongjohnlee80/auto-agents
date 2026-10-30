@@ -312,6 +312,12 @@ local function send_register(st, r, then_)
     function(res, err)
       r.inflight = false
       if _s ~= st then return end
+      if not live(st) or st.scope ~= r.scope or st.epoch ~= r.epoch then
+        -- released, or claimed again at another epoch: either ended every session of r's epoch, so
+        -- whatever this answer made is over; nothing is counted, and no exit is owed for it
+        forget(st, r)
+        return then_(nil, { message = "the crew scope changed while the registration was answered" })
+      end
       local id = not err and type(res) == "table" and res.session or nil
       if not id then
         err = err or { message = "the registration answered no session" }
@@ -319,7 +325,8 @@ local function send_register(st, r, then_)
         return then_(nil, err)
       end
       forget(st, r)
-      local s = { id = id, profile = res.profile, scope = r.scope, epoch = r.epoch, folder = r.folder, kind = r.kind }
+      local s = { id = id, profile = res.profile, scope = r.scope, epoch = r.epoch, folder = r.folder, kind = r.kind,
+        codename = r.codename }
       st.sessions[id] = s
       then_(s, nil)
     end)
@@ -514,6 +521,26 @@ function M.begin(opts)
   if _s ~= st or st.status ~= "held" or sess.client() ~= c then return nil, nil end
 
   local codename, kind, folder = opts.codename, M.crew_kind(opts.kind), M.context_folder(opts.cwd)
+  -- the codename's previous session is over first, or this one is refused as busy: one still
+  -- counted live (its process killed, its exit not yet reaped) is ended now, and its exit, with
+  -- any other still owed for the codename, is waited for within the spawn's wait
+  for _, live_s in pairs(st.sessions) do
+    if live_s.codename == codename then end_session(st, live_s, "exit") end
+  end
+  local function owing()
+    for _, o in pairs(st.owed) do
+      if o.s.codename == codename and o.s.scope == st.scope and o.s.epoch == st.epoch then return true end
+    end
+    return false
+  end
+  if owing() then
+    for id, o in pairs(st.owed) do
+      if o.s.codename == codename then send_exit(st, id) end
+    end
+    st.wait(math.max(deadline - vim.uv.now(), 0), function() return not owing() end)
+    if _s ~= st or st.status ~= "held" or sess.client() ~= c then return nil, nil end
+    -- an exit still unconfirmed: the registration goes ahead, and a busy codename is refused and said
+  end
   local r = st.pending[codename]
   if r and r.inflight then return nil, "its last registration is still unanswered" end
   if r and (r.scope ~= st.scope or r.epoch ~= st.epoch or r.store ~= store) then
@@ -546,7 +573,7 @@ function M.begin(opts)
   if not s then return nil, message(err) end
   -- still this Neovim's: the scope held at the epoch it was registered under, on the same connection
   if _s ~= st or st.status ~= "held" or st.epoch ~= s.epoch or sess.client() ~= c then
-    if _s == st then end_session(st, s, "start_failed") end
+    if live(st) and st.epoch == s.epoch then end_session(st, s, "start_failed") end
     return nil, "the crew scope changed while the session was registered"
   end
   local path, werr = M.write_context(folder, { store = store, socket = socket, scope = s.scope, profile = s.profile,
