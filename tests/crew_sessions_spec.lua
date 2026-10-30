@@ -22,6 +22,10 @@
 ---  [11] a context that can't be written ends its session
 ---  [12] Claude starts with --settings carrying the SessionStart endpoint hook and
 ---       crossSessionInbound accept, nothing else; the other kinds with nothing added
+---  [13] a restart: the codename's previous session, still counted live, is ended before the new
+---       registration, and its exit is waited for within the spawn's wait (Juliet #4 r0 F1)
+---  [14] an answer after release, or after a claim at another epoch, counts nothing and owes no
+---       exit (Juliet #4 r0 F2)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -451,6 +455,83 @@ do
   ok("[12] the other kinds start with nothing added",
     #crew.wake_argv("codex", "/bin/autodoc") == 0 and #crew.wake_argv("agy", "/bin/autodoc") == 0)
   ok("[12] no autodoc binary: nothing added", #crew.wake_argv("claude", nil) == 0)
+end
+
+-- ── [13] a restart (Juliet #4 r0 F1) ────────────────────────────────────────
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local h1 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local h2 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd }) -- h1's exit not yet reaped
+  local order = {}
+  for i, c in ipairs(w.calls) do
+    if c.method == "crew.exit" or c.method == "crew.register" then order[#order + 1] = c.method .. ":" .. i end
+  end
+  local exits = w.of("crew.exit")
+  ok("[13] the previous session is ended (exit) before the codename registers again",
+    h1 and h2 and #exits == 1 and exits[1].params[4] == "s1" and exits[1].params[5] == "exit"
+      and order[2]:match("^crew.exit") ~= nil and order[3]:match("^crew.register") ~= nil, vim.inspect(order))
+  crew.finish(h1, "exit")
+  ok("[13] the old handle's own finish then sends nothing more", #w.of("crew.exit") == 1)
+  crew.finish(h2, "exit")
+  vim.fn.delete(cwd, "rf")
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local h1 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  w.deferred["crew.exit"] = true
+  crew.finish(h1, "exit") -- the kill: its exit in flight
+  local registered_before
+  w.on_wait = function()
+    registered_before = #w.of("crew.register")
+    w.reply("crew.exit", {})
+  end
+  local h2 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  ok("[13] a start waits for the codename's exit in flight, then registers",
+    registered_before == 1 and h2 ~= nil and #w.of("crew.register") == 2)
+  crew.finish(h2, "exit")
+  vim.fn.delete(cwd, "rf")
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local h1 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  w.deferred["crew.exit"] = true
+  crew.finish(h1, "exit")
+  local h2 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  ok("[13] an exit still unconfirmed when the wait ends: the registration goes ahead",
+    h2 ~= nil and #w.of("crew.register") == 2)
+  vim.fn.delete(cwd, "rf")
+end
+
+-- ── [14] answers after release or another epoch (Juliet #4 r0 F2) ───────────
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  w.deferred["crew.register"] = true
+  crew.begin({ codename = "gold", kind = "claude", cwd = cwd }) -- gives up waiting
+  crew.release()
+  w.reply("crew.register", { session = "late", profile = "p1" })
+  ok("[14] an answer after release owes no exit and writes no context", #w.of("crew.exit") == 0 and #ctx_files(cwd) == 0)
+  vim.fn.delete(cwd, "rf")
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  w.deferred["crew.register"] = true
+  crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  w.answer["crew.renew"] = function() return nil, { code = crew.CODE_STALE_EPOCH, message = "stale" } end
+  w.answer["crew.claim"] = { epoch = 6 }
+  w.tick() -- claimed again at epoch 6, which ended epoch 5's sessions
+  w.reply("crew.register", { session = "late", profile = "p1" })
+  ok("[14] an answer from an earlier epoch owes no exit", #w.of("crew.exit") == 0)
+  vim.fn.delete(cwd, "rf")
 end
 
 crew.stop()
