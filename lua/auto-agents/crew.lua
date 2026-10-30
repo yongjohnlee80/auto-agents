@@ -76,10 +76,23 @@ function M.proc_ref(root)
   return table.concat({ boot, ns, tostring(pid), start }, ":")
 end
 
----held is the scope and epoch this process holds, nil when it holds none.
+-- The state of one setup, st, is never reached through a global by a callback or a timer: each
+-- captures st and the attempt it was made for, and does nothing once st is no longer the module's
+-- (a stop, or a setup that replaced it) or a later attempt superseded it.
+--
+-- st.status:
+--   "idle"        no claim yet, or the last one was refused (a retry is scheduled)
+--   "claiming"    a claim is in flight
+--   "held"        the scope is held at st.epoch, renewed every RENEW_MS
+--   "reattaching" it was held, but a reattach or a renewal failed: the lease may lapse, so nothing
+--                 is reported held until a claim answers again (a retry is scheduled)
+--   "released"    given up on exit: nothing claims again in this process
+--   "stopped"     forgotten (stop, or a newer setup)
+
+---held is the scope and epoch this process holds, nil when it holds none for sure.
 ---@return string|nil scope, integer|nil epoch
 function M.held()
-  if not _s or not _s.epoch then return nil, nil end
+  if not _s or _s.status ~= "held" then return nil, nil end
   return _s.scope, _s.epoch
 end
 
@@ -93,99 +106,131 @@ local function message(err)
 end
 
 -- session is autodoc.session, resolved when first needed: AutoDoc's plugin may load after this one.
-local function session()
-  if _s.session then return _s.session end
+local function session(st)
+  if st.session then return st.session end
   local ok, mod = pcall(require, "autodoc.session")
-  if ok then _s.session = mod end
-  return _s.session
+  if ok then st.session = mod end
+  return st.session
 end
 
-local function serves_crew()
-  if not session() then return false end
-  local c = _s.session.client and _s.session.client()
+local function serves_crew(st)
+  local sess = session(st)
+  if not sess then return false end
+  local c = sess.client and sess.client()
   if not c then return false end
   if c.can and not c:can("crew.claim") then return false end
   return true
 end
 
+local function live(st) return _s == st and st.status ~= "released" and st.status ~= "stopped" end
+
+-- next_attempt supersedes every callback and timer made before it.
+local function next_attempt(st)
+  st.attempt = st.attempt + 1
+  return st.attempt
+end
+
 local claim -- forward
 
-local function renew_later(gen)
-  _s.after(M.RENEW_MS, function()
-    if not _s or gen ~= _s.gen or not _s.epoch then return end
-    local scope, run, epoch = _s.scope, _s.run, _s.epoch
-    _s.session.call("crew.renew", { scope, run, epoch }, function(_, err)
-      if not _s or gen ~= _s.gen then return end
+-- later runs fn after ms for attempt a of st, only while that attempt is current.
+local function later(st, a, ms, fn)
+  st.after(ms, function()
+    if live(st) and st.attempt == a then fn() end
+  end)
+end
+
+local function renew_later(st, a)
+  later(st, a, M.RENEW_MS, function()
+    st.session.call("crew.renew", { st.scope, st.run, st.epoch }, function(_, err)
+      if not live(st) or st.attempt ~= a then return end
       if code(err) == M.CODE_STALE_EPOCH then
-        local lost = _s.epoch
-        _s.epoch = nil
-        claim(lost)
+        claim(st, st.epoch) -- another owner took it while this one was away
         return
       end
-      -- any other failure (the daemon gone, say) leaves the lease to the next renewal or reconnect
-      renew_later(gen)
+      if err then
+        -- the daemon may be gone: the lease may lapse, so it is not reported held; reattach soon
+        st.status = "reattaching"
+        local r = next_attempt(st)
+        later(st, r, M.RENEW_MS, function() claim(st, st.epoch) end)
+        return
+      end
+      renew_later(st, a)
     end)
   end)
 end
 
----claim takes the scope, or reattaches to it with this process's run token. lost is the epoch a
----stale renewal gave up, so a claim at another epoch says the agents moved.
-claim = function(lost)
-  if not _s or _s.claiming or _s.dormant then return end
-  if not serves_crew() then return end
-  _s.claiming = true
-  local before = _s.epoch or lost
-  _s.session.call("crew.claim", { _s.scope, _s.run, _s.proc }, function(res, err)
-    _s.claiming = false
+---claim takes the scope, or reattaches to it with this process's run token. lost is an epoch this
+---process held, so an answer at another epoch says the agents moved.
+claim = function(st, lost)
+  if not live(st) or st.status == "claiming" or st.dormant then return end
+  if not serves_crew(st) then return end
+  local was = st.status
+  st.status = "claiming"
+  local a = next_attempt(st)
+  local before = lost or (was == "held" and st.epoch) or nil
+  st.session.call("crew.claim", { st.scope, st.run, st.proc }, function(res, err)
+    local epoch = (not err and type(res) == "table") and tonumber(res.epoch) or nil
+    if _s ~= st or st.attempt ~= a or st.status == "released" or st.status == "stopped" then
+      -- superseded: a claim the daemon accepted after a release or a stop is given back, under the
+      -- identity it was made with, so nothing holds the scope that no one renews
+      if epoch and (st.status == "released" or st.status == "stopped") then
+        st.session.call("crew.release", { st.scope, st.run, epoch }, function() end)
+      end
+      return
+    end
     if err then
       local c = code(err)
       if c == M.CODE_METHOD_NOT_FOUND then
-        _s.dormant = true -- an AutoDoc without crew: stay quiet
+        st.dormant, st.status = true, "idle" -- an AutoDoc without crew: stay quiet
         return
       end
       if c == M.CODE_SCOPE_BUSY then
-        if not _s.busy_said then
-          _s.busy_said = true
-          _s.notify(("Crew scope %s is held by another live Neovim: this one's agents stay unregistered until it's free."):format(_s.scope),
+        if not st.busy_said then
+          st.busy_said = true
+          st.notify(("Crew scope %s is held by another live Neovim: this one's agents stay unregistered until it's free."):format(st.scope),
             vim.log.levels.WARN)
         end
       else
-        _s.notify("Crew scope " .. _s.scope .. " could not be claimed: " .. message(err), vim.log.levels.WARN)
+        st.notify("Crew scope " .. st.scope .. " could not be claimed: " .. message(err), vim.log.levels.WARN)
       end
-      _s.gen = _s.gen + 1
-      local gen = _s.gen
-      _s.after(M.RENEW_MS, function()
-        if _s and gen == _s.gen and not _s.epoch then claim(before) end
-      end)
+      st.status = before and "reattaching" or "idle"
+      local r = next_attempt(st)
+      later(st, r, M.RENEW_MS, function() claim(st, before) end)
       return
     end
-    local epoch = type(res) == "table" and tonumber(res.epoch) or nil
     if not epoch then
-      _s.notify("Crew scope " .. _s.scope .. ": the daemon answered crew.claim without an epoch", vim.log.levels.WARN)
+      st.notify("Crew scope " .. st.scope .. ": the daemon answered crew.claim without an epoch", vim.log.levels.WARN)
+      st.status = before and "reattaching" or "idle"
+      local r = next_attempt(st)
+      later(st, r, M.RENEW_MS, function() claim(st, before) end)
       return
     end
-    _s.busy_said = false
+    st.busy_said = false
     if before and epoch ~= before then
-      _s.notify(("This Neovim lost its crew scope %s while away and claimed it again (epoch %d): agents registered before must register again.")
-        :format(_s.scope, epoch), vim.log.levels.WARN)
+      st.notify(("This Neovim lost its crew scope %s while away and claimed it again (epoch %d): agents registered before must register again.")
+        :format(st.scope, epoch), vim.log.levels.WARN)
     end
-    _s.epoch = epoch
-    _s.gen = _s.gen + 1
-    _s.publish(M.TOPIC_CLAIMED, { scope = _s.scope, epoch = epoch, reattached = before == epoch })
-    renew_later(_s.gen)
+    st.epoch, st.status = epoch, "held"
+    st.publish(M.TOPIC_CLAIMED, { scope = st.scope, epoch = epoch, reattached = before == epoch })
+    renew_later(st, a)
   end)
 end
 
 ---release gives the scope up, waiting at most RELEASE_WAIT_MS: a clean exit lets a successor claim
----it at once, and its run can't reattach after.
+---it at once, and its run can't reattach after. A claim still in flight is given back when it
+---answers. Nothing claims again in this process after it.
 function M.release()
-  if not _s or not _s.epoch then return end
-  local scope, run, epoch = _s.scope, _s.run, _s.epoch
-  _s.epoch = nil
-  _s.gen = _s.gen + 1
+  local st = _s
+  if not st or st.status == "released" or st.status == "stopped" then return end
+  local epoch = st.epoch
+  st.status = "released"
+  next_attempt(st) -- every pending callback and timer is now superseded
+  -- a reattach in flight still has the epoch it held: give that up now; a late accepted claim is
+  -- given back when it arrives (a second release of one epoch is harmless)
+  if not epoch then return end
   local done = false
-  _s.session.call("crew.release", { scope, run, epoch }, function() done = true end)
-  _s.wait(M.RELEASE_WAIT_MS, function() return done end)
+  st.session.call("crew.release", { st.scope, st.run, epoch }, function() done = true end)
+  st.wait(M.RELEASE_WAIT_MS, function() return done end)
 end
 
 ---setup starts holding the scope. opts (all optional, for tests): session (autodoc.session), events
@@ -196,14 +241,14 @@ function M.setup(opts)
   local scope = M.scope_id(opts.env or vim.env, opts.project_key)
   if not scope then return false end
   M.stop()
-  _s = {
+  local st = {
     session = opts.session, -- else autodoc.session, resolved when first needed
     scope = scope,
     run = M.run_token(),
     proc = opts.proc or M.proc_ref(),
     epoch = nil,
-    gen = 0,
-    claiming = false,
+    status = "idle",
+    attempt = 0,
     dormant = false,
     notify = opts.notify or function(msg, level) vim.notify(msg, level, { title = "auto-agents" }) end,
     after = opts.after or function(ms, fn) vim.defer_fn(fn, ms) end,
@@ -211,38 +256,44 @@ function M.setup(opts)
     publish = function() end,
     subs = {},
   }
+  _s = st
   local events = opts.events
   if events == nil then
     local ok, ev = pcall(require, "auto-core.events")
     events = ok and ev or false
   end
-  _s.events = events or nil
+  st.events = events or nil
   if events then
-    _s.publish = function(topic, payload) pcall(events.publish, topic, payload) end
+    st.publish = function(topic, payload) pcall(events.publish, topic, payload) end
     pcall(events.register_topics, "auto-agents", {
       [M.TOPIC_CLAIMED] = { doc = "This Neovim holds its crew scope in the AutoDoc daemon.",
         payload = "{ scope = string, epoch = integer, reattached = boolean }", publishers = { "auto-agents" } },
     })
     -- every connection to the daemon claims or reattaches; a lost one leaves the scope to the lease
-    table.insert(_s.subs, events.subscribe("autodoc.session:connected", function()
-      _s.dormant = false
-      claim()
+    table.insert(st.subs, events.subscribe("autodoc.session:connected", function()
+      if not live(st) then return end
+      st.dormant = false
+      if st.status == "claiming" then return end -- the claim in flight answers for this connection
+      claim(st, st.status ~= "idle" and st.epoch or nil)
     end))
   end
-  _s.augroup = vim.api.nvim_create_augroup("auto-agents.crew", { clear = true })
-  vim.api.nvim_create_autocmd("VimLeavePre", { group = _s.augroup, callback = function() M.release() end })
-  local sess = session()
-  if sess and sess.is_ready and sess.is_ready() then claim() end
+  st.augroup = vim.api.nvim_create_augroup("auto-agents.crew", { clear = true })
+  vim.api.nvim_create_autocmd("VimLeavePre", { group = st.augroup, callback = function() M.release() end })
+  local sess = session(st)
+  if sess and sess.is_ready and sess.is_ready() then claim(st) end
   return true
 end
 
 ---stop forgets the scope without releasing it (tests, a reload): its lease lapses on its own.
 function M.stop()
-  if not _s then return end
-  for _, sub in ipairs(_s.subs or {}) do
-    if _s.events then pcall(_s.events.unsubscribe, sub) end
+  local st = _s
+  if not st then return end
+  st.status = "stopped"
+  next_attempt(st)
+  for _, sub in ipairs(st.subs or {}) do
+    if st.events then pcall(st.events.unsubscribe, sub) end
   end
-  if _s.augroup then pcall(vim.api.nvim_del_augroup_by_id, _s.augroup) end
+  if st.augroup then pcall(vim.api.nvim_del_augroup_by_id, st.augroup) end
   _s = nil
 end
 

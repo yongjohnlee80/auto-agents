@@ -12,6 +12,11 @@
 ---   [6] a busy scope is said once and retried; any other refusal is said and retried
 ---   [7] a daemon without the crew verbs is never asked, and a method-not-found keeps it quiet
 ---   [8] release gives the scope up, and no renewal runs after it
+---   [9] late replies (a deferred fake): a claim accepted after release is given back and holds
+---       nothing; a reattach answered after release resurrects nothing; a stopped state's late
+---       reply and timers leave a newer setup's state alone
+---  [10] a held scope whose reattach, renewal or claim fails is no longer reported held, is
+---       retried, and recovers: at the same epoch quietly, at another saying the agents moved
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -35,13 +40,29 @@ local crew = require("auto-agents.crew")
 
 local function new_world(opts)
   opts = opts or {}
-  local w = { calls = {}, notices = {}, published = {}, timers = {}, subs = {}, answer = {} }
+  local w = { calls = {}, notices = {}, published = {}, timers = {}, subs = {}, answer = {}, pending = {},
+    deferred = opts.deferred == true }
+  -- reply answers the oldest pending call of method, as the daemon would, later
+  w.reply = function(method, res, err)
+    for i, c in ipairs(w.pending) do
+      if c.method == method then
+        table.remove(w.pending, i)
+        c.cb(res, err)
+        return true
+      end
+    end
+    return false
+  end
   w.client = { can = function(_, m) return opts.serves ~= false or m ~= "crew.claim" end }
   w.session = {
     is_ready = function() return opts.ready == true end,
     client = function() return w.client end,
     call = function(method, params, cb)
       w.calls[#w.calls + 1] = { method = method, params = vim.deepcopy(params) }
+      if w.deferred then
+        w.pending[#w.pending + 1] = { method = method, params = vim.deepcopy(params), cb = cb }
+        return
+      end
       local a = w.answer[method]
       local res, err
       if type(a) == "function" then res, err = a(params) else res, err = a, nil end
@@ -207,6 +228,89 @@ do
   ok("[8] no renewal runs after it", #w.of("crew.renew") == 0)
   crew.release()
   ok("[8] a second release asks nothing", #w.of("crew.release") == 1)
+  crew.stop()
+end
+
+-- ── [9] lifetimes: replies that arrive late (#3 r0, F1) ─────────────────────
+
+do -- a release before the first claim answers gives the late epoch back, and holds nothing
+  local w = new_world({ deferred = true })
+  w.connect()
+  crew.release()
+  w.reply("crew.claim", { epoch = 9 })
+  local rel = w.of("crew.release")
+  ok("[9] a claim accepted after release is given back at its epoch", #rel == 1 and rel[1].params[3] == 9, vim.inspect(rel))
+  ok("[9] and nothing is held, no renewal scheduled", crew.held() == nil and #w.timers == 0)
+  w.connect()
+  ok("[9] a connection after release claims nothing", #w.of("crew.claim") == 1)
+  crew.stop()
+end
+
+do -- a reattach answered after release resurrects nothing
+  local w = new_world({ deferred = true })
+  w.connect(); w.reply("crew.claim", { epoch = 3 })
+  w.connect() -- a reconnect: the reattach is in flight
+  crew.release()
+  w.reply("crew.release", nil)
+  w.reply("crew.claim", { epoch = 3 })
+  w.tick()
+  ok("[9] a reattach answered after release holds nothing and renews nothing",
+    crew.held() == nil and #w.of("crew.renew") == 0, vim.inspect(w.calls))
+  crew.stop()
+end
+
+do -- stop, then a new setup: the old state's late reply and timers touch nothing of the new one
+  local w = new_world({ deferred = true })
+  w.connect()
+  local old_timers = w.timers
+  local w2 = new_world() -- setup again: the first state is stopped
+  w2.answer["crew.claim"] = { epoch = 1 }
+  w2.connect()
+  w.reply("crew.claim", { epoch = 50 }) -- the old state's claim, late
+  for _, fn in ipairs(old_timers) do fn() end
+  local _, epoch = crew.held()
+  ok("[9] a stopped state's late claim leaves the new state's epoch alone", epoch == 1, tostring(epoch))
+  ok("[9] and is given back, not left held", #w.of("crew.release") == 1 and w.of("crew.release")[1].params[3] == 50)
+  crew.stop()
+end
+
+-- ── [10] a held scope whose reattach fails is not reported held, and recovers (#3 r0, F2) ──
+
+do
+  local w = new_world({ deferred = true })
+  w.connect(); w.reply("crew.claim", { epoch = 3 })
+  w.connect() -- reconnect while held
+  w.reply("crew.claim", nil, { code = -32603, message = "store down" })
+  ok("[10] a failed reattach reports nothing held: the lease may lapse", crew.held() == nil)
+  w.tick() -- the retry
+  ok("[10] it is retried", #w.of("crew.claim") == 3)
+  w.reply("crew.claim", { epoch = 3 })
+  local _, epoch = crew.held()
+  ok("[10] and the retry reattaches at the same epoch, quietly", epoch == 3 and #w.notices == 1, vim.inspect(w.notices))
+  w.tick() -- renewal resumes
+  ok("[10] renewal resumes after the recovery", #w.of("crew.renew") == 1)
+  crew.stop()
+
+  w = new_world({ deferred = true })
+  w.connect(); w.reply("crew.claim", { epoch = 3 })
+  w.connect()
+  w.reply("crew.claim", nil, { code = crew.CODE_SCOPE_BUSY, message = "busy" })
+  ok("[10] busy after held reports nothing held", crew.held() == nil)
+  w.tick()
+  w.reply("crew.claim", { epoch = 4 })
+  local _, e2 = crew.held()
+  ok("[10] and a later claim at another epoch says the agents moved",
+    e2 == 4 and w.notices[#w.notices]:find("epoch 4", 1, true) ~= nil, vim.inspect(w.notices))
+  crew.stop()
+
+  w = new_world({ deferred = true })
+  w.connect(); w.reply("crew.claim", { epoch = 3 })
+  w.tick()
+  w.reply("crew.renew", nil, { code = -32000, message = "connection lost" })
+  ok("[10] a renewal lost to the transport reports nothing held", crew.held() == nil)
+  w.tick()
+  w.reply("crew.claim", { epoch = 3 })
+  ok("[10] and reattaches on the retry", select(2, crew.held()) == 3)
   crew.stop()
 end
 
