@@ -30,6 +30,9 @@
 ---       registered session start_failed once and raises the error as it was (Lector #4 r1 F3)
 ---  [16] the gateway session: registered when asked for (gateway, host), kept across renewals,
 ---       registered again at a new epoch, replayed when its answer was lost, ended by release
+---  [17] the gateway is fenced by its store: another store answering drops its credential and it
+---       registers there (Lector #5 F2); its codename is reserved: an agent of that name gets no
+---       session, and an agent profile of that name keeps its mail, the gateway off (F3)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -58,10 +61,11 @@ local function new_world(opts)
   local function new_client(addr)
     return {
       can = function() return true end,
-      hello = function() return { store_id = "store-1" } end,
+      hello = function() return { store_id = w.store } end,
       addr = function() return addr end,
     }
   end
+  w.store = "store-1"
   w.client = new_client("/run/autodoc.sock")
   w.reconnect = function() w.client = new_client("/run/autodoc-2.sock") end
   w.reply = function(method, res, err)
@@ -618,6 +622,51 @@ do
   local regs = w.of("crew.register")
   ok("[16] it is replayed as it was at the next renewal, and held",
     #regs == 2 and vim.deep_equal(regs[1].params, regs[2].params) and crew.gateway_credential() == "g9." .. regs[1].params[8])
+end
+
+-- ── [17] the gateway's store and codename (Lector #5 F2, F3) ────────────────
+
+do
+  local w = new_world()
+  w.answer["crew.list"] = { { codename = "gold", scope = "autovim:alpha", kind = "claude" } }
+  crew.enable_gateway("/proj")
+  ok("[17] held on store-1", crew.gateway_credential() == "s1." .. w.of("crew.register")[1].params[8])
+  w.store = "store-2" -- the daemon now serves another store, at the same epoch
+  ok("[17] another store answering: no credential", crew.gateway_credential() == nil)
+  w.tick()
+  local regs = w.of("crew.register")
+  ok("[17] the next renewal registers it on the new store, at the same epoch",
+    #regs == 2 and regs[2].params[3] == 5 and crew.gateway_credential() == "s2." .. regs[2].params[8], vim.inspect(regs))
+end
+
+do
+  local w = new_world()
+  w.deferred["crew.register"] = true
+  w.answer["crew.list"] = {}
+  crew.enable_gateway("/proj")
+  w.store = "store-2"
+  w.reply("crew.register", { session = "old", profile = "p" })
+  ok("[17] an answer from the replaced store holds nothing", crew.gateway_credential() == nil)
+end
+
+do
+  local w = new_world()
+  w.answer["crew.list"] = { { codename = "gateway", scope = "autovim:alpha", kind = "claude" } }
+  crew.enable_gateway("/proj")
+  ok("[17] an agent profile named gateway: the gateway is not registered, so it never takes that profile",
+    #w.of("crew.register") == 0 and crew.gateway_credential() == nil and #w.notices == 1)
+  w.tick()
+  ok("[17] said once, still off at the next renewal", #w.of("crew.register") == 0 and #w.notices == 1)
+  ok("[17] gateway is never an addressbook recipient", not crew.in_addressbook("gateway"))
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local h, why = crew.begin({ codename = "gateway", kind = "claude", cwd = cwd })
+  ok("[17] an agent named gateway starts without a crew session, and says why",
+    h == nil and why ~= nil and #w.of("crew.register") == 0)
+  vim.fn.delete(cwd, "rf")
 end
 
 crew.stop()

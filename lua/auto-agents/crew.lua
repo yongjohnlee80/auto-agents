@@ -389,12 +389,36 @@ M.GATEWAY_CODENAME = "gateway"
 M.GATEWAY_KIND = "host"
 
 -- ensure_gateway registers the gateway session when it is wanted and not held or in flight.
+-- store_of is the store the session's connection serves (sys.hello's store_id), or nil.
+local function store_of(sess)
+  local c = sess and sess.client and sess.client()
+  local h = c and c.hello and c:hello() or nil
+  local id = h and h.store_id or nil
+  return type(id) == "string" and id ~= "" and id or nil
+end
+
 local function ensure_gateway(st)
   local g = st.gateway
-  if not g or not live(st) or st.status ~= "held" or g.s or (g.r and g.r.inflight) then return end
+  if not g or not live(st) or st.status ~= "held" then return end
   local sess = st.session
-  local c = sess and sess.client and sess.client()
-  if not c then return end
+  local store = store_of(sess)
+  if not store then return end
+  -- registered on another store (the daemon swapped stores, at the same epoch or not): that
+  -- credential names nothing here, so it is dropped and the gateway registered again (Lector #5 F2)
+  if g.r and g.r.store ~= store and not g.r.inflight then g.r, g.s, g.credential = nil, nil, nil end
+  if g.s or (g.r and g.r.inflight) then return end
+  -- the codename is this Neovim's own: an agent's profile of that name (an older registration, not
+  -- a host) is never taken over, nor its mail (Lector #5 F3); the addressbook says, so it comes first
+  if not g.book then return end
+  local held = g.book[M.GATEWAY_CODENAME]
+  if held and held ~= M.GATEWAY_KIND then
+    if not g.said_taken then
+      g.said_taken = true
+      st.notify(("The crew gateway is off: this scope already has an agent profile named %q (kind %s). Rename that agent to cut mail over.")
+        :format(M.GATEWAY_CODENAME, tostring(held)), vim.log.levels.WARN)
+    end
+    return
+  end
   if not g.r then
     local name = (sess.workspace_of and sess.workspace_of(g.cwd)) or (sess.primary_workspace and sess.primary_workspace())
     local w = name and sess.workspace and sess.workspace(name) or nil
@@ -414,7 +438,7 @@ local function ensure_gateway(st)
     _instances = _instances + 1
     g.r = { codename = M.GATEWAY_CODENAME, kind = M.GATEWAY_KIND, workspace = tostring(id),
       instance = ("nvim-gateway-%d-%d"):format(vim.uv.os_getpid(), _instances), secret = M.run_token(),
-      scope = st.scope, epoch = st.epoch, folder = nil }
+      scope = st.scope, epoch = st.epoch, store = store, folder = nil }
   end
   local r = g.r
   r.inflight = true
@@ -422,6 +446,10 @@ local function ensure_gateway(st)
     function(res, err)
       r.inflight = false
       if _s ~= st or st.gateway ~= g or g.r ~= r then return end
+      if store_of(st.session) ~= r.store then -- answered by the store it was sent to, now replaced
+        g.r = nil
+        return
+      end
       local sid = not err and type(res) == "table" and res.session or nil
       if not sid then
         if refused(err) then g.r = nil end -- a lost answer keeps r, replayed as it was at the next renewal
@@ -445,9 +473,12 @@ local function refresh_addressbook(st)
     if _s ~= st or st.gateway ~= g or err or type(res) ~= "table" then return end
     local book = {}
     for _, e in ipairs(res) do
-      if type(e) == "table" and e.scope == st.scope and type(e.codename) == "string" then book[e.codename] = true end
+      if type(e) == "table" and e.scope == st.scope and type(e.codename) == "string" then
+        book[e.codename] = type(e.kind) == "string" and e.kind or "?"
+      end
     end
     g.book = book
+    ensure_gateway(st) -- the gateway registers once the addressbook says its codename is free
   end)
 end
 
@@ -469,6 +500,7 @@ function M.gateway_credential()
   local st = _s
   local g = st and st.gateway
   if not g or not g.s or st.status ~= "held" or g.s.epoch ~= st.epoch then return nil end
+  if store_of(st.session) ~= g.r.store then return nil end -- a credential of another store names nothing here
   return g.credential
 end
 
@@ -477,7 +509,7 @@ end
 ---@return boolean
 function M.in_addressbook(codename)
   local g = _s and _s.gateway
-  return g ~= nil and g.book ~= nil and g.book[codename] == true
+  return g ~= nil and g.book ~= nil and codename ~= M.GATEWAY_CODENAME and g.book[codename] ~= nil
 end
 
 local function renew_later(st, a)
@@ -634,6 +666,9 @@ function M.begin(opts)
   if _s ~= st or st.status ~= "held" or sess.client() ~= c then return nil, nil end
 
   local codename, kind, folder = opts.codename, M.crew_kind(opts.kind), M.context_folder(opts.cwd)
+  if codename == M.GATEWAY_CODENAME then
+    return nil, ("the codename %q is this Neovim's mail gateway's: rename the agent to give it a crew session"):format(codename)
+  end
   -- the codename's previous session is over first, or this one is refused as busy: one still
   -- counted live (its process killed, its exit not yet reaped) is ended now, and its exit, with
   -- any other still owed for the codename, is waited for within the spawn's wait
