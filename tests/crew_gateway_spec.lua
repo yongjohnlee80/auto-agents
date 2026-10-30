@@ -11,6 +11,10 @@
 ---   [4] a transient failure is done(err) and retried with the same key
 ---   [5] a refusal for good is done(err) once, then declined: the file route delivers it
 ---   [6] "*" cuts over every recipient; stop removes the hook
+---   [7] a message sent before, its outcome unknown, stays the gateway's: with the credential or
+---       the addressbook entry lost it waits in the outbox, never the file route; after a restart
+---       with nothing cut over it is still sent again with its key; a marker that can't be
+---       written leaves a first send on the file route (Lector #5 F1)
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -47,8 +51,9 @@ local function new_world(opts)
     cb(res, err)
   end
   w.answer["mail.send"] = { message = {} }
+  w.sent_dir = opts.sent_dir or vim.fn.tempname()
   w.installed = gw.setup({ cutover = opts.cutover == nil and { "gold" } or opts.cutover, cwd = "/proj",
-    router = opts.router or w.router, crew = w.crew, call = w.call })
+    router = opts.router or w.router, crew = w.crew, call = w.call, sent_dir = w.sent_dir })
   -- offer runs the hook as auto-core's router does: took, and what done was given
   w.offer = function(rec, mid, msg)
     local settled, gerr = false, nil
@@ -152,6 +157,56 @@ do
   ok("[6] \"*\" cuts over every recipient in the addressbook", w.offer(rec, "s1", msg({ to = "agent:vision:9" })) == true)
   gw.stop()
   ok("[6] stop removes the hook", w.hook == nil)
+end
+
+-- ── [7] a send of unknown outcome stays the gateway's (Lector #5 F1) ────────
+
+do
+  local w = new_world()
+  w.answer["mail.send"] = function() return nil, { message = "connection lost after the write" } end
+  local took = w.offer(rec, "u1", msg())
+  ok("[7] a transient failure leaves the message marked as the gateway's", took and #w.calls == 1)
+  w.cred = nil
+  local took2, settled2, gerr2 = w.offer(rec, "u1", msg())
+  ok("[7] with the credential lost it is still taken: it waits in the outbox (done(err)), never the file route",
+    took2 == true and settled2 and gerr2 ~= nil and #w.calls == 1)
+  w.cred = "g1.secret"
+  w.book.gold = nil
+  w.answer["mail.send"] = { message = {} }
+  local took3, _, gerr3 = w.offer(rec, "u1", msg())
+  ok("[7] with the addressbook entry gone it is sent again with the same key, and delivered",
+    took3 and gerr3 == nil and #w.calls == 2 and w.calls[2].params[4] == w.calls[1].params[4])
+  local names = {}
+  for name in vim.fs.dir(w.sent_dir) do names[#names + 1] = name end
+  ok("[7] delivered, its marker is gone", #names == 0, vim.inspect(names))
+  gw.stop()
+end
+
+do
+  local w = new_world()
+  w.answer["mail.send"] = function() return nil, { message = "connection lost" } end
+  w.offer(rec, "r1", msg())
+  gw.stop()
+  local w2 = new_world({ cutover = {}, sent_dir = w.sent_dir })
+  ok("[7] after a restart with nothing cut over, the gateway stays installed for what it sent", w2.installed)
+  local took = w2.offer(rec, "r1", msg())
+  ok("[7] and the message it sent is sent again with its key, not delivered by file",
+    took and #w2.calls == 1 and w2.calls[1].params[4] == "legacy:agent:jarvis:123-4/r1")
+  ok("[7] a new message to a recipient no longer cut over takes the file route", w2.offer(rec, "r2", msg()) == false)
+  gw.stop()
+  local w3 = new_world({ cutover = {}, sent_dir = vim.fn.tempname() })
+  ok("[7] with nothing cut over and nothing sent before, nothing is installed", not w3.installed)
+  gw.stop()
+end
+
+do
+  local blocked = vim.fn.tempname()
+  vim.fn.writefile({}, blocked) -- a file where the marker folder would go
+  local w = new_world({ sent_dir = blocked .. "/sent" })
+  local took = w.offer(rec, "m1", msg())
+  ok("[7] a marker that can't be written leaves a first send on the file route, and sends nothing",
+    took == false and #w.calls == 0)
+  gw.stop()
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
