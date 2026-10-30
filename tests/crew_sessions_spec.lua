@@ -20,6 +20,8 @@
 ---   [9] a lost registration nobody starts is replayed and ended at the next renewal
 ---  [10] a claim at another epoch drops the old sessions' contexts; release removes every context
 ---  [11] a context that can't be written ends its session
+---  [12] Claude starts with --settings carrying the SessionStart endpoint hook and
+---       crossSessionInbound accept, nothing else; the other kinds with nothing added
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -433,6 +435,22 @@ do
   ok("[11] its session is ended, start_failed, and the agent starts without one",
     h == nil and why ~= nil and #exits == 1 and exits[1].params[5] == "start_failed", vim.inspect({ why, exits }))
   vim.fn.delete(cwd, "rf")
+end
+
+-- ── [12] Claude's wake acceptance ───────────────────────────────────────────
+
+do
+  local argv = crew.wake_argv("claude", "/opt/auto doc/bin/autodoc")
+  local settings = argv[2] and vim.json.decode(argv[2]) or {}
+  local hook = (((settings.hooks or {}).SessionStart or {})[1] or {}).hooks or {}
+  ok("[12] Claude starts with --settings carrying the SessionStart endpoint hook",
+    argv[1] == "--settings" and #argv == 2 and #hook == 1 and hook[1].type == "command"
+      and hook[1].command == "'/opt/auto doc/bin/autodoc' crew endpoint --claude >/dev/null", vim.inspect(argv))
+  ok("[12] and crossSessionInbound accept, and nothing else: no permissions or rules",
+    settings.crossSessionInbound == "accept" and vim.tbl_count(settings) == 2, vim.inspect(settings))
+  ok("[12] the other kinds start with nothing added",
+    #crew.wake_argv("codex", "/bin/autodoc") == 0 and #crew.wake_argv("agy", "/bin/autodoc") == 0)
+  ok("[12] no autodoc binary: nothing added", #crew.wake_argv("claude", nil) == 0)
 end
 
 crew.stop()
