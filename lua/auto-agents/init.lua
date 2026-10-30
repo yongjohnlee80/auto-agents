@@ -619,6 +619,16 @@ function M.setup(opts)
   local crew_ok, crew_err = pcall(function()
     require("auto-agents.crew").setup({ project_key = M.state.session_project_key })
   end)
+  -- the editor socket agents reach this Neovim through (ADR 1793271500 phase 5, Q5-1 (a))
+  local es_ok, es_path, es_err = pcall(require("auto-agents.editor_socket").start)
+  if not es_ok or not es_path then
+    require("auto-agents.log").warn("editor", "the editor socket is not served: " .. tostring(es_ok and es_err or es_path))
+  else
+    vim.api.nvim_create_autocmd("VimLeavePre", {
+      group = vim.api.nvim_create_augroup("auto-agents.editor_socket", { clear = true }),
+      callback = function() require("auto-agents.editor_socket").stop() end,
+    })
+  end
   if not crew_ok then
     require("auto-agents.log").warn("crew", "crew scope setup failed: " .. tostring(crew_err))
   end
@@ -680,6 +690,7 @@ local function resolve_slot_spec(slot)
         model = entry.model,
         cmd = agent.cmd_for(kind, entry),
         diff_review = entry.diff_review == true,
+        editor_grants = entry.editor_grants, -- the editor socket's grants; nil: its defaults
         slot = slot,
         configured = true,
       }
@@ -1046,6 +1057,14 @@ local function ensure_main_slot_terminal(slot, winid)
   -- M5: explicit `resource cwd` grant > first path grant > cwd.resolve default.
   cwd = require("auto-agents.resources").cwd_for(slot, cwd)
   local env = build_agent_env(spec, cwd)
+  -- the page's verbs for this agent, by its own token (autodoc --editor)
+  if spec.configured ~= false and spec.name then
+    local eenv = require("auto-agents.editor_socket").agent_env(spec.name, spec.editor_grants)
+    if eenv then
+      env = env or {}
+      for k, v in pairs(eenv) do env[k] = v end
+    end
+  end
   -- registered first (ADR 1793271500 §4.4): the agent starts with its crew session's context, or,
   -- with no scope held, no workspace served or a registration that failed, as before without one
   local crew_session
@@ -1091,6 +1110,7 @@ local function ensure_main_slot_terminal(slot, winid)
     env = env,
     on_exit = function(code)
       require("auto-agents.crew").finish(crew_session, "exit")
+      if spec.name then require("auto-agents.editor_socket").forget(spec.name) end
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
       pcall(function() require("auto-agents.status.observer").detach(slot) end)
       if M.state.agent_status then M.state.agent_status[slot] = nil end
