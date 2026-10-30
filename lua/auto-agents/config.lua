@@ -197,6 +197,20 @@ function M.validate(cfg)
     return "crew.cutover must be a list of codenames or \"*\""
   end
   local a = cfg.agents
+  local GRANTS = { ["editor.read"] = true, review = true, peek = true, commands = true }
+  for _, entry in ipairs((a and a.bootstrap) or {}) do
+    local g = entry.editor_grants
+    if g ~= nil then
+      if type(g) ~= "table" or not vim.islist(g) then
+        return "agents.bootstrap entry " .. tostring(entry.name) .. ": editor_grants must be a list"
+      end
+      for _, x in ipairs(g) do
+        if not GRANTS[x] then
+          return ("agents.bootstrap entry %s: editor_grants %q is not one of editor.read, review, peek, commands"):format(tostring(entry.name), tostring(x))
+        end
+      end
+    end
+  end
   if not KINDS[a.default_kind] then
     return "agents.default_kind must be one of claude|codex|antigravity|junie|goose|opencode|copilot|generic"
   end

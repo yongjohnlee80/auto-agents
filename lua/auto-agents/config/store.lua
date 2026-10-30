@@ -69,7 +69,7 @@ local M = {}
 local SECTION_ORDER = { "project", "kb", "panel", "agents" }
 local AGENT_KEY_ORDER = {
   "slot", "kind", "name", "title", "role", "model", "provider", "api_base", "cwd", "cmd",
-  "allowed_paths", "manager", "bottom_margin", "diff_review",
+  "allowed_paths", "manager", "bottom_margin", "diff_review", "editor_grants",
 }
 local PROJECT_KEY_ORDER = { "cwd", "created_at" }
 local KB_KEY_ORDER = { "root" }
