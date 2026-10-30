@@ -771,6 +771,38 @@ function M.finish(handle, why)
   end
 end
 
+-- How long writing an instruction block waits for the daemon's crew guide before writing it without.
+M.GUIDE_WAIT_MS = 1000
+
+---guide is the crew and mail procedure for an auto-agents kind, the daemon's crew.guide markdown
+---(§4.10), which the instruction block carries: cached per store, daemon version and kind, so a
+---restarted daemon of another build is asked again. nil while the scope isn't held, on a daemon
+---without the verb, or when it fails or doesn't answer within GUIDE_WAIT_MS (asked again next time).
+---@param kind string auto-agents' kind
+---@return string|nil
+function M.guide(kind)
+  local st = _s
+  if not st or st.status ~= "held" or vim.in_fast_event() then return nil end
+  local sess = session(st)
+  local c = sess and sess.client and sess.client()
+  if not c or (c.can and not c:can("crew.guide")) then return nil end
+  local h = c.hello and c:hello() or {}
+  if type(h.store_id) ~= "string" or h.store_id == "" then return nil end
+  local k = M.crew_kind(kind)
+  local key = table.concat({ h.store_id, tostring(h.version), k }, "\0")
+  st.guides = st.guides or {}
+  if st.guides[key] then return st.guides[key] end
+  local answered, md = false, nil
+  sess.call("crew.guide", { k }, function(res, err)
+    answered = true
+    if not err and type(res) == "table" and type(res.markdown) == "string" and res.markdown ~= "" then md = res.markdown end
+  end)
+  st.wait(M.GUIDE_WAIT_MS, function() return answered end)
+  if answered and md then st.guides[key] = md end
+  return md
+end
+
+
 ---setup starts holding the scope. opts (all optional, for tests): session (autodoc.session), events
 ---(auto-core.events), env, project_key, notify, after(ms, fn), wait(ms, cond), proc.
 ---@param opts table|nil
