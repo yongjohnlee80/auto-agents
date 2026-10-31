@@ -299,6 +299,10 @@ local function render_block(spec, kb, crew)
       "- **If `autodoc crew whoami` fails, or says the context doesn't match,**",
       "  tell the user, and use the mailbox alone.",
       "",
+      "Listed, but `$AUTODOC_CREW_CONTEXT` isn't set (you started while the",
+      "daemon was away)? Tell the user: plain messages to you are waiting in",
+      "the daemon. Use the mailbox for everything else.",
+      "",
     })
     if crew.guide then
       vim.list_extend(lines, {
