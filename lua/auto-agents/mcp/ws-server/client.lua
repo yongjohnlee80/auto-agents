@@ -5,6 +5,14 @@ local logger = require("auto-agents.mcp.ws-server.logger")
 
 local M = {}
 
+---close_handle closes h unless it is closing already: a peer that resets the connection is closed
+---by the server's read-error path, which can come before a close this module scheduled, and libuv
+---raises on a second close.
+---@param h table|nil a vim.loop handle
+local function close_handle(h)
+  if h and not h:is_closing() then h:close() end
+end
+
 ---@class WebSocketClient
 ---@field id string Unique client identifier
 ---@field tcp_handle table The vim.loop TCP handle
@@ -105,7 +113,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           client.state = "closing"
           logger.debug("client", "Closing connection for client due to failed handshake:", client.id)
           vim.schedule(function()
-            client.tcp_handle:close()
+            close_handle(client.tcp_handle)
           end)
         end
       end)
@@ -216,11 +224,11 @@ function M.close_client(client, code, reason)
     local close_frame = frame.create_close_frame(code, reason)
     client.tcp_handle:write(close_frame, function()
       client.state = "closed"
-      client.tcp_handle:close()
+      close_handle(client.tcp_handle)
     end)
   else
     client.state = "closed"
-    client.tcp_handle:close()
+    close_handle(client.tcp_handle)
   end
 
   client.state = "closing"
