@@ -20,7 +20,8 @@
 ---   [9] a lost registration nobody starts is replayed and ended at the next renewal
 ---  [10] a claim at another epoch drops the old sessions' contexts; release removes every context
 ---  [11] a context that can't be written ends its session
----  [12] Claude starts with --settings carrying the SessionStart endpoint hook and
+---  [12] Claude starts with --settings carrying the SessionStart endpoint hook, the five hooks that
+---       report its permission prompts (each always exiting 0) and
 ---       crossSessionInbound accept, nothing else; the other kinds with nothing added
 ---  [13] a restart: the codename's previous session, still counted live, is ended before the new
 ---       registration, and its exit is waited for within the spawn's wait (Juliet #4 r0 F1)
@@ -465,6 +466,16 @@ do
       and hook[1].command == "'/opt/auto doc/bin/autodoc' crew endpoint --claude >/dev/null", vim.inspect(argv))
   ok("[12] and crossSessionInbound accept, and nothing else: no permissions or rules",
     settings.crossSessionInbound == "accept" and vim.tbl_count(settings) == 2, vim.inspect(settings))
+  local want = "'/opt/auto doc/bin/autodoc' crew attention --claude-hook >/dev/null || true"
+  local reported = 0
+  for _, event in ipairs({ "PermissionRequest", "Notification", "PostToolUse", "UserPromptSubmit", "Stop" }) do
+    local h = ((((settings.hooks or {})[event] or {})[1] or {}).hooks or {})
+    if #h == 1 and h[1].type == "command" and h[1].command == want and #settings.hooks[event] == 1 then
+      reported = reported + 1
+    end
+  end
+  ok("[12] and the five hooks that report its permission prompts, each one command that always exits 0",
+    reported == 5 and vim.tbl_count(settings.hooks) == 6, vim.inspect(settings.hooks))
   ok("[12] the other kinds start with nothing added",
     #crew.wake_argv("codex", "/bin/autodoc") == 0 and #crew.wake_argv("agy", "/bin/autodoc") == 0)
   ok("[12] no autodoc binary: nothing added", #crew.wake_argv("claude", nil) == 0)

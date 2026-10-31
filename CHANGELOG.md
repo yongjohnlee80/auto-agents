@@ -2,6 +2,14 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## Unreleased
+
+- **Claude's permission prompts are reported** to the crew: a crew Claude agent also starts with the
+  five hooks AutoDoc's own window writes (`PermissionRequest`, `Notification`, `PostToolUse`,
+  `UserPromptSubmit`, `Stop`), each running `autodoc crew attention --claude-hook`. A prompt raises
+  the session's permission attention in the human inbox, and the prompt behind it clears it. The
+  hooks print nothing and always exit 0, so an autodoc older than the hook never denies a prompt.
+
 ## [v0.3.9] — 2026-10-30 — this Neovim's agents join AutoDoc's crew
 
 ADR 1793271500, phases 4c–4e. **It needs auto-core v0.5.3 or later (the router's gateway hook)

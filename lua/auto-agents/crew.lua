@@ -115,21 +115,40 @@ function M.endpoint_command(bin)
   return vim.fn.shellescape(bin) .. " crew endpoint --claude >/dev/null"
 end
 
+---CLAUDE_PROMPT_EVENTS are the hooks that report a crew Claude agent's permission prompts, as
+---AutoDoc's own window writes them: PermissionRequest and a permission Notification raise the
+---session's permission attention, and PostToolUse, UserPromptSubmit, Stop or another Notification
+---clear it (`autodoc crew attention --claude-hook`). A window presses Enter after typing to a Claude
+---agent only because these report its prompts.
+M.CLAUDE_PROMPT_EVENTS = { "PermissionRequest", "Notification", "PostToolUse", "UserPromptSubmit", "Stop" }
+
+---prompt_command is the hook that reports a permission prompt, run by the autodoc binary at bin. It
+---prints nothing: a PermissionRequest hook's output could decide the prompt, and a UserPromptSubmit
+---hook's joins the agent's context. It always exits 0: an autodoc older than the hook rejects its
+---flag with exit 2, which Claude Code would take as a PermissionRequest's denial. A failure still
+---says why, on stderr.
+---@param bin string
+---@return string
+function M.prompt_command(bin)
+  return vim.fn.shellescape(bin) .. " crew attention --claude-hook >/dev/null || true"
+end
+
 ---wake_argv is what a crew session's CLI of kind starts with, so the crew's fixed notice can start a
 ---turn (ADR 1793271500 §4.9): for Claude Code, `--settings` carrying the SessionStart hook that
----registers its endpoint and crossSessionInbound "accept"; nothing for the others yet. Given on the
----command line, so the project's own settings are never edited; never approval policies,
----permission modes, or allow or deny rules: a turn a wake starts runs under the agent's own policy.
+---registers its endpoint, crossSessionInbound "accept", and the hooks that report its permission
+---prompts (they report; they decide nothing); nothing for the others yet. Given on the command
+---line, so the project's own settings are never edited; never approval policies, permission modes,
+---or allow or deny rules: a turn a wake starts runs under the agent's own policy.
 ---@param kind string crew's kind
 ---@param bin string|nil the autodoc binary
 ---@return string[]
 function M.wake_argv(kind, bin)
   if kind ~= "claude" or type(bin) ~= "string" or bin == "" then return {} end
-  local settings = {
-    hooks = { SessionStart = { { hooks = { { type = "command", command = M.endpoint_command(bin) } } } } },
-    crossSessionInbound = "accept",
-  }
-  return { "--settings", vim.json.encode(settings) }
+  local hooks = { SessionStart = { { hooks = { { type = "command", command = M.endpoint_command(bin) } } } } }
+  for _, event in ipairs(M.CLAUDE_PROMPT_EVENTS) do
+    hooks[event] = { { hooks = { { type = "command", command = M.prompt_command(bin) } } } }
+  end
+  return { "--settings", vim.json.encode({ hooks = hooks, crossSessionInbound = "accept" }) }
 end
 
 ---autodoc_binary is the autodoc binary AutoDoc's plugin runs (its opts.bin, else its own build,
