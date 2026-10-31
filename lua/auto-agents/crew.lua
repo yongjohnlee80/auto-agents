@@ -179,7 +179,7 @@ function M._reset_plugin_env() _plugin_env = {} end
 ---@param kind string crew's kind
 ---@param bin string|nil the autodoc binary
 ---@param current string|nil the OPENCODE_CONFIG_CONTENT the agent's env sets, if any
----@param run fun(argv: string[], env: table, ms: integer): integer, string, string|nil for tests
+---@param run? fun(argv: string[], env: table, ms: integer): integer, string, string? runs the command (tests)
 ---@return table<string, string>|nil env, string|nil why
 function M.wake_env(kind, bin, current, run)
   if kind ~= "opencode" then return {}, nil end
