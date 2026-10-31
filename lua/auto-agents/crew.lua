@@ -210,13 +210,13 @@ function M.wake_env(kind, bin, current, run)
   return { OPENCODE_CONFIG_CONTENT = value }, nil
 end
 
--- setup's answers, kept for the session as wake_env's are; never a failure
+-- agent_setup's answers, kept for the session as wake_env's are; never a failure
 local _setups = {}
 
 -- How long a spawn waits for its setup (`autodoc crew setup`) before starting without it.
 M.SETUP_WAIT_MS = 5000
 
----setup is a crew agent's setup from AutoDoc (ADR 1793271500 r15 P2): what `bin crew setup --kind
+---agent_setup is a crew agent's setup from AutoDoc (ADR 1793271500 r15 P2): what `bin crew setup --kind
 ---kind --host nvim --program program --autodoc bin` answers, as a table { argv, env, files, prompts,
 ---notices, after }: the arguments to append to its command, AutoDoc's env to merge after the
 ---agent's own, the user-level files its kind needs, whether the setup reports its permission
@@ -232,7 +232,7 @@ M.SETUP_WAIT_MS = 5000
 ---@param env table<string, string>|nil the agent's own environment, over Neovim's
 ---@param run fun(argv: string[], env: table, ms: integer): integer, string, string|nil for tests
 ---@return table|nil setup, string|nil why, boolean|nil older
-function M.setup(kind, bin, program, env, run)
+function M.agent_setup(kind, bin, program, env, run)
   if type(bin) ~= "string" or bin == "" then return nil, "no autodoc binary", false end
   env = env or {}
   program = (type(program) == "string" and program ~= "") and program or kind
@@ -262,7 +262,7 @@ function M.setup(kind, bin, program, env, run)
   return vim.deepcopy(s), nil, false
 end
 
----_reset_setups forgets setup's kept answers (tests).
+---_reset_setups forgets agent_setup's kept answers (tests).
 function M._reset_setups() _setups = {} end
 
 ---after_argv is a setup's after steps as argv lists, run by bin, M.SETUP_SINCE given as since.
