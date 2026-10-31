@@ -407,6 +407,11 @@ end
 M.GATEWAY_CODENAME = "gateway"
 M.GATEWAY_KIND = "host"
 
+---NO_WORKSPACE is the workspace a session is registered with when no AutoDoc workspace serves its
+---folder (nor the project's primary KB): the daemon keeps a session's workspace as metadata, so an
+---agent anywhere gets its crew session and its mail.
+M.NO_WORKSPACE = ""
+
 -- ensure_gateway registers the gateway session when it is wanted and not held or in flight.
 -- store_of is the store the session's connection serves (sys.hello's store_id), or nil.
 local function store_of(sess)
@@ -445,8 +450,8 @@ local function ensure_gateway(st)
     local name = (sess.workspace_of and sess.workspace_of(g.cwd)) or (sess.primary_workspace and sess.primary_workspace())
     local w = name and sess.workspace and sess.workspace(name) or nil
     local id = w and tonumber(w.id) or nil
-    if not id or id <= 0 then
-      if sess.workspaces and not g.listing then
+    if (not id or id <= 0) and sess.workspaces and not g.listed then
+      if not g.listing then
         g.listing = true
         sess.workspaces(function()
           g.listing = false
@@ -458,7 +463,8 @@ local function ensure_gateway(st)
       return
     end
     _instances = _instances + 1
-    g.r = { codename = M.GATEWAY_CODENAME, kind = M.GATEWAY_KIND, workspace = tostring(id),
+    g.r = { codename = M.GATEWAY_CODENAME, kind = M.GATEWAY_KIND,
+      workspace = (id and id > 0) and tostring(id) or M.NO_WORKSPACE,
       instance = ("nvim-gateway-%d-%d"):format(vim.uv.os_getpid(), _instances), secret = M.run_token(),
       scope = st.scope, epoch = st.epoch, store = store, folder = nil }
   end
@@ -513,7 +519,8 @@ refresh_addressbook = function(st)
 end
 
 ---enable_gateway asks for the gateway session (phase 4e), registered under the workspace holding
----cwd (else the project's primary KB) once the scope is held, and kept from then on.
+---cwd (else the project's primary KB, else M.NO_WORKSPACE once the workspaces are listed) once the
+---scope is held, and kept from then on.
 ---@param cwd string
 function M.enable_gateway(cwd)
   local st = _s
@@ -682,7 +689,8 @@ end
 ---begin registers an agent's session before it starts (ADR 1793271500 §4.4, §4.5), waiting at most
 ---REGISTER_WAIT_MS, and writes its context once the session is still this Neovim's. It answers the
 ---session's handle, whose env (AUTODOC_CREW_CONTEXT) the spawn adds; finish ends it. nil when no
----scope is held or no workspace is served (the agent starts as before, without a crew session),
+---scope is held (the agent starts as before, without a crew session); an agent no workspace serves
+---is registered with M.NO_WORKSPACE,
 ---with why when the registration was tried and failed. A registration answered after the wait is
 ---ended, since nobody starts it; one whose answer was lost is replayed as it was by the codename's
 ---next start, or ended by the next renewal.
@@ -700,8 +708,10 @@ function M.begin(opts)
   local store, socket = h.store_id, c.addr and c:addr() or nil
   if type(store) ~= "string" or store == "" or type(socket) ~= "string" or socket == "" then return nil, nil end
   local deadline = vim.uv.now() + M.REGISTER_WAIT_MS
-  local ws = workspace_id(st, sess, opts.cwd, deadline)
-  if not ws then return nil, nil end
+  -- the workspace is the session's metadata, not its address: an agent in a folder no AutoDoc
+  -- workspace serves is registered with none, so its mail still reaches it once the file mailbox
+  -- is retired
+  local ws = workspace_id(st, sess, opts.cwd, deadline) or M.NO_WORKSPACE
   -- the wait may have outlived the scope, the epoch or the connection: start nothing under them
   if _s ~= st or st.status ~= "held" or sess.client() ~= c then return nil, nil end
 

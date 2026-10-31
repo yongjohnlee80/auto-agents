@@ -7,8 +7,9 @@
 ---   [1] crew's kind for an auto-agents kind
 ---   [2] the context file: 0600, the whole context, by its session's name; removing it removes
 ---       that file alone
----   [3] no scope held, no connection or no workspace served: no registration, the agent starts as
----       before; the workspaces are listed first when they were not yet
+---   [3] no scope held or no connection: no registration, the agent starts as before; no workspace
+---       served: registered with none (NO_WORKSPACE); the workspaces are listed first when they
+---       were not yet
 ---   [4] a registration sends the scope, run token, epoch, codename, kind, workspace id, instance
 ---       and a 32-byte secret, then writes the context whose credential is <session>.<secret>
 ---   [5] a refused registration starts nothing and is never replayed; a lost one is replayed as it
@@ -29,7 +30,8 @@
 ---       exit (Juliet #4 r0 F2)
 ---  [15] the spawn's terminal: a constructor or a start that throws, or no buffer, ends the
 ---       registered session start_failed once and raises the error as it was (Lector #4 r1 F3)
----  [16] the gateway session: registered when asked for (gateway, host), kept across renewals,
+---  [16] the gateway session: registered when asked for (gateway, host; with no workspace served,
+---       under none once the workspaces are listed), kept across renewals,
 ---       registered again at a new epoch, replayed when its answer was lost, ended by release
 ---  [17] the gateway is fenced by its store: another store answering drops its credential and it
 ---       registers there (Lector #5 F2); its codename is reserved: an agent of that name gets no
@@ -228,9 +230,16 @@ do
 end
 
 do
+  local cwd = tmpcwd() -- no workspace serves it: the world's one is /proj
   local w = new_world()
-  local h, why = crew.begin({ codename = "gold", kind = "claude", cwd = "/elsewhere" })
-  ok("[3] no workspace serves the folder: no registration", h == nil and why == nil and #w.of("crew.register") == 0)
+  local h, why = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local reg = w.of("crew.register")[1]
+  local p = reg and reg.params or {}
+  ok("[3] no workspace serves the folder: registered with none, so its mail still reaches it",
+    h ~= nil and why == nil and #w.of("crew.register") == 1 and p[6] == crew.NO_WORKSPACE and p[6] == ""
+      and p[4] == "gold", vim.inspect(p))
+  crew.finish(h, "exit")
+  vim.fn.delete(cwd, "rf")
 end
 
 do
@@ -638,6 +647,18 @@ do
   local regs = w.of("crew.register")
   ok("[16] it is replayed as it was at the next renewal, and held",
     #regs == 2 and vim.deep_equal(regs[1].params, regs[2].params) and crew.gateway_credential() == "g9." .. regs[1].params[8])
+end
+
+do
+  local w = new_world({ workspaces = {}, listed = false })
+  w.answer["crew.list"] = {}
+  crew.enable_gateway("/proj")
+  local reg = w.of("crew.register")[1]
+  local p = reg and reg.params or {}
+  ok("[16] with no workspace served, the gateway is registered under none once they are listed",
+    #w.of("workspace.list") == 1 and p[4] == "gateway" and p[6] == crew.NO_WORKSPACE and p[6] == ""
+      and crew.gateway_credential() ~= nil, vim.inspect(p))
+  crew.release()
 end
 
 -- ── [17] the gateway's store and codename (Lector #5 F2, F3) ────────────────
