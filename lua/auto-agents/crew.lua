@@ -151,6 +151,43 @@ function M.wake_argv(kind, bin)
   return { "--settings", vim.json.encode({ hooks = hooks, crossSessionInbound = "accept" }) }
 end
 
+-- How long a spawn waits for AutoDoc's OpenCode plugin environment before starting without it.
+M.PLUGIN_ENV_WAIT_MS = 5000
+
+---wake_env is what a crew session's CLI of kind starts with in its environment, so a wake reaches
+---it (§4.9): for OpenCode, the OPENCODE_CONFIG_CONTENT that loads AutoDoc's OpenCode plugin, which
+---registers the session's endpoint and wakes it. Without it the session is never reachable. It is
+---what the autodoc binary at bin prints (`autodoc crew plugin --opencode --print-env`), so the
+---plugin is that build's, merged by it with current (the value the agent would start with), as
+---AutoDoc's own window does. The other kinds get nothing. nil and why when it can't be had: no
+---binary, one older than the command, a failure, or no answer within PLUGIN_ENV_WAIT_MS.
+---@param kind string crew's kind
+---@param bin string|nil the autodoc binary
+---@param current string|nil the OPENCODE_CONFIG_CONTENT the agent's env sets, if any
+---@param run fun(argv: string[], env: table, ms: integer): integer, string, string|nil for tests
+---@return table<string, string>|nil env, string|nil why
+function M.wake_env(kind, bin, current, run)
+  if kind ~= "opencode" then return {}, nil end
+  if type(bin) ~= "string" or bin == "" then return nil, "no autodoc binary" end
+  run = run or function(argv, env, ms)
+    local r = vim.system(argv, { env = env, text = true }):wait(ms)
+    return r.code, r.stdout or "", r.stderr
+  end
+  -- the agent's own value, when its env sets one; else the binary sees this Neovim's, as the agent would
+  local env = {}
+  if type(current) == "string" and current ~= "" then env.OPENCODE_CONFIG_CONTENT = current end
+  local ok, code, out, err = pcall(run, { bin, "crew", "plugin", "--opencode", "--print-env" }, env, M.PLUGIN_ENV_WAIT_MS)
+  if not ok then return nil, tostring(code) end
+  local line = vim.trim(out or "")
+  local value = line:match("^OPENCODE_CONFIG_CONTENT=(.+)$")
+  if code ~= 0 or not value or line:find("\n", 1, true) then
+    local why = vim.trim(err or "")
+    return nil, ("`autodoc crew plugin --opencode --print-env` answered %s%s"):format(
+      code ~= 0 and ("exit " .. tostring(code)) or ("%q"):format(line), why ~= "" and (": " .. why) or "")
+  end
+  return { OPENCODE_CONFIG_CONTENT = value }, nil
+end
+
 ---autodoc_binary is the autodoc binary AutoDoc's plugin runs (its opts.bin, else its own build,
 ---else PATH), or nil.
 ---@return string|nil
