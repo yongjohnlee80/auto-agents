@@ -21,9 +21,10 @@
 ---   [9] a lost registration nobody starts is replayed and ended at the next renewal
 ---  [10] a claim at another epoch drops the old sessions' contexts; release removes every context
 ---  [11] a context that can't be written ends its session
----  [12] Claude starts with --settings carrying the SessionStart endpoint hook, the five hooks that
----       report its permission prompts (each always exiting 0) and
----       crossSessionInbound accept, nothing else; the other kinds with nothing added
+---  [12] Claude starts with the --settings AutoDoc prints for its own program (crew claude-settings,
+---       in its folder), and registers whether they report its prompts (9th param, protocol 41+;
+---       dropped when a daemon refuses it); an autodoc that can't say gives the floor
+---       (SessionStart, crossSessionInbound, prompts false); the other kinds nothing
 ---  [13] a restart: the codename's previous session, still counted live, is ended before the new
 ---       registration, and its exit is waited for within the spawn's wait (Juliet #4 r0 F1)
 ---  [14] an answer after release, or after a claim at another epoch, counts nothing and owes no
@@ -65,11 +66,12 @@ local crew = require("auto-agents.crew")
 local function new_world(opts)
   opts = opts or {}
   local w = { calls = {}, notices = {}, timers = {}, subs = {}, answer = {}, pending = {}, deferred = {},
-    workspaces = opts.workspaces or { kb = { name = "kb", root = "/proj", id = 7 } }, listed = opts.listed ~= false }
+    workspaces = opts.workspaces or { kb = { name = "kb", root = "/proj", id = 7 } }, listed = opts.listed ~= false,
+    protocol = opts.protocol or 41 }
   local function new_client(addr)
     return {
       can = function() return true end,
-      hello = function() return { store_id = w.store, version = w.version } end,
+      hello = function() return { store_id = w.store, version = w.version, server_protocol = w.protocol } end,
       addr = function() return addr end,
     }
   end
@@ -464,30 +466,88 @@ do
   vim.fn.delete(cwd, "rf")
 end
 
--- ── [12] Claude's wake acceptance ───────────────────────────────────────────
+-- ── [12] Claude's wake acceptance, from AutoDoc's one source ───────────────
 
 do
-  local argv = crew.wake_argv("claude", "/opt/auto doc/bin/autodoc")
-  local settings = argv[2] and vim.json.decode(argv[2]) or {}
-  local hook = (((settings.hooks or {}).SessionStart or {})[1] or {}).hooks or {}
-  ok("[12] Claude starts with --settings carrying the SessionStart endpoint hook",
-    argv[1] == "--settings" and #argv == 2 and #hook == 1 and hook[1].type == "command"
-      and hook[1].command == "'/opt/auto doc/bin/autodoc' crew endpoint --claude >/dev/null", vim.inspect(argv))
-  ok("[12] and crossSessionInbound accept, and nothing else: no permissions or rules",
-    settings.crossSessionInbound == "accept" and vim.tbl_count(settings) == 2, vim.inspect(settings))
-  local want = "'/opt/auto doc/bin/autodoc' crew attention --claude-hook >/dev/null || true"
-  local reported = 0
-  for _, event in ipairs({ "PermissionRequest", "Notification", "PostToolUse", "UserPromptSubmit", "Stop" }) do
-    local h = ((((settings.hooks or {})[event] or {})[1] or {}).hooks or {})
-    if #h == 1 and h[1].type == "command" and h[1].command == want and #settings.hooks[event] == 1 then
-      reported = reported + 1
-    end
+  local real_run = crew.run
+  local runs = {}
+  local printed = { hooks = { SessionStart = { { hooks = { { type = "command", command = "x crew endpoint --claude >/dev/null" } } } },
+    PermissionRequest = { { hooks = { { type = "command", command = "x crew attention --claude-hook >/dev/null" } } } } },
+    crossSessionInbound = "accept" }
+  local answer = { code = 0, prompts = "true" }
+  crew.run = function(argv, cwd)
+    runs[#runs + 1] = { argv = argv, cwd = cwd }
+    if argv[#argv] == "--prompts" then return answer.code, answer.prompts .. "\n" end
+    return answer.code, vim.json.encode(printed) .. "\n"
   end
-  ok("[12] and the five hooks that report its permission prompts, each one command that always exits 0",
-    reported == 5 and vim.tbl_count(settings.hooks) == 6, vim.inspect(settings.hooks))
-  ok("[12] the other kinds start with nothing added",
-    #crew.wake_argv("codex", "/bin/autodoc") == 0 and #crew.wake_argv("agy", "/bin/autodoc") == 0)
-  ok("[12] no autodoc binary: nothing added", #crew.wake_argv("claude", nil) == 0)
+  local argv, prompts = crew.wake_argv("claude", "/opt/auto doc/bin/autodoc", "claude-wrapper", "/work")
+  local settings = argv[2] and vim.json.decode(argv[2]) or {}
+  ok("[12] Claude starts with the --settings AutoDoc printed, unchanged",
+    argv[1] == "--settings" and #argv == 2 and vim.deep_equal(settings, printed), vim.inspect(argv))
+  ok("[12] asked of the agent's own program, in its folder, with the hooks run by this autodoc",
+    runs[1] and vim.deep_equal(runs[1].argv, { "/opt/auto doc/bin/autodoc", "crew", "claude-settings", "--claude",
+      "claude-wrapper", "--autodoc", "'/opt/auto doc/bin/autodoc'" }) and runs[1].cwd == "/work", vim.inspect(runs))
+  ok("[12] and whether they report its prompts, from AutoDoc too", prompts == true and #runs == 2
+    and runs[2].argv[#runs[2].argv] == "--prompts", vim.inspect(runs))
+
+  answer.prompts = "false"
+  local _, p2 = crew.wake_argv("claude", "/bin/autodoc", nil, "/work")
+  ok("[12] a Claude Code whose prompts can't be reported: prompts false", p2 == false)
+
+  answer.code = 2 -- an autodoc without crew claude-settings
+  local argv3, p3 = crew.wake_argv("claude", "/bin/autodoc", "claude", "/work")
+  local s3 = argv3[2] and vim.json.decode(argv3[2]) or {}
+  local hook = (((s3.hooks or {}).SessionStart or {})[1] or {}).hooks or {}
+  ok("[12] an autodoc that can't say: the floor, SessionStart and crossSessionInbound alone, prompts false",
+    p3 == false and vim.tbl_count(s3.hooks or {}) == 1 and #hook == 1
+      and hook[1].command == "'/bin/autodoc' crew endpoint --claude >/dev/null" and s3.crossSessionInbound == "accept",
+    vim.inspect(s3))
+  crew.run = real_run
+  local a4, p4 = crew.wake_argv("codex", "/bin/autodoc")
+  local a5 = crew.wake_argv("agy", "/bin/autodoc")
+  local a6, p6 = crew.wake_argv("claude", nil)
+  ok("[12] the other kinds, and no autodoc binary: nothing added", #a4 == 0 and #a5 == 0 and #a6 == 0 and not p4 and not p6)
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local h = crew.begin({ codename = "gold", kind = "claude", cwd = cwd, prompts = true })
+  local p = (w.of("crew.register")[1] or {}).params or {}
+  ok("[12] prompts reported: crew.register says so (its 9th param)", h ~= nil and p[9] == true, vim.inspect(p))
+  crew.finish(h, "exit")
+  local h2 = crew.begin({ codename = "tifa", kind = "claude", cwd = cwd })
+  local p2 = (w.of("crew.register")[2] or {}).params or {}
+  ok("[12] not reported: no 9th param, as an older host registers", h2 ~= nil and p2[9] == nil and #p2 == 8, vim.inspect(p2))
+  crew.finish(h2, "exit")
+  vim.fn.delete(cwd, "rf")
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } }, protocol = 40 })
+  local h = crew.begin({ codename = "gold", kind = "claude", cwd = cwd, prompts = true })
+  local p = (w.of("crew.register")[1] or {}).params or {}
+  ok("[12] a daemon before protocol 41 is never sent the flag", h ~= nil and #p == 8, vim.inspect(p))
+  crew.finish(h, "exit")
+  vim.fn.delete(cwd, "rf")
+end
+
+do
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local n = 0
+  w.answer["crew.register"] = function(params)
+    if params[9] ~= nil then return nil, { code = crew.CODE_INVALID_PARAMS, message = "unknown param" } end
+    n = n + 1
+    return { session = "s" .. n, profile = "p1" }
+  end
+  local h = crew.begin({ codename = "gold", kind = "claude", cwd = cwd, prompts = true })
+  local regs = w.of("crew.register")
+  ok("[12] a daemon that refuses the flag: registered again without it, its prompts unreported",
+    h ~= nil and #regs == 2 and regs[1].params[9] == true and #regs[2].params == 8, vim.inspect(regs))
+  crew.finish(h, "exit")
+  vim.fn.delete(cwd, "rf")
 end
 
 -- ── [13] a restart (Juliet #4 r0 F1) ────────────────────────────────────────

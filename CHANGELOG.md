@@ -2,6 +2,15 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## Unreleased
+
+- **A Claude agent's crew settings come from AutoDoc** (`autodoc crew claude-settings`, run for the
+  agent's own program in its folder): only the hook events that Claude Code knows are written,
+  since an event it doesn't know stops its start at a Settings Warning that waits for a key. The
+  registration says whether the prompt hooks are there (`crew.register`'s `prompts`, protocol 41),
+  so a Claude whose prompts can't be reported is never taken for reported. An autodoc without the
+  command gives the floor: the SessionStart hook and `crossSessionInbound`, no prompt hooks.
+
 ## [v0.3.10] — 2026-10-31 — the editor socket, the crew rules in the instructions, Claude's prompts reported
 
 ADR 1793271500, phase 5 (Q5-1 (a)) and the crew follow-ups. **The crew guide needs an AutoDoc

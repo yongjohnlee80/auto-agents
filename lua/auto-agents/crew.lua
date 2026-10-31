@@ -115,40 +115,61 @@ function M.endpoint_command(bin)
   return vim.fn.shellescape(bin) .. " crew endpoint --claude >/dev/null"
 end
 
----CLAUDE_PROMPT_EVENTS are the hooks that report a crew Claude agent's permission prompts, as
----AutoDoc's own window writes them: PermissionRequest and a permission Notification raise the
----session's permission attention, and PostToolUse, UserPromptSubmit, Stop or another Notification
----clear it (`autodoc crew attention --claude-hook`). The prompt then shows in the user's crew
----inbox, and a sender that presses Enter after typing to the agent can tell it isn't waiting on one.
-M.CLAUDE_PROMPT_EVENTS = { "PermissionRequest", "Notification", "PostToolUse", "UserPromptSubmit", "Stop" }
+---CLAUDE_SETTINGS_WAIT_MS bounds each `autodoc crew claude-settings` run (a stat when AutoDoc has
+---read that Claude Code before; a scan of its binary once per new build).
+M.CLAUDE_SETTINGS_WAIT_MS = 5000
 
----prompt_command is the hook that reports a permission prompt, run by the autodoc binary at bin. It
----prints nothing: a PermissionRequest hook's output could decide the prompt, and a UserPromptSubmit
----hook's joins the agent's context. It always exits 0: an autodoc older than the hook rejects its
----flag with exit 2, which Claude Code would take as a PermissionRequest's denial. A failure still
----says why, on stderr.
+---run is how a command runs here (vim.system, waited within its timeout): code and stdout. A spec
+---replaces it.
+---@param argv string[]
+---@param cwd string|nil
+---@return integer code
+---@return string stdout
+function M.run(argv, cwd)
+  local ok, res = pcall(function()
+    return vim.system(argv, { text = true, cwd = cwd, timeout = M.CLAUDE_SETTINGS_WAIT_MS }):wait()
+  end)
+  if not ok or not res then return -1, "" end
+  return res.code or -1, res.stdout or ""
+end
+
+---claude_floor is what a Claude agent starts with when AutoDoc can't say what its Claude Code knows
+---(an autodoc older than `crew claude-settings`, or one that can't read the binary): the SessionStart
+---hook that registers its endpoint and crossSessionInbound, which every crew Claude knows, and no
+---prompt hooks, so its prompts are never taken for reported.
 ---@param bin string
----@return string
-function M.prompt_command(bin)
-  return vim.fn.shellescape(bin) .. " crew attention --claude-hook >/dev/null || true"
+---@return table settings
+local function claude_floor(bin)
+  return { hooks = { SessionStart = { { hooks = { { type = "command", command = M.endpoint_command(bin) } } } } },
+    crossSessionInbound = "accept" }
 end
 
 ---wake_argv is what a crew session's CLI of kind starts with, so the crew's fixed notice can start a
----turn (ADR 1793271500 §4.9): for Claude Code, `--settings` carrying the SessionStart hook that
----registers its endpoint, crossSessionInbound "accept", and the hooks that report its permission
----prompts (they report; they decide nothing); nothing for the others yet. Given on the command
----line, so the project's own settings are never edited; never approval policies, permission modes,
----or allow or deny rules: a turn a wake starts runs under the agent's own policy.
+---turn (ADR 1793271500 §4.9), and whether its permission prompts are reported. For Claude Code the
+---settings come from AutoDoc, the one source an AutoDoc window writes its own agents' from (`autodoc
+---crew claude-settings` for program, run in cwd): the SessionStart hook, crossSessionInbound, and the
+---prompt-reporting hooks, only the events that Claude Code knows, since an event it doesn't know
+---stops its start at a Settings Warning. prompts is whether those hooks are there, for crew.register.
+---Nothing for the other kinds yet. Given on the command line, so the project's own settings are
+---never edited; never approval policies, permission modes, or allow or deny rules.
 ---@param kind string crew's kind
 ---@param bin string|nil the autodoc binary
----@return string[]
-function M.wake_argv(kind, bin)
-  if kind ~= "claude" or type(bin) ~= "string" or bin == "" then return {} end
-  local hooks = { SessionStart = { { hooks = { { type = "command", command = M.endpoint_command(bin) } } } } }
-  for _, event in ipairs(M.CLAUDE_PROMPT_EVENTS) do
-    hooks[event] = { { hooks = { { type = "command", command = M.prompt_command(bin) } } } }
+---@param program string|nil the agent's command (its argv[1]), "claude" when nil
+---@param cwd string|nil where the agent starts, whose PATH finds program
+---@return string[] argv
+---@return boolean prompts
+function M.wake_argv(kind, bin, program, cwd)
+  if kind ~= "claude" or type(bin) ~= "string" or bin == "" then return {}, false end
+  local claude = (type(program) == "string" and program ~= "") and program or "claude"
+  local base = { bin, "crew", "claude-settings", "--claude", claude, "--autodoc", vim.fn.shellescape(bin) }
+  local code, out = M.run(base, cwd)
+  local ok, settings = pcall(vim.json.decode, out)
+  if code ~= 0 or not ok or type(settings) ~= "table" or type(settings.hooks) ~= "table" then
+    return { "--settings", vim.json.encode(claude_floor(bin)) }, false
   end
-  return { "--settings", vim.json.encode({ hooks = hooks, crossSessionInbound = "accept" }) }
+  local pcode, pout = M.run(vim.list_extend(vim.list_slice(base), { "--prompts" }), cwd)
+  local prompts = pcode == 0 and vim.trim(pout) == "true"
+  return { "--settings", vim.json.encode(settings) }, prompts
 end
 
 ---autodoc_binary is the autodoc binary AutoDoc's plugin runs (its opts.bin, else its own build,
@@ -329,10 +350,17 @@ end
 -- there is none. r stays pending only when the answer was lost.
 local function send_register(st, r, then_)
   r.inflight = true
-  st.session.call("crew.register", { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret },
+  local params = { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret }
+  if r.prompts then params[9] = true end -- only when true: an unflagged session is not reported
+  st.session.call("crew.register", params,
     function(res, err)
       r.inflight = false
       if _s ~= st then return end
+      if err and r.prompts and code(err) == M.CODE_INVALID_PARAMS then
+        -- a daemon of protocol 41 from before the flag: registered without it, prompts unreported
+        r.prompts = false
+        return send_register(st, r, then_)
+      end
       if not live(st) or st.scope ~= r.scope or st.epoch ~= r.epoch then
         -- released, or claimed again at another epoch: either ended every session of r's epoch, so
         -- whatever this answer made is over; nothing is counted, and no exit is owed for it
@@ -694,7 +722,7 @@ end
 ---with why when the registration was tried and failed. A registration answered after the wait is
 ---ended, since nobody starts it; one whose answer was lost is replayed as it was by the codename's
 ---next start, or ended by the next renewal.
----@param opts { codename: string, kind: string|nil, cwd: string }
+---@param opts { codename: string, kind: string|nil, cwd: string, prompts: boolean|nil }
 ---@return table|nil handle the session, its context's path and the env to add
 ---@return string|nil why
 function M.begin(opts)
@@ -745,14 +773,16 @@ function M.begin(opts)
     st.pending[codename] = nil -- the claim that changed the epoch ended its session; another store has none
     r = nil
   end
-  if r and (r.kind ~= kind or r.workspace ~= ws) then
+  -- prompts is told only to a daemon that takes it (protocol 41)
+  local prompts = opts.prompts == true and (tonumber(h.server_protocol) or 0) >= 41
+  if r and (r.kind ~= kind or r.workspace ~= ws or (r.prompts or false) ~= prompts) then
     resolve(st, r) -- its profile changed since: the session it left is ended first
     return nil, "its last registration is still being ended"
   end
   if not r then
     _instances = _instances + 1
     r = { codename = codename, kind = kind, workspace = ws, instance = ("nvim-%d-%d"):format(vim.uv.os_getpid(), _instances),
-      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder }
+      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder, prompts = prompts }
     st.pending[codename] = r
   end
   r.folder = folder

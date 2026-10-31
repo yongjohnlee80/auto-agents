@@ -1062,8 +1062,22 @@ local function ensure_main_slot_terminal(slot, winid)
   local crew_session
   if spec.configured ~= false and spec.name then
     M.state.slot_spawning[slot] = true
+    -- a wake starts a turn only with these (§4.9), AutoDoc's settings for the agent's own Claude
+    -- Code, read before the registration, which says whether they report its prompts; a command that
+    -- brings its own --settings keeps it, and its session receives when it asks
+    local crew = require("auto-agents.crew")
+    local extra, prompts = {}, false
+    if type(spec.cmd) == "table" then
+      local own = vim.iter(spec.cmd):any(function(a) return a == "--settings" or vim.startswith(a, "--settings=") end)
+      if not own then
+        local okw, argv, p = pcall(crew.wake_argv, crew.crew_kind(spec.kind), crew.autodoc_binary(), spec.cmd[1], cwd)
+        if okw then extra, prompts = argv, p end
+      elseif crew.crew_kind(spec.kind) == "claude" then
+        logger.warn("crew", spec.name .. "'s command sets --settings: its crew wakes need the SessionStart hook there")
+      end
+    end
     local ok, handle, why = pcall(function()
-      return require("auto-agents.crew").begin({ codename = spec.name, kind = spec.kind, cwd = cwd })
+      return crew.begin({ codename = spec.name, kind = spec.kind, cwd = cwd, prompts = prompts })
     end)
     M.state.slot_spawning[slot] = nil
     if not ok then
@@ -1072,18 +1086,9 @@ local function ensure_main_slot_terminal(slot, winid)
       crew_session = handle
       env = env or {}
       for k, v in pairs(handle.env) do env[k] = v end
-      -- a wake starts a turn only with these (§4.9); a command that brings its own --settings
-      -- keeps it, and its session receives when it asks
-      local crew = require("auto-agents.crew")
-      local extra = crew.wake_argv(crew.crew_kind(spec.kind), crew.autodoc_binary())
-      if #extra > 0 and type(spec.cmd) == "table" then
-        local own = vim.iter(spec.cmd):any(function(a) return a == "--settings" or vim.startswith(a, "--settings=") end)
-        if own then
-          logger.warn("crew", spec.name .. "'s command sets --settings: its crew wakes need the SessionStart hook there")
-        else
-          spec.cmd = vim.list_slice(spec.cmd)
-          vim.list_extend(spec.cmd, extra)
-        end
+      if #extra > 0 then
+        spec.cmd = vim.list_slice(spec.cmd)
+        vim.list_extend(spec.cmd, extra)
       end
     elseif why then
       vim.notify(("%s starts without a crew session: %s"):format(spec.name, why), vim.log.levels.WARN,
