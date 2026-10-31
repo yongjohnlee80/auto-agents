@@ -356,16 +356,16 @@ local function send_register(st, r, then_)
     function(res, err)
       r.inflight = false
       if _s ~= st then return end
-      if err and r.prompts and code(err) == M.CODE_INVALID_PARAMS then
-        -- a daemon of protocol 41 from before the flag: registered without it, prompts unreported
-        r.prompts = false
-        return send_register(st, r, then_)
-      end
       if not live(st) or st.scope ~= r.scope or st.epoch ~= r.epoch then
         -- released, or claimed again at another epoch: either ended every session of r's epoch, so
         -- whatever this answer made is over; nothing is counted, and no exit is owed for it
         forget(st, r)
         return then_(nil, { message = "the crew scope changed while the registration was answered" })
+      end
+      if err and r.prompts and code(err) == M.CODE_INVALID_PARAMS then
+        -- a daemon of protocol 41 from before the flag: registered without it, prompts unreported
+        r.prompts = false
+        return send_register(st, r, then_)
       end
       local id = not err and type(res) == "table" and res.session or nil
       if not id then

@@ -1069,7 +1069,7 @@ local function ensure_main_slot_terminal(slot, winid)
     local extra, prompts = {}, false
     if type(spec.cmd) == "table" then
       local own = vim.iter(spec.cmd):any(function(a) return a == "--settings" or vim.startswith(a, "--settings=") end)
-      if not own then
+      if not own and crew.held() then -- no scope, no session: nothing to ask AutoDoc for
         local okw, argv, p = pcall(crew.wake_argv, crew.crew_kind(spec.kind), crew.autodoc_binary(), spec.cmd[1], cwd)
         if okw then extra, prompts = argv, p end
       elseif crew.crew_kind(spec.kind) == "claude" then
