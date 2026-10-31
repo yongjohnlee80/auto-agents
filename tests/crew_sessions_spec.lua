@@ -24,6 +24,9 @@
 ---  [12] Claude starts with --settings carrying the SessionStart endpoint hook, the five hooks that
 ---       report its permission prompts (each always exiting 0) and
 ---       crossSessionInbound accept, nothing else; the other kinds with nothing added
+---  [12b] OpenCode starts with the OPENCODE_CONFIG_CONTENT that loads AutoDoc's plugin, as the
+---       binary prints it, merged by the binary with the agent's own value; a binary that fails,
+---       answers no such line, or is missing gives none, with why; the other kinds get nothing
 ---  [13] a restart: the codename's previous session, still counted live, is ended before the new
 ---       registration, and its exit is waited for within the spawn's wait (Juliet #4 r0 F1)
 ---  [14] an answer after release, or after a claim at another epoch, counts nothing and owes no
@@ -488,6 +491,39 @@ do
   ok("[12] the other kinds start with nothing added",
     #crew.wake_argv("codex", "/bin/autodoc") == 0 and #crew.wake_argv("agy", "/bin/autodoc") == 0)
   ok("[12] no autodoc binary: nothing added", #crew.wake_argv("claude", nil) == 0)
+end
+
+do
+  local calls = {}
+  local function runner(code, out, err)
+    return function(argv, env, ms)
+      calls[#calls + 1] = { argv = argv, env = env, ms = ms }
+      return code, out, err
+    end
+  end
+  local env, why = crew.wake_env("opencode", "/opt/auto doc/bin/autodoc", nil,
+    runner(0, 'OPENCODE_CONFIG_CONTENT={"plugin":["/d/autodoc-crew.js"]}\n'))
+  ok("[12b] OpenCode gets the OPENCODE_CONFIG_CONTENT the binary prints, asked once with its argv",
+    why == nil and env and env.OPENCODE_CONFIG_CONTENT == '{"plugin":["/d/autodoc-crew.js"]}' and vim.tbl_count(env) == 1
+      and #calls == 1 and vim.deep_equal(calls[1].argv, { "/opt/auto doc/bin/autodoc", "crew", "plugin", "--opencode", "--print-env" })
+      and vim.tbl_count(calls[1].env) == 0 and calls[1].ms == crew.PLUGIN_ENV_WAIT_MS, vim.inspect({ env, why, calls }))
+  calls = {}
+  crew.wake_env("opencode", "/bin/autodoc", '{"model":"x/y"}', runner(0, 'OPENCODE_CONFIG_CONTENT={"model":"x/y","plugin":["p"]}'))
+  ok("[12b] the agent's own OPENCODE_CONFIG_CONTENT goes to the binary, which merges it",
+    #calls == 1 and calls[1].env.OPENCODE_CONFIG_CONTENT == '{"model":"x/y"}', vim.inspect(calls))
+  local e1, w1 = crew.wake_env("opencode", "/bin/autodoc", nil, runner(2, "", "unknown command crew plugin"))
+  local e2, w2 = crew.wake_env("opencode", "/bin/autodoc", nil, runner(0, "/d/autodoc-crew.js\n"))
+  local e3, w3 = crew.wake_env("opencode", "/bin/autodoc", nil, runner(0, "OPENCODE_CONFIG_CONTENT={}\nmore\n"))
+  local e4, w4 = crew.wake_env("opencode", "/bin/autodoc", nil, function() error("spawn failed") end)
+  local e5, w5 = crew.wake_env("opencode", nil, nil, runner(0, "OPENCODE_CONFIG_CONTENT={}"))
+  ok("[12b] a failing binary, another answer, two lines, a throw or no binary: none, with why",
+    e1 == nil and w1:find("exit 2", 1, true) and w1:find("unknown command", 1, true)
+      and e2 == nil and w2 ~= nil and e3 == nil and w3 ~= nil and e4 == nil and w4:find("spawn failed", 1, true)
+      and e5 == nil and w5 == "no autodoc binary", vim.inspect({ w1, w2, w3, w4, w5 }))
+  calls = {}
+  local ec = crew.wake_env("claude", "/bin/autodoc", nil, runner(0, "OPENCODE_CONFIG_CONTENT={}"))
+  local ex = crew.wake_env("codex", "/bin/autodoc", nil, runner(0, "OPENCODE_CONFIG_CONTENT={}"))
+  ok("[12b] the other kinds get nothing, and nothing is run", vim.tbl_count(ec) == 0 and vim.tbl_count(ex) == 0 and #calls == 0)
 end
 
 -- ── [13] a restart (Juliet #4 r0 F1) ────────────────────────────────────────

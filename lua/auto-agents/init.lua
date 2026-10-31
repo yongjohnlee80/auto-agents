@@ -1085,6 +1085,15 @@ local function ensure_main_slot_terminal(slot, winid)
           vim.list_extend(spec.cmd, extra)
         end
       end
+      -- and OpenCode's plugin, which registers its endpoint: without it the session keeps its mail
+      -- but is never woken, so the agent starts anyway (nothing is lost) and the user is told
+      local wenv, werr = crew.wake_env(crew.crew_kind(spec.kind), crew.autodoc_binary(), env.OPENCODE_CONFIG_CONTENT)
+      if wenv then
+        for k, v in pairs(wenv) do env[k] = v end
+      else
+        vim.notify(("%s starts without AutoDoc's OpenCode plugin, so crew mail can't wake it: %s"):format(spec.name, werr),
+          vim.log.levels.WARN, { title = "auto-agents" })
+      end
     elseif why then
       vim.notify(("%s starts without a crew session: %s"):format(spec.name, why), vim.log.levels.WARN,
         { title = "auto-agents" })
