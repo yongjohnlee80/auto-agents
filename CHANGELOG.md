@@ -2,9 +2,23 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## Unreleased
+## [v0.3.10] — 2026-10-31 — the editor socket, the crew rules in the instructions, Claude's prompts reported
 
-- **Claude's permission prompts are reported** to the crew: a crew Claude agent also starts with the
+ADR 1793271500, phase 5 (Q5-1 (a)) and the crew follow-ups. **The editor verbs and the crew guide
+need an AutoDoc daemon that serves them.** With an older daemon, or none, everything runs as
+before, quietly.
+
+- **The editor socket** (#7): Neovim serves AutoDoc's editor protocol to the agents it starts, as
+  msgpack-RPC on `$XDG_RUNTIME_DIR/auto-agents/editor-<pid>.sock` (a 0700 folder, a 0600 socket).
+  - Each spawn gets `AUTODOC_EDITOR`, `AUTODOC_AGENT` and an in-memory 32-byte `AUTODOC_EDITOR_TOKEN`.
+  - An agent calls a verb with `autodoc --editor <verb> '[params]'`, within its `editor_grants`.
+  - A token is forgotten when its spawn ends, and is minted only once the spawn is the slot's.
+- **The crew rules in the instructions** (#8): when `crew.cutover` names anyone, the instruction
+  block carries the daemon's crew guide for the spawn's kind (`crew.guide`, cached per store,
+  daemon version and kind). It says what still arrives in `inbox/` and that every send goes
+  through `outbox/`. A listed agent with no crew session is told its plain messages wait in the
+  daemon. While the editor socket serves, the block names its verbs.
+- **Claude's permission prompts are reported** (#9) to the crew: a crew Claude agent also starts with the
   five hooks AutoDoc's own window writes (`PermissionRequest`, `Notification`, `PostToolUse`,
   `UserPromptSubmit`, `Stop`), each running `autodoc crew attention --claude-hook`. A prompt raises
   the session's permission attention in the human inbox, and the prompt behind it clears it. The
