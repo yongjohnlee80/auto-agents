@@ -3519,6 +3519,37 @@ do
   vim.fn.systemlist({ "git", "-C", repo, "worktree", "add", "--quiet", "--detach", worktree })
   ok("32: fixture worktree succeeds", vim.v.shell_error == 0)
   ok("32: a worktree gitfile resolves through Git", cwd.git_root(worktree) == worktree)
+
+  -- A stub is never taken in a folder that can't be one project: a world-writable sticky folder
+  -- (a stray /tmp/.git made every scratch folder under /tmp one project), $HOME, or above it.
+  local shared = fixture .. "/shared"
+  vim.fn.mkdir(shared .. "/.git", "p")
+  vim.fn.mkdir(shared .. "/scratch/nested", "p")
+  vim.uv.fs_chmod(shared, tonumber("1777", 8))
+  ok("32: a world-writable sticky folder is shared", cwd.shared_folder(shared))
+  ok("32: a stub in a world-writable sticky folder is no project root",
+    cwd.git_root(shared .. "/scratch/nested") == nil, cwd.git_root(shared .. "/scratch/nested"))
+  vim.uv.fs_chmod(shared, tonumber("0777", 8))
+  ok("32: world-writable without the sticky bit is not shared", not cwd.shared_folder(shared))
+  vim.uv.fs_chmod(shared, tonumber("0700", 8))
+  ok("32: the same stub in a private folder is still the project root (v0.3.3)",
+    cwd.git_root(shared .. "/scratch/nested") == shared, cwd.git_root(shared .. "/scratch/nested"))
+  local home = fixture .. "/home/me"
+  vim.fn.mkdir(home .. "/.git", "p")
+  vim.fn.mkdir(home .. "/proj", "p")
+  local saved_home = vim.env.HOME
+  vim.env.HOME = home
+  ok("32: $HOME and the folders above it are shared, a folder in it is not",
+    cwd.shared_folder(home) and cwd.shared_folder(fixture .. "/home") and cwd.shared_folder("/")
+      and not cwd.shared_folder(home .. "/proj"))
+  ok("32: a stub at $HOME is no project root", cwd.git_root(home .. "/proj") == nil, cwd.git_root(home .. "/proj"))
+  vim.fn.delete(home .. "/.git", "rf")
+  vim.fn.mkdir(fixture .. "/home/.git", "p")
+  ok("32: a stub above $HOME is no project root", cwd.git_root(home .. "/proj") == nil, cwd.git_root(home .. "/proj"))
+  vim.fn.mkdir(home .. "/proj/.git", "p")
+  ok("32: a stub in a project under $HOME is still its root", cwd.git_root(home .. "/proj") == home .. "/proj",
+    cwd.git_root(home .. "/proj"))
+  vim.env.HOME = saved_home
   vim.api.nvim_set_current_dir(saved_cwd)
   vim.fn.delete(fixture, "rf")
 end
