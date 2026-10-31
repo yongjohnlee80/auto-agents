@@ -2,6 +2,14 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.11] — 2026-10-31 — no error flood from a refused IDE connection
+
+- **A refused IDE connection no longer raises an error** (#13). A client without the Claude Code
+  IDE auth header is refused as before. When it reset the connection, the server's read-error path
+  closed the handle first, and the refusal's own scheduled close then raised `handle … is already
+  closing`. A client retrying every few seconds filled the notifications. A handle is now closed
+  only if it isn't closing, and no close frame is written to one a reset already closed.
+
 ## [v0.3.10] — 2026-10-31 — the editor socket, the crew rules in the instructions, Claude's prompts reported
 
 ADR 1793271500, phase 5 (Q5-1 (a)) and the crew follow-ups. **The crew guide needs an AutoDoc
