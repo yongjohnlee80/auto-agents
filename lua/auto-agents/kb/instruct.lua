@@ -264,7 +264,9 @@ local function render_block(spec, kb, crew)
   end
 
   crew = crew or {}
-  local cut = crew.guide and cutover(aa_state) or nil
+  -- the cutover's rules whenever someone is cut over; the daemon's own guide follows when it was
+  -- fetched (a slow or absent daemon leaves only the guide out, never the rules: Zen #8 F4)
+  local cut = cutover(aa_state)
   if cut then
     local who
     if cut == "*" then
@@ -280,25 +282,37 @@ local function render_block(spec, kb, crew)
       "",
       "Mail to " .. who .. " goes through the AutoDoc daemon (`crew.cutover`).",
       "If that includes you and `$AUTODOC_CREW_CONTEXT` is set (your crew",
-      "session), receive, answer and send mail with the `autodoc` CLI, as",
-      "below, and not through the mailbox's `inbox/` and `outbox/`.",
+      "session):",
+      "",
+      "- **Plain messages to you arrive through the daemon.** When AutoDoc's",
+      "  notice wakes you, or a turn starts with unread mail, run",
+      "  `autodoc mail receive` until it says there's no more, and",
+      "  `autodoc mail ack <id>` each one you've handled.",
+      "- **Everything else still arrives in the mailbox's `inbox/`:** requests,",
+      "  responses, commands, and any message Neovim couldn't forward. Keep",
+      "  reading it as the mailbox section below says.",
+      "- **Send through `outbox/`, as before.** Neovim forwards mail for a",
+      "  cut-over recipient to the daemon; `autodoc mail send` to anyone else",
+      "  is never read. To answer a message that came through the daemon,",
+      "  write to the agent id in its subject's `[from agent:…]`: it reached",
+      "  you from Neovim's gateway, which takes no replies.",
+      "- **If `autodoc crew whoami` fails, or says the context doesn't match,**",
+      "  tell the user, and use the mailbox alone.",
+      "",
     })
-    if cut ~= "*" then
+    if crew.guide then
       vim.list_extend(lines, {
-        "Mail to anyone else still goes through `outbox/`; Neovim forwards",
-        "mail for a listed recipient to the daemon.",
+        "While the file mailbox is in use, these rules replace the guide's",
+        "sending and replying steps (`mail send`, `mail reply`) and its",
+        "\"don't send or receive mail\" line; its identity and receiving steps",
+        "apply as written. The daemon's guide for your CLI:",
+        "",
       })
+      for line in (crew.guide:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
+        lines[#lines + 1] = line
+      end
+      lines[#lines + 1] = ""
     end
-    lines[#lines + 1] = ""
-    for line in (crew.guide:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
-      lines[#lines + 1] = line
-    end
-    vim.list_extend(lines, {
-      "",
-      "Without `$AUTODOC_CREW_CONTEXT`, or when `autodoc crew whoami` fails,",
-      "use the mailbox below for mail too, and tell the user.",
-      "",
-    })
   end
 
   if crew.editor then
