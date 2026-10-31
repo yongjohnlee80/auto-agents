@@ -220,7 +220,7 @@ function M.close_client(client, code, reason)
   code = code or 1000
   reason = reason or ""
 
-  if client.handshake_complete then
+  if client.handshake_complete and not client.tcp_handle:is_closing() then
     local close_frame = frame.create_close_frame(code, reason)
     client.tcp_handle:write(close_frame, function()
       client.state = "closed"
