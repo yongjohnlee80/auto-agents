@@ -35,6 +35,10 @@ M.TOPIC_CLAIMED = "auto-agents.crew:claimed"
 -- How long a spawn waits for its session's registration before starting the agent without one.
 M.REGISTER_WAIT_MS = 3000
 
+-- The daemon protocol from which crew.register takes prompts (whether the host's setup reports the
+-- session's permission prompts) as its 9th parameter.
+M.PROTOCOL_PROMPTS = 41
+
 -- The refusals that mean a registration or an exit is settled, never to be sent again: crew's own
 -- (core/crew/errors.go), and a daemon that can't take the call at all.
 M.CODE_CODENAME_BUSY = -32092
@@ -205,6 +209,81 @@ function M.wake_env(kind, bin, current, run)
   _plugin_env[key] = { OPENCODE_CONFIG_CONTENT = value }
   return { OPENCODE_CONFIG_CONTENT = value }, nil
 end
+
+-- setup's answers, kept for the session as wake_env's are; never a failure
+local _setups = {}
+
+-- How long a spawn waits for its setup (`autodoc crew setup`) before starting without it.
+M.SETUP_WAIT_MS = 5000
+
+---setup is a crew agent's setup from AutoDoc (ADR 1793271500 r15 P2): what `bin crew setup --kind
+---kind --host nvim --program program --autodoc bin` answers, as a table { argv, env, files, prompts,
+---notices, after }: the arguments to append to its command, AutoDoc's env to merge after the
+---agent's own, the user-level files its kind needs, whether the setup reports its permission
+---prompts (crew.register's prompts), what to tell the user, and the steps to run once it has
+---started. env is the agent's own environment (the profile's included): it is the command's
+---process environment, never its arguments, which any user can read. An answer is kept for the
+---session by binary (path, size, mtime), kind, program and the env that changes it (PATH,
+---OPENCODE_CONFIG_CONTENT); a failure is not. nil and why when it can't be had; older is true for
+---an autodoc that has no crew setup (the host then builds the setup as before: wake_argv, wake_env).
+---@param kind string crew's kind
+---@param bin string|nil the autodoc binary
+---@param program string|nil the CLI the agent's command runs
+---@param env table<string, string>|nil the agent's own environment, over Neovim's
+---@param run fun(argv: string[], env: table, ms: integer): integer, string, string|nil for tests
+---@return table|nil setup, string|nil why, boolean|nil older
+function M.setup(kind, bin, program, env, run)
+  if type(bin) ~= "string" or bin == "" then return nil, "no autodoc binary", false end
+  env = env or {}
+  program = (type(program) == "string" and program ~= "") and program or kind
+  local function from(k) return env[k] or vim.env[k] or "" end
+  local key = table.concat({ plugin_env_key(bin, nil), kind, program, from("PATH"), from("OPENCODE_CONFIG_CONTENT") }, "\0")
+  if _setups[key] then return vim.deepcopy(_setups[key]), nil, false end
+  run = run or function(argv, e, ms)
+    local r = vim.system(argv, { env = e, text = true }):wait(ms)
+    return r.code, r.stdout or "", r.stderr
+  end
+  local argv = { bin, "crew", "setup", "--kind", kind, "--host", "nvim", "--program", program, "--autodoc", bin }
+  local ok, code, out, err = pcall(run, argv, env, M.SETUP_WAIT_MS)
+  if not ok then return nil, tostring(code), false end
+  err = vim.trim(err or "")
+  if code ~= 0 then
+    local older = code == 2 and err:find('no command "crew setup"', 1, true) ~= nil
+    return nil, ("`autodoc crew setup` answered exit %s%s"):format(tostring(code), err ~= "" and (": " .. err) or ""), older
+  end
+  local okj, s = pcall(vim.json.decode, out or "")
+  if not okj or type(s) ~= "table" then
+    return nil, ("`autodoc crew setup` answered %q"):format(vim.trim(out or "")), false
+  end
+  local function list(v) return type(v) == "table" and v or {} end
+  s = { argv = list(s.argv), env = list(s.env), files = list(s.files), prompts = s.prompts == true,
+    notices = list(s.notices), after = list(s.after) }
+  _setups[key] = s
+  return vim.deepcopy(s), nil, false
+end
+
+---_reset_setups forgets setup's kept answers (tests).
+function M._reset_setups() _setups = {} end
+
+---after_argv is a setup's after steps as argv lists, run by bin, M.SETUP_SINCE given as since.
+---@param s table a setup
+---@param bin string the autodoc binary
+---@param since integer the agent's start, Unix seconds
+---@return string[][]
+function M.after_argv(s, bin, since)
+  local out = {}
+  for _, step in ipairs((s and s.after) or {}) do
+    local argv = { bin }
+    for _, a in ipairs(step) do
+      argv[#argv + 1] = (tostring(a):gsub(vim.pesc(M.SETUP_SINCE), tostring(since)))
+    end
+    out[#out + 1] = argv
+  end
+  return out
+end
+
+-- SETUP_SINCE, in an after step's argument, is the agent's start (crew.SetupSince).
+M.SETUP_SINCE = "{since}"
 
 ---autodoc_binary is the autodoc binary AutoDoc's plugin runs (its opts.bin, else its own build,
 ---else PATH), or nil.
@@ -384,7 +463,9 @@ end
 -- there is none. r stays pending only when the answer was lost.
 local function send_register(st, r, then_)
   r.inflight = true
-  st.session.call("crew.register", { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret },
+  local params = { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret }
+  if r.prompts then params[#params + 1] = true end -- only to a daemon that takes it (PROTOCOL_PROMPTS)
+  st.session.call("crew.register", params,
     function(res, err)
       r.inflight = false
       if _s ~= st then return end
@@ -749,7 +830,7 @@ end
 ---with why when the registration was tried and failed. A registration answered after the wait is
 ---ended, since nobody starts it; one whose answer was lost is replayed as it was by the codename's
 ---next start, or ended by the next renewal.
----@param opts { codename: string, kind: string|nil, cwd: string }
+---@param opts { codename: string, kind: string|nil, cwd: string, prompts: boolean|nil }
 ---@return table|nil handle the session, its context's path and the env to add
 ---@return string|nil why
 function M.begin(opts)
@@ -800,14 +881,16 @@ function M.begin(opts)
     st.pending[codename] = nil -- the claim that changed the epoch ended its session; another store has none
     r = nil
   end
-  if r and (r.kind ~= kind or r.workspace ~= ws) then
+  -- prompts is crew.register's 9th parameter (protocol 41): an older daemon refuses a 9th
+  local prompts = opts.prompts == true and (tonumber(h.protocol) or 0) >= M.PROTOCOL_PROMPTS
+  if r and (r.kind ~= kind or r.workspace ~= ws or (r.prompts == true) ~= prompts) then
     resolve(st, r) -- its profile changed since: the session it left is ended first
     return nil, "its last registration is still being ended"
   end
   if not r then
     _instances = _instances + 1
     r = { codename = codename, kind = kind, workspace = ws, instance = ("nvim-%d-%d"):format(vim.uv.os_getpid(), _instances),
-      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder }
+      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder, prompts = prompts }
     st.pending[codename] = r
   end
   r.folder = folder

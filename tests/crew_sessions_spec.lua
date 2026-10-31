@@ -24,6 +24,11 @@
 ---  [12] Claude starts with --settings carrying the SessionStart endpoint hook, the five hooks that
 ---       report its permission prompts (each always exiting 0) and
 ---       crossSessionInbound accept, nothing else; the other kinds with nothing added
+---  [4b] prompts (the setup reports the session's permission prompts) is crew.register's 9th
+---       parameter, sent only when true and only to a daemon of protocol 41 or later
+---  [12c] AutoDoc's setup (`autodoc crew setup`): its argv carries no value of the agent's
+---       environment, which is its process environment; its answer is parsed and kept; a failure
+---       is not kept; an autodoc without the command is told apart (older); after steps get the start
 ---  [12b] OpenCode starts with the OPENCODE_CONFIG_CONTENT that loads AutoDoc's plugin, as the
 ---       binary prints it, merged by the binary with the agent's own value; a binary that fails,
 ---       answers no such line, or is missing gives none, with why; the other kinds get nothing;
@@ -73,11 +78,12 @@ local function new_world(opts)
   local function new_client(addr)
     return {
       can = function() return true end,
-      hello = function() return { store_id = w.store, version = w.version } end,
+      hello = function() return { store_id = w.store, version = w.version, protocol = w.protocol } end,
       addr = function() return addr end,
     }
   end
   w.store = "store-1"
+  w.protocol = opts.protocol or 41
   w.client = new_client("/run/autodoc.sock")
   w.reconnect = function() w.client = new_client("/run/autodoc-2.sock") end
   w.reply = function(method, res, err)
@@ -551,6 +557,68 @@ do
     f1 == nil and #calls == 2 and fw == nil and f2 and f2.OPENCODE_CONFIG_CONTENT == '{"plugin":["p"]}', vim.inspect({ calls, f2 }))
   vim.fn.delete(bin)
   crew._reset_plugin_env()
+end
+
+-- ── [4b] prompts at registration ────────────────────────────────────────────
+
+do
+  for _, c in ipairs({ { protocol = 41, prompts = true, want = 9 }, { protocol = 41, prompts = false, want = 8 },
+    { protocol = 40, prompts = true, want = 8 } }) do
+    local cwd = tmpcwd()
+    local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } }, protocol = c.protocol })
+    crew.begin({ codename = "gold", kind = "claude", cwd = cwd, prompts = c.prompts })
+    local reg = w.of("crew.register")[1]
+    ok(("[4b] prompts=%s to a protocol %d daemon: %d register params"):format(tostring(c.prompts), c.protocol, c.want),
+      reg and #reg.params == c.want and (c.want == 8 or reg.params[9] == true), vim.inspect(reg and reg.params))
+    crew.release()
+    vim.fn.delete(cwd, "rf")
+  end
+end
+
+-- ── [12c] AutoDoc's setup ───────────────────────────────────────────────────
+
+do
+  crew._reset_setups()
+  local calls = {}
+  local function runner(code, out, err)
+    return function(argv, env, ms)
+      calls[#calls + 1] = { argv = argv, env = env, ms = ms }
+      return code, out, err
+    end
+  end
+  local answer = vim.json.encode({ argv = { "--settings", "{}" }, env = { X = "y" }, files = {}, prompts = true,
+    notices = { "n1" }, after = { { "crew", "endpoint", "--codex-here", "--since", "{since}", "--wait", "60s" } } })
+  local env = { CLAUDE_CONFIG_DIR = "/accounts/work/.claude", PATH = "/p/bin" }
+  local s, why = crew.setup("claude", "/opt/autodoc", "claude", env, runner(0, answer))
+  ok("[12c] the setup runs `crew setup` for the kind, host nvim, the program and the autodoc",
+    #calls == 1 and vim.deep_equal(calls[1].argv, { "/opt/autodoc", "crew", "setup", "--kind", "claude", "--host", "nvim",
+      "--program", "claude", "--autodoc", "/opt/autodoc" }) and calls[1].ms == crew.SETUP_WAIT_MS, vim.inspect(calls))
+  ok("[12c] the agent's environment is the command's process environment, and none of it is in argv",
+    calls[1].env == env and not table.concat(calls[1].argv, " "):find("/accounts/work", 1, true)
+      and not table.concat(calls[1].argv, " "):find("/p/bin", 1, true), vim.inspect(calls[1]))
+  ok("[12c] its answer is parsed", why == nil and s and s.prompts == true and s.argv[1] == "--settings" and s.env.X == "y"
+    and s.notices[1] == "n1", vim.inspect(s))
+  s.argv[1] = "changed by the caller"
+  local again = crew.setup("claude", "/opt/autodoc", "claude", env, runner(0, answer))
+  ok("[12c] kept: a second spawn with the same binary, program and env asks nothing, its copy unchanged",
+    #calls == 1 and again.argv[1] == "--settings", vim.inspect(calls))
+  crew.setup("claude", "/opt/autodoc", "claude", { PATH = "/other/bin" }, runner(0, answer))
+  ok("[12c] another PATH is asked again", #calls == 2)
+  local steps = crew.after_argv(again, "/opt/autodoc", 1234)
+  ok("[12c] an after step is run by the autodoc, the start given as {since}",
+    vim.deep_equal(steps, { { "/opt/autodoc", "crew", "endpoint", "--codex-here", "--since", "1234", "--wait", "60s" } }),
+    vim.inspect(steps))
+  calls = {}
+  local n1, w1, o1 = crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(2, "", 'autodoc: no command "crew setup"'))
+  local n2, w2, o2 = crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(1, "", "boom"))
+  local n3, w3 = crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(0, "not json"))
+  local n4, _, o4 = crew.setup("opencode", nil, "opencode", {}, runner(0, answer))
+  ok("[12c] an autodoc without crew setup is older; a failure, an answer that is no setup, or no binary is none",
+    n1 == nil and o1 == true and w1 ~= nil and n2 == nil and o2 == false and w2:find("boom", 1, true) and n3 == nil
+      and w3 ~= nil and n4 == nil and o4 == false and #calls == 3, vim.inspect({ w1, w2, w3, calls }))
+  crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(0, answer))
+  ok("[12c] a failure is not kept: the next spawn asks again", #calls == 4)
+  crew._reset_setups()
 end
 
 -- ── [13] a restart (Juliet #4 r0 F1) ────────────────────────────────────────
