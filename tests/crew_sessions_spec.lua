@@ -26,7 +26,8 @@
 ---       crossSessionInbound accept, nothing else; the other kinds with nothing added
 ---  [12b] OpenCode starts with the OPENCODE_CONFIG_CONTENT that loads AutoDoc's plugin, as the
 ---       binary prints it, merged by the binary with the agent's own value; a binary that fails,
----       answers no such line, or is missing gives none, with why; the other kinds get nothing
+---       answers no such line, or is missing gives none, with why; the other kinds get nothing;
+---       an answer is kept per binary (path, size, mtime) and agent value, a failure never
 ---  [13] a restart: the codename's previous session, still counted live, is ended before the new
 ---       registration, and its exit is waited for within the spawn's wait (Juliet #4 r0 F1)
 ---  [14] an answer after release, or after a claim at another epoch, counts nothing and owes no
@@ -494,6 +495,7 @@ do
 end
 
 do
+  crew._reset_plugin_env()
   local calls = {}
   local function runner(code, out, err)
     return function(argv, env, ms)
@@ -524,6 +526,31 @@ do
   local ec = crew.wake_env("claude", "/bin/autodoc", nil, runner(0, "OPENCODE_CONFIG_CONTENT={}"))
   local ex = crew.wake_env("codex", "/bin/autodoc", nil, runner(0, "OPENCODE_CONFIG_CONTENT={}"))
   ok("[12b] the other kinds get nothing, and nothing is run", vim.tbl_count(ec) == 0 and vim.tbl_count(ex) == 0 and #calls == 0)
+
+  -- kept: a binary's later spawns don't wait on it again (Jarvis #15 r0)
+  crew._reset_plugin_env()
+  local bin = vim.fn.tempname()
+  vim.fn.writefile({ "#!/bin/sh" }, bin)
+  calls = {}
+  local good = runner(0, "OPENCODE_CONFIG_CONTENT={\"plugin\":[\"p\"]}")
+  local a1 = crew.wake_env("opencode", bin, nil, good)
+  a1.OPENCODE_CONFIG_CONTENT = "changed by the caller"
+  local a2 = crew.wake_env("opencode", bin, nil, good)
+  ok("[12b] a second spawn with the same binary and value is answered from the session's copy, unchanged by a caller",
+    #calls == 1 and a2 and a2.OPENCODE_CONFIG_CONTENT == '{"plugin":["p"]}', vim.inspect({ calls, a2 }))
+  crew.wake_env("opencode", bin, '{"model":"x/y"}', good)
+  ok("[12b] another agent value is asked again", #calls == 2, vim.inspect(calls))
+  vim.uv.fs_utime(bin, 1000, 1000)
+  crew.wake_env("opencode", bin, nil, good)
+  ok("[12b] a changed binary (its mtime) is asked again", #calls == 3, vim.inspect(calls))
+  calls = {}
+  local bad = runner(1, "", "boom")
+  local f1 = crew.wake_env("opencode", bin .. "-other", nil, bad)
+  local f2, fw = crew.wake_env("opencode", bin .. "-other", nil, good)
+  ok("[12b] a failure is not kept: the next spawn asks again, and its answer counts",
+    f1 == nil and #calls == 2 and fw == nil and f2 and f2.OPENCODE_CONFIG_CONTENT == '{"plugin":["p"]}', vim.inspect({ calls, f2 }))
+  vim.fn.delete(bin)
+  crew._reset_plugin_env()
 end
 
 -- ── [13] a restart (Juliet #4 r0 F1) ────────────────────────────────────────

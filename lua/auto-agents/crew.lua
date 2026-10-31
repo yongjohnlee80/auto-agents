@@ -154,13 +154,28 @@ end
 -- How long a spawn waits for AutoDoc's OpenCode plugin environment before starting without it.
 M.PLUGIN_ENV_WAIT_MS = 5000
 
+-- wake_env's answers, kept for the session by binary (its path, size and mtime: an upgraded
+-- autodoc is asked again, and writes its own plugin) and the agent's own value; never a failure
+local _plugin_env = {}
+
+local function plugin_env_key(bin, current)
+  local st = vim.uv.fs_stat(bin)
+  local sig = st and (tostring(st.size) .. ":" .. tostring(st.mtime.sec) .. "." .. tostring(st.mtime.nsec)) or ""
+  return table.concat({ bin, sig, current or "" }, "\0")
+end
+
+---_reset_plugin_env forgets wake_env's kept answers (tests).
+function M._reset_plugin_env() _plugin_env = {} end
+
 ---wake_env is what a crew session's CLI of kind starts with in its environment, so a wake reaches
 ---it (§4.9): for OpenCode, the OPENCODE_CONFIG_CONTENT that loads AutoDoc's OpenCode plugin, which
 ---registers the session's endpoint and wakes it. Without it the session is never reachable. It is
 ---what the autodoc binary at bin prints (`autodoc crew plugin --opencode --print-env`), so the
 ---plugin is that build's, merged by it with current (the value the agent would start with), as
 ---AutoDoc's own window does. The other kinds get nothing. nil and why when it can't be had: no
----binary, one older than the command, a failure, or no answer within PLUGIN_ENV_WAIT_MS.
+---binary, one older than the command, a failure, or no answer within PLUGIN_ENV_WAIT_MS. An answer
+---is kept for the session (by the binary and current), so only a binary's first OpenCode spawn
+---waits on it; a failure is not kept, and the next spawn asks again.
 ---@param kind string crew's kind
 ---@param bin string|nil the autodoc binary
 ---@param current string|nil the OPENCODE_CONFIG_CONTENT the agent's env sets, if any
@@ -169,6 +184,8 @@ M.PLUGIN_ENV_WAIT_MS = 5000
 function M.wake_env(kind, bin, current, run)
   if kind ~= "opencode" then return {}, nil end
   if type(bin) ~= "string" or bin == "" then return nil, "no autodoc binary" end
+  local key = plugin_env_key(bin, current)
+  if _plugin_env[key] then return vim.deepcopy(_plugin_env[key]), nil end
   run = run or function(argv, env, ms)
     local r = vim.system(argv, { env = env, text = true }):wait(ms)
     return r.code, r.stdout or "", r.stderr
@@ -185,6 +202,7 @@ function M.wake_env(kind, bin, current, run)
     return nil, ("`autodoc crew plugin --opencode --print-env` answered %s%s"):format(
       code ~= 0 and ("exit " .. tostring(code)) or ("%q"):format(line), why ~= "" and (": " .. why) or "")
   end
+  _plugin_env[key] = { OPENCODE_CONFIG_CONTENT = value }
   return { OPENCODE_CONFIG_CONTENT = value }, nil
 end
 
