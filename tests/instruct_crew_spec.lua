@@ -158,6 +158,8 @@ do
   ok("[6] F2: every send goes through outbox/, and a direct send to an unlisted peer is never read",
     has(s, "Send through `outbox/`, as before.") and has(s, "`autodoc mail send` to anyone else") and has(s, "is never read"))
   ok("[6] F2: a gatewayed message is answered to its [from agent:…] id", has(s, "subject's `[from agent:…]`"))
+  ok("[6] a listed agent without a crew session is told its plain messages wait in the daemon (Zen #8 r1 N1)",
+    has(s, "Listed, but `$AUTODOC_CREW_CONTEXT` isn't set") and has(s, "plain messages to you are waiting in"))
   ok("[6] F3: the rules say which of the guide's steps they replace",
     has(s, "these rules replace the guide's") and has(s, "sending and replying steps (`mail send`, `mail reply`)"))
   local rules_at, guide_at = s:find("Send through `outbox/`", 1, true), s:find(GUIDE:sub(1, 20), 1, true)
