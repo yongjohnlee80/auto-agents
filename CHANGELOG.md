@@ -4,9 +4,9 @@ All notable changes to `auto-agents.nvim` are documented here.
 
 ## [v0.3.10] — 2026-10-31 — the editor socket, the crew rules in the instructions, Claude's prompts reported
 
-ADR 1793271500, phase 5 (Q5-1 (a)) and the crew follow-ups. **The editor verbs and the crew guide
-need an AutoDoc daemon that serves them.** With an older daemon, or none, everything runs as
-before, quietly.
+ADR 1793271500, phase 5 (Q5-1 (a)) and the crew follow-ups. **The crew guide needs an AutoDoc
+daemon that serves it; the editor verbs, an `autodoc` with `--editor`.** With an older daemon, or
+none, everything runs as before, quietly.
 
 - **The editor socket** (#7): Neovim serves AutoDoc's editor protocol to the agents it starts, as
   msgpack-RPC on `$XDG_RUNTIME_DIR/auto-agents/editor-<pid>.sock` (a 0700 folder, a 0600 socket).
@@ -23,6 +23,10 @@ before, quietly.
   `UserPromptSubmit`, `Stop`), each running `autodoc crew attention --claude-hook`. A prompt raises
   the session's permission attention in the human inbox, and the prompt behind it clears it. The
   hooks print nothing and always exit 0, so an autodoc older than the hook never denies a prompt.
+- **An agent no AutoDoc workspace serves gets its crew session** (#11): it is registered with no
+  workspace (`crew.NO_WORKSPACE`), and the mail gateway too once the workspaces are listed, so
+  every agent keeps its mail once the file mailbox is retired. No scope held, or no connection,
+  still starts the agent as before.
 
 ## [v0.3.9] — 2026-10-30 — this Neovim's agents join AutoDoc's crew
 
