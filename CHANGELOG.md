@@ -2,6 +2,16 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.12] — 2026-10-31 — Neovim's OpenCode agents are reachable by crew mail
+
+- **A crew OpenCode agent started by Neovim loads AutoDoc's OpenCode plugin** (#15). On v0.3.11
+  such an agent was registered but never reachable (`crew.list` said `no_endpoint`): only Claude
+  got its wake settings. Its spawn now gets `OPENCODE_CONFIG_CONTENT` from `autodoc crew plugin
+  --opencode --print-env` (`crew.wake_env`), merged with the agent's own value, as AutoDoc's window
+  does. The answer is kept for the session per binary (path, size, mtime) and agent value, so only
+  a binary's first OpenCode spawn waits on it; a failure isn't kept. When it can't be had, the agent
+  still starts, with a notice. Crew DoD row I (the Neovim host) passes live with it.
+
 ## [v0.3.11] — 2026-10-31 — no error flood from a refused IDE connection
 
 - **A refused IDE connection no longer raises an error** (#13). A client without the Claude Code
