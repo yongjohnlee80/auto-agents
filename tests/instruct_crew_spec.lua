@@ -6,9 +6,12 @@
 --       the daemon is never asked for the guide (no spawn waits for it)
 --   [2] "*": the crew section names every agent, carries the daemon's guide for the spawn's kind
 --       verbatim, before the mailbox section, which stays for Neovim's commands
---   [3] a list: the codenames sorted, and mail to anyone else still through outbox/
---   [4] cut over but no guide (no scope held, no answer): no crew section
+--   [3] a list: the codenames sorted
+--   [4] cut over but no guide (no scope held, no answer): the rules still, only the guide left out
 --   [5] the editor socket serving: the editor section, with the verbs and the grants
+--   [6] the rules (Zen #8 F1-F3): plain messages through the daemon, everything else still in
+--       inbox/, every send through outbox/ (the gateway is one-way), and which of the guide's
+--       steps they replace
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -100,8 +103,7 @@ do
   ok("[2] the guide is asked for the spawn's kind", vim.deep_equal(asked, { "antigravity" }), vim.inspect(asked))
   ok("[2] the crew section names every agent", has(s, "### Crew mail (AutoDoc)") and has(s, "Mail to every agent goes through the AutoDoc daemon"))
   ok("[2] it carries the guide verbatim", has(s, GUIDE:gsub("\n+$", "")), s)
-  ok("[2] no outbox/ line for the others: there are none", not has(s, "Mail to anyone else"))
-  ok("[2] with no crew session, the mailbox", has(s, "Without `$AUTODOC_CREW_CONTEXT`, or when `autodoc crew whoami` fails"))
+  ok("[2] with no working crew identity, the mailbox alone", has(s, "If `autodoc crew whoami` fails, or says the context doesn't match,**"))
   local crew_at, mailbox_at = s:find("### Crew mail", 1, true), s:find("### Mailbox protocol", 1, true)
   ok("[2] the crew section comes before the mailbox section, which stays", crew_at and mailbox_at and crew_at < mailbox_at)
 end
@@ -113,7 +115,7 @@ do
   world({ "vision", "gold", "user" }, GUIDE)
   local s = block_for()
   ok("[3] the codenames, sorted", has(s, "Mail to `gold`, `user` and `vision` goes through the AutoDoc daemon"), s)
-  ok("[3] mail to anyone else still through outbox/", has(s, "Mail to anyone else still goes through `outbox/`"))
+
   world({ "gold" }, GUIDE)
   ok("[3] one codename alone", has(block_for(), "Mail to `gold` goes through"))
 end
@@ -124,7 +126,9 @@ do
   editor_path = nil
   world("*", nil)
   local s = block_for()
-  ok("[4] asked, but no crew section without the guide", #asked == 1 and not has(s, "### Crew mail"))
+  ok("[4] asked, and the rules are rendered without the guide", #asked == 1 and has(s, "### Crew mail")
+    and has(s, "Plain messages to you arrive through the daemon"))
+  ok("[4] only the guide is left out", not has(s, "The daemon's guide for your CLI") and not has(s, GUIDE:gsub("\n+$", "")))
   ok("[4] the mailbox section stays", has(s, "### Mailbox protocol"))
 end
 
@@ -140,6 +144,24 @@ do
   ok("[5] and the grants", has(s, "the roster entry's `editor_grants`"))
   ok("[5] it is independent of the cutover", not has(s, "### Crew mail") and #asked == 0)
   editor_path = nil
+end
+
+-- ── [6] the rules: receiving, sending, the guide (Zen #8 F1-F3) ────────────
+
+do
+  editor_path = nil
+  world("*", GUIDE)
+  local s = block_for()
+  ok("[6] F1: plain messages arrive through the daemon", has(s, "Plain messages to you arrive through the daemon"))
+  ok("[6] F1: requests, responses, commands and unforwarded mail still arrive in inbox/",
+    has(s, "Everything else still arrives in the mailbox's `inbox/`:** requests,") and has(s, "responses, commands, and any message Neovim couldn't forward"))
+  ok("[6] F2: every send goes through outbox/, and a direct send to an unlisted peer is never read",
+    has(s, "Send through `outbox/`, as before.") and has(s, "`autodoc mail send` to anyone else") and has(s, "is never read"))
+  ok("[6] F2: a gatewayed message is answered to its [from agent:…] id", has(s, "subject's `[from agent:…]`"))
+  ok("[6] F3: the rules say which of the guide's steps they replace",
+    has(s, "these rules replace the guide's") and has(s, "sending and replying steps (`mail send`, `mail reply`)"))
+  local rules_at, guide_at = s:find("Send through `outbox/`", 1, true), s:find(GUIDE:sub(1, 20), 1, true)
+  ok("[6] the rules come before the guide they qualify", rules_at and guide_at and rules_at < guide_at)
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
