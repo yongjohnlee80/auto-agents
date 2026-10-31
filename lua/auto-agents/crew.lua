@@ -118,8 +118,8 @@ end
 ---CLAUDE_PROMPT_EVENTS are the hooks that report a crew Claude agent's permission prompts, as
 ---AutoDoc's own window writes them: PermissionRequest and a permission Notification raise the
 ---session's permission attention, and PostToolUse, UserPromptSubmit, Stop or another Notification
----clear it (`autodoc crew attention --claude-hook`). A window presses Enter after typing to a Claude
----agent only because these report its prompts.
+---clear it (`autodoc crew attention --claude-hook`). The prompt then shows in the user's crew
+---inbox, and a sender that presses Enter after typing to the agent can tell it isn't waiting on one.
 M.CLAUDE_PROMPT_EVENTS = { "PermissionRequest", "Notification", "PostToolUse", "UserPromptSubmit", "Stop" }
 
 ---prompt_command is the hook that reports a permission prompt, run by the autodoc binary at bin. It
