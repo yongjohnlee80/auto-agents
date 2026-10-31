@@ -22,6 +22,23 @@ local function normalize_dir(dir)
   return nil
 end
 
+---shared_folder reports whether dir can't be one project's root: the filesystem root, $HOME or a
+---folder above it, or a world-writable sticky folder (/tmp, /var/tmp).
+---@param dir string an absolute path
+---@return boolean
+function M.shared_folder(dir)
+  dir = (dir:gsub("[/\\]+$", ""))
+  if dir == "" or dir:match("^%a:$") then return true end -- "/" (stripped), or a drive root
+  local home = vim.uv.os_homedir()
+  if type(home) == "string" and home ~= "" then
+    home = (vim.fn.fnamemodify(home, ":p"):gsub("[/\\]+$", ""))
+    if home == dir or vim.startswith(home, dir .. "/") then return true end
+  end
+  local st = vim.uv.fs_stat(dir)
+  local sticky_world = tonumber("1002", 8) -- S_ISVTX | S_IWOTH
+  return st ~= nil and bit.band(st.mode, sticky_world) == sticky_world
+end
+
 ---@param start_dir string|nil
 ---@return string|nil
 function M.git_root(start_dir)
@@ -60,6 +77,11 @@ function M.git_root(start_dir)
       -- appends a separator for directories; strip it so :h removes .git.
       local absolute_git_dir = vim.fn.fnamemodify(git_dir, ":p"):gsub("[/\\]+$", "")
       local parent = vim.fn.fnamemodify(absolute_git_dir, ":h")
+      -- a .git Git rejects is taken as a sandbox's stub (v0.3.3), but never in a folder that can't
+      -- be one project: a stray /tmp/.git would make every scratch folder under /tmp one project
+      if M.shared_folder(parent) then
+        return nil
+      end
       return normalize_dir(parent)
     end
   end
