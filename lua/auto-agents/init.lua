@@ -1062,8 +1062,16 @@ local function ensure_main_slot_terminal(slot, winid)
   local crew_session
   if spec.configured ~= false and spec.name then
     M.state.slot_spawning[slot] = true
+    local crew = require("auto-agents.crew")
+    local kind, bin = crew.crew_kind(spec.kind), crew.autodoc_binary()
+    -- AutoDoc's setup for the agent first (ADR 1793271500 r15 P2): its prompts go into the
+    -- registration; asked under the agent's own environment, never with it in argv
+    local setup, setup_why, older
+    if crew.held() then
+      setup, setup_why, older = crew.setup(kind, bin, type(spec.cmd) == "table" and spec.cmd[1] or nil, env)
+    end
     local ok, handle, why = pcall(function()
-      return require("auto-agents.crew").begin({ codename = spec.name, kind = spec.kind, cwd = cwd })
+      return crew.begin({ codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts })
     end)
     M.state.slot_spawning[slot] = nil
     if not ok then
@@ -1072,10 +1080,9 @@ local function ensure_main_slot_terminal(slot, winid)
       crew_session = handle
       env = env or {}
       for k, v in pairs(handle.env) do env[k] = v end
+      local extra = setup and setup.argv or crew.wake_argv(kind, bin)
       -- a wake starts a turn only with these (§4.9); a command that brings its own --settings
       -- keeps it, and its session receives when it asks
-      local crew = require("auto-agents.crew")
-      local extra = crew.wake_argv(crew.crew_kind(spec.kind), crew.autodoc_binary())
       if #extra > 0 and type(spec.cmd) == "table" then
         local own = vim.iter(spec.cmd):any(function(a) return a == "--settings" or vim.startswith(a, "--settings=") end)
         if own then
@@ -1085,14 +1092,25 @@ local function ensure_main_slot_terminal(slot, winid)
           vim.list_extend(spec.cmd, extra)
         end
       end
-      -- and OpenCode's plugin, which registers its endpoint: without it the session keeps its mail
-      -- but is never woken, so the agent starts anyway (nothing is lost) and the user is told
-      local wenv, werr = crew.wake_env(crew.crew_kind(spec.kind), crew.autodoc_binary(), env.OPENCODE_CONFIG_CONTENT)
-      if wenv then
-        for k, v in pairs(wenv) do env[k] = v end
+      if setup then
+        for k, v in pairs(setup.env) do env[k] = v end -- AutoDoc's own, after the agent's
+        for _, n in ipairs(setup.notices) do
+          vim.notify(("%s: %s"):format(spec.name, n), vim.log.levels.WARN, { title = "auto-agents" })
+        end
+        crew_session.after = crew.after_argv(setup, bin, os.time() - 2) -- run once it has started
       else
-        vim.notify(("%s starts without AutoDoc's OpenCode plugin, so crew mail can't wake it: %s"):format(spec.name, werr),
-          vim.log.levels.WARN, { title = "auto-agents" })
+        if setup_why and not older then
+          logger.warn("crew", spec.name .. "'s setup from AutoDoc failed, built here instead: " .. setup_why)
+        end
+        -- an autodoc without crew setup: OpenCode's plugin, which registers its endpoint, as before;
+        -- without it the session keeps its mail but is never woken, so the agent starts anyway
+        local wenv, werr = crew.wake_env(kind, bin, env.OPENCODE_CONFIG_CONTENT)
+        if wenv then
+          for k, v in pairs(wenv) do env[k] = v end
+        else
+          vim.notify(("%s starts without AutoDoc's OpenCode plugin, so crew mail can't wake it: %s"):format(spec.name, werr),
+            vim.log.levels.WARN, { title = "auto-agents" })
+        end
       end
     elseif why then
       vim.notify(("%s starts without a crew session: %s"):format(spec.name, why), vim.log.levels.WARN,
@@ -1156,6 +1174,12 @@ local function ensure_main_slot_terminal(slot, winid)
   end
   term.editor_token = editor_token
   term.crew_session = crew_session
+  -- the setup's steps once the agent has started (a Codex agent's registration), each detached under
+  -- its environment, its session's context included; what one must wait for, it waits for itself
+  for _, argv in ipairs((crew_session and crew_session.after) or {}) do
+    local okr, rerr = pcall(vim.system, argv, { env = term_opts.env, detach = true })
+    if not okr then logger.warn("crew", spec.name .. "'s setup step failed to start: " .. tostring(rerr)) end
+  end
   M.state.slot_terminals[slot] = term
   pcall(function()
     require("auto-agents.status.observer").attach(slot, bufnr, spec.kind)
