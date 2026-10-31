@@ -661,6 +661,26 @@ do
   crew.release()
 end
 
+do
+  local w = new_world({ workspaces = {}, listed = false })
+  w.answer["crew.list"] = {}
+  local later
+  w.session.workspaces = function(cb) -- the listing answers later, as a real one does
+    w.calls[#w.calls + 1] = { method = "workspace.list" }
+    later = cb
+  end
+  crew.enable_gateway("/proj")
+  w.tick() -- a renewal, which asks for the gateway again while the listing is in flight
+  ok("[16] while the workspaces are being listed, the gateway is not registered, and listed once",
+    #w.of("crew.register") == 0 and #w.of("workspace.list") == 1 and later ~= nil)
+  w.listed = true
+  later({}, nil)
+  local regs = w.of("crew.register")
+  ok("[16] once listed with none, it is registered once, under none",
+    #regs == 1 and regs[1].params[6] == crew.NO_WORKSPACE, vim.inspect(regs))
+  crew.release()
+end
+
 -- ── [17] the gateway's store and codename (Lector #5 F2, F3) ────────────────
 
 do
