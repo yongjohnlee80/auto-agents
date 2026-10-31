@@ -2,6 +2,15 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.13] — 2026-10-31 — a stray .git stub never makes a shared folder a project
+
+- **A `.git` stub is never a project root in a folder that can't be one project** (#16). v0.3.3
+  takes a `.git` that Git rejects as a sandbox's stub, so a sandboxed Neovim keeps its project's
+  config. But a stray empty `/tmp/.git` made `/tmp` a project root, and a mailbox landed in
+  `/tmp/.auto-agents`. The stub fallback now gives no root in the filesystem root, `$HOME` or a
+  folder above it, or a world-writable sticky folder (`/tmp`, `/var/tmp`). A repo Git accepts
+  resolves through Git as before, so a dotfiles repo at `$HOME` is unaffected.
+
 ## [v0.3.12] — 2026-10-31 — Neovim's OpenCode agents are reachable by crew mail
 
 - **A crew OpenCode agent started by Neovim loads AutoDoc's OpenCode plugin** (#15). On v0.3.11
