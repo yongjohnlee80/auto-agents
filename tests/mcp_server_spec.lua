@@ -139,6 +139,32 @@ do
   package.loaded["auto-agents.diff.ui"] = saved_ui
 end
 
+-- A refused handshake whose peer resets the connection first: the server's read-error path closes
+-- the handle before the client's scheduled close, which must not close it a second time (libuv
+-- raises "handle ... is already closing").
+do
+  local wsclient = require("auto-agents.mcp.ws-server.client")
+  local closes, closing = 0, false
+  local h = {
+    write = function(_, _, cb) cb(nil) end,
+    is_closing = function() return closing end,
+    close = function()
+      closes = closes + 1 -- every attempt, counted before libuv's refusal of a second
+      if closing then error("handle is already closing") end
+      closing = true
+    end,
+  }
+  local c = wsclient.create_client(h)
+  local request = table.concat({ "GET / HTTP/1.1", "Host: 127.0.0.1", "Upgrade: websocket", "Connection: Upgrade",
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version: 13", "", "" }, "\r\n")
+  wsclient.process_data(c, request, function() end, function() end, function() end, "the-token")
+  h.close() -- the peer's reset, closed by the server's read-error path first
+  local okw = pcall(vim.wait, 200, function() return false end)
+  local errmsg = vim.v.errmsg
+  ok("a refused handshake's scheduled close leaves a handle the server closed first alone",
+    okw and closes == 1 and not tostring(errmsg):find("already closing"), tostring(errmsg) .. " closes=" .. closes)
+end
+
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
   os.exit(1)
