@@ -589,7 +589,7 @@ do
   local answer = vim.json.encode({ argv = { "--settings", "{}" }, env = { X = "y" }, files = {}, prompts = true,
     notices = { "n1" }, after = { { "crew", "endpoint", "--codex-here", "--since", "{since}", "--wait", "60s" } } })
   local env = { CLAUDE_CONFIG_DIR = "/accounts/work/.claude", PATH = "/p/bin" }
-  local s, why = crew.setup("claude", "/opt/autodoc", "claude", env, runner(0, answer))
+  local s, why = crew.agent_setup("claude", "/opt/autodoc", "claude", env, runner(0, answer))
   ok("[12c] the setup runs `crew setup` for the kind, host nvim, the program and the autodoc",
     #calls == 1 and vim.deep_equal(calls[1].argv, { "/opt/autodoc", "crew", "setup", "--kind", "claude", "--host", "nvim",
       "--program", "claude", "--autodoc", "/opt/autodoc" }) and calls[1].ms == crew.SETUP_WAIT_MS, vim.inspect(calls))
@@ -599,24 +599,24 @@ do
   ok("[12c] its answer is parsed", why == nil and s and s.prompts == true and s.argv[1] == "--settings" and s.env.X == "y"
     and s.notices[1] == "n1", vim.inspect(s))
   s.argv[1] = "changed by the caller"
-  local again = crew.setup("claude", "/opt/autodoc", "claude", env, runner(0, answer))
+  local again = crew.agent_setup("claude", "/opt/autodoc", "claude", env, runner(0, answer))
   ok("[12c] kept: a second spawn with the same binary, program and env asks nothing, its copy unchanged",
     #calls == 1 and again.argv[1] == "--settings", vim.inspect(calls))
-  crew.setup("claude", "/opt/autodoc", "claude", { PATH = "/other/bin" }, runner(0, answer))
+  crew.agent_setup("claude", "/opt/autodoc", "claude", { PATH = "/other/bin" }, runner(0, answer))
   ok("[12c] another PATH is asked again", #calls == 2)
   local steps = crew.after_argv(again, "/opt/autodoc", 1234)
   ok("[12c] an after step is run by the autodoc, the start given as {since}",
     vim.deep_equal(steps, { { "/opt/autodoc", "crew", "endpoint", "--codex-here", "--since", "1234", "--wait", "60s" } }),
     vim.inspect(steps))
   calls = {}
-  local n1, w1, o1 = crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(2, "", 'autodoc: no command "crew setup"'))
-  local n2, w2, o2 = crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(1, "", "boom"))
-  local n3, w3 = crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(0, "not json"))
-  local n4, _, o4 = crew.setup("opencode", nil, "opencode", {}, runner(0, answer))
+  local n1, w1, o1 = crew.agent_setup("opencode", "/opt/autodoc", "opencode", {}, runner(2, "", 'autodoc: no command "crew setup"'))
+  local n2, w2, o2 = crew.agent_setup("opencode", "/opt/autodoc", "opencode", {}, runner(1, "", "boom"))
+  local n3, w3 = crew.agent_setup("opencode", "/opt/autodoc", "opencode", {}, runner(0, "not json"))
+  local n4, _, o4 = crew.agent_setup("opencode", nil, "opencode", {}, runner(0, answer))
   ok("[12c] an autodoc without crew setup is older; a failure, an answer that is no setup, or no binary is none",
     n1 == nil and o1 == true and w1 ~= nil and n2 == nil and o2 == false and w2:find("boom", 1, true) and n3 == nil
       and w3 ~= nil and n4 == nil and o4 == false and #calls == 3, vim.inspect({ w1, w2, w3, calls }))
-  crew.setup("opencode", "/opt/autodoc", "opencode", {}, runner(0, answer))
+  crew.agent_setup("opencode", "/opt/autodoc", "opencode", {}, runner(0, answer))
   ok("[12c] a failure is not kept: the next spawn asks again", #calls == 4)
   crew._reset_setups()
 end
