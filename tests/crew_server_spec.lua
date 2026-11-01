@@ -11,6 +11,9 @@
 ---       next starts; a pid the file names that is another process now is left alone
 ---   [5] a stop ends the whole group: a child that ignores SIGTERM is killed once the leader ends
 ---   [6] bind: the server's end calls the terminal's kill; a stopped server's end doesn't
+---   [7] move_grants: the agent's directory grants (--add-dir, -s) leave its command, which ends
+---       with them, for its server's config (sandbox_mode, sandbox_workspace_write.writable_roots,
+---       TOML strings); grants not at its end, or an argument it can't move, move nothing
 ---
 --- The fake server stays a shell for as long as it runs, so its command line names its socket, as
 --- a real one's does (an `exec sleep` would put sleep's command line in its place).
@@ -171,6 +174,25 @@ do
   server.stop(h2) -- the CLI ended first: its stop is no end of the server's to answer
   vim.wait(300, function() return false end, 20)
   ok("[6] a stopped server's end kills nothing", killed2 == 0, "killed " .. killed2)
+end
+
+-- ── [7] the grants move to the server ──────────────────────────────────
+do
+  local grant = { "--add-dir", "/m/box", "--add-dir", '/kb "x"', "-s", "workspace-write" }
+  local cmd = { "codex", "--model", "m", unpack(grant) }
+  local c, sv = server.move_grants(cmd, grant, { "codex", "app-server", "--listen", "unix:///a/codex.sock" })
+  ok("[7] the agent's command loses its grants (a TUI on --remote refuses --add-dir)",
+    vim.deep_equal(c, { "codex", "--model", "m" }), vim.inspect(c))
+  ok("[7] the server gets them as config: the sandbox mode, then the writable roots (TOML strings)",
+    vim.deep_equal(sv, { "codex", "app-server", "--listen", "unix:///a/codex.sock",
+      "-c", 'sandbox_mode="workspace-write"', "-c", 'sandbox_workspace_write.writable_roots=["/m/box", "/kb \\"x\\""]' }),
+    vim.inspect(sv))
+  local c2, sv2 = server.move_grants({ "codex", "--add-dir", "/a", "--remote", "u" }, { "--add-dir", "/a" }, { "codex", "app-server" })
+  ok("[7] grants that aren't the command's last arguments are left, and the server unchanged",
+    vim.deep_equal(c2, { "codex", "--add-dir", "/a", "--remote", "u" }) and vim.deep_equal(sv2, { "codex", "app-server" }))
+  local c3, sv3 = server.move_grants({ "codex", "--weird", "x" }, { "--weird", "x" }, { "codex", "app-server" })
+  ok("[7] an argument it doesn't know how to move: nothing moves",
+    vim.deep_equal(c3, { "codex", "--weird", "x" }) and vim.deep_equal(sv3, { "codex", "app-server" }))
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))

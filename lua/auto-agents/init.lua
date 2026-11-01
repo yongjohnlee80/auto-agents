@@ -892,6 +892,7 @@ local function build_agent_env(spec, cwd)
         for _, a in ipairs(extra_argv) do
           spec.cmd[#spec.cmd + 1] = a
         end
+        spec.grant_argv = extra_argv -- moved onto an agent's own server, when its setup gives one
         require("auto-agents.log").info("spawn",
           string.format("slot %s (%s/%s) grants=%d dirs (%s)",
             tostring(spec.slot or "?"), spec.kind, spec.name,
@@ -1091,6 +1092,11 @@ local function ensure_main_slot_terminal(slot, winid)
       crew_session = handle
       env = env or {}
       for k, v in pairs(handle.env) do env[k] = v end
+      -- an agent on its own server (Codex): its grants are the server's, since its TUI attached with
+      -- --remote takes no --add-dir ("configure additional workspace roots on the server")
+      if setup and #setup.server > 0 and spec.grant_argv and type(spec.cmd) == "table" then
+        spec.cmd, setup.server = require("auto-agents.crew_server").move_grants(spec.cmd, spec.grant_argv, setup.server)
+      end
       local extra = setup and setup.argv or crew.wake_argv(kind, bin)
       -- a wake starts a turn only with these (§4.9); a command that brings its own --settings
       -- keeps it, and its session receives when it asks
