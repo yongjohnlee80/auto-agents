@@ -2,6 +2,21 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.15] — 2026-11-01 — assignments reach crew agents through AutoDoc, and Neovim's agents get MCP mail
+
+- **A todo assignment to a crew agent is sent through AutoDoc's crew** (#21). With auto-core v0.5.4,
+  Neovim's todo notifier hands each assignment it routes to `crew_send`, which sends it through the
+  crew (the agent's doorbell) as the user, keyed by the assignment's message id, so a repeat is the
+  same send. An agent the crew can't take (not registered, unreachable, an older daemon) still gets
+  the file-mailbox notice. An assignment made by no project (a bare `autodoc --call todos.add`) goes
+  only to the one live agent of that name. When an agent assigns through `todos.assign`, the
+  message says `Assigned by: <agent>` (the sender as written: information, never authority).
+- **A Neovim agent's mail mode comes from its setup** (#20). From a daemon of protocol 43, Neovim
+  asks `crew setup --mail-via mcp` and registers the mode it is given, so an agent on MCP mail is
+  woken and guided for its MCP tools. An older daemon is never asked.
+- **CI tests the releases you run** (#22): auto-core v0.5.4 and AutoDoc v0.3.6, so the crew send's
+  end-to-end cells run there.
+
 ## [v0.3.14] — 2026-11-01 — AutoDoc gives Neovim's agents their setup and hands back mail they missed
 
 - **A crew agent's setup comes from AutoDoc** (#17). Before spawning a crew agent, Neovim asks
