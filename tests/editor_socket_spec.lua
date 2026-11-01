@@ -17,6 +17,8 @@
 ---   [7] an unknown verb is method-not-found
 ---   [8] a restart: the old process's late forget, by its own token, leaves the new process's
 ---       token and grants alone (Juliet #7 r0 F1)
+---   [9] start sweeps the folder: a socket whose pid is gone or isn't a Neovim is removed; a live
+---       Neovim's, a file that isn't a socket, and other names are kept
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -227,6 +229,53 @@ do
   es.forget("gold", t2)
   local _, gerr = call(path, "editor.read", { t2 })
   ok("[8] its own forget, by its token, revokes it", gerr and gerr.code == es.CODE_ACCESS_DENIED)
+end
+
+-- ── [9] a killed Neovim's socket is swept at start ──────────────────────────
+
+do
+  es.stop()
+  -- stale makes a socket no one serves at dir/name: libuv unlinks a pipe's path on close, so it's
+  -- bound under another name and renamed first, as a killed process leaves its socket.
+  local function stale(name)
+    local tmp, pipe = vim.fs.joinpath(dir, "bind.tmp"), vim.uv.new_pipe(false)
+    pipe:bind(tmp)
+    vim.uv.fs_rename(tmp, vim.fs.joinpath(dir, name))
+    pipe:close()
+    vim.wait(50)
+  end
+  local function there(name) return vim.uv.fs_lstat(vim.fs.joinpath(dir, name)) ~= nil end
+  local gone = vim.system({ "true" })
+  gone:wait()
+  local dead = gone.pid
+  local sleeper = vim.system({ "sleep", "30" })
+  local nvim = vim.system({ vim.v.progpath, "--headless", "-u", "NONE", "--cmd", "sleep 30" })
+  vim.wait(300)
+  local comm
+  local f = io.open(("/proc/%d/comm"):format(nvim.pid), "r")
+  if f then comm = f:read("*l"); f:close() end
+  local names = {
+    dead = ("editor-%d.sock"):format(dead),
+    sleeper = ("editor-%d.sock"):format(sleeper.pid),
+    nvim = ("editor-%d.sock"):format(nvim.pid),
+  }
+  for _, n in pairs(names) do stale(n) end
+  local plain = "editor-4194399.sock" -- above any pid Linux hands out (pid_max <= 2^22)
+  vim.fn.writefile({}, vim.fs.joinpath(dir, plain))
+  stale("other.sock")
+  ok("[9] premise: the stale sockets are there", there(names.dead) and there(names.sleeper) and there(names.nvim))
+  path = es.start({ dir = dir })
+  ok("[9] a socket whose pid is gone is removed", not there(names.dead))
+  if comm then
+    ok("[9] premise: the live Neovim runs as nvim", comm:match("^nvim") ~= nil, comm)
+    ok("[9] a socket whose pid runs something else is removed", not there(names.sleeper))
+  end
+  ok("[9] a live Neovim's socket is kept", there(names.nvim))
+  ok("[9] a file that isn't a socket, and a socket not named editor-<pid>, are kept", there(plain) and there("other.sock"))
+  ok("[9] this process's own socket is served", path ~= nil and vim.uv.fs_lstat(path) ~= nil)
+  sleeper:kill(9)
+  nvim:kill(9)
+  for _, n in ipairs({ names.nvim, plain, "other.sock" }) do vim.uv.fs_unlink(vim.fs.joinpath(dir, n)) end
 end
 
 es.stop()
