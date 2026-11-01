@@ -252,8 +252,11 @@ M.SETUP_WAIT_MS = 5000
 ---prompts (crew.register's prompts), what to tell the user, and the steps to run once it has
 ---started. env is the agent's own environment (the profile's included): it is the command's
 ---process environment, never its arguments, which any user can read. An answer is kept for the
----session by binary (path, size, mtime), kind, program and the env that changes it (PATH,
----OPENCODE_CONFIG_CONTENT); a failure is not. nil and why when it can't be had; older is true for
+---session by binary (path, size, mtime), kind, program, agent folder and the env that changes it
+---(PATH, OPENCODE_CONFIG_CONTENT); a failure is not. agent_dir, the agent's own folder
+---(agent_folder), is `--agent-dir`: a kind's files there (folder_files: agy's MCP config) and its
+---server (server, server_socket: a Codex agent's own app-server, which the host runs, crew_server)
+---come only with one. nil and why when it can't be had; older is true for
 ---an autodoc that has no crew setup (the host then builds the setup as before: wake_argv, wake_env).
 ---@param kind string crew's kind
 ---@param bin string|nil the autodoc binary
@@ -262,14 +265,15 @@ M.SETUP_WAIT_MS = 5000
 ---@param run fun(argv: string[], env: table, ms: integer): integer, string, string|nil for tests
 ---@param mail_via string|nil "mcp": ask for the crew MCP server (`--mail-via mcp`), only of a daemon of
 ---  PROTOCOL_MAIL_VIA; the answer's mail_via is the mode to register
+---@param agent_dir string|nil the agent's own folder (agent_folder), passed as --agent-dir
 ---@return table|nil setup, string|nil why, boolean|nil older
-function M.agent_setup(kind, bin, program, env, run, mail_via)
+function M.agent_setup(kind, bin, program, env, run, mail_via, agent_dir)
   if type(bin) ~= "string" or bin == "" then return nil, "no autodoc binary", false end
   env = env or {}
   program = (type(program) == "string" and program ~= "") and program or kind
   local function from(k) return env[k] or vim.env[k] or "" end
   local key = table.concat({ plugin_env_key(bin, nil), kind, program, from("PATH"), from("OPENCODE_CONFIG_CONTENT"),
-    mail_via or "" }, "\0")
+    mail_via or "", agent_dir or "" }, "\0")
   if _setups[key] then return vim.deepcopy(_setups[key]), nil, false end
   run = run or function(argv, e, ms)
     local r = vim.system(argv, { env = e, text = true }):wait(ms)
@@ -277,6 +281,7 @@ function M.agent_setup(kind, bin, program, env, run, mail_via)
   end
   local argv = { bin, "crew", "setup", "--kind", kind, "--host", "nvim", "--program", program, "--autodoc", bin }
   if mail_via == "mcp" then vim.list_extend(argv, { "--mail-via", "mcp" }) end -- only from a daemon of PROTOCOL_MAIL_VIA
+  if type(agent_dir) == "string" and agent_dir ~= "" then vim.list_extend(argv, { "--agent-dir", agent_dir }) end
   local ok, code, out, err = pcall(run, argv, env, M.SETUP_WAIT_MS)
   if not ok then return nil, tostring(code), false end
   err = vim.trim(err or "")
@@ -291,7 +296,8 @@ function M.agent_setup(kind, bin, program, env, run, mail_via)
   local function list(v) return type(v) == "table" and v or {} end
   local mv = (s.mail_via == "cli" or s.mail_via == "mcp") and s.mail_via or nil
   s = { argv = list(s.argv), env = list(s.env), files = list(s.files), prompts = s.prompts == true,
-    notices = list(s.notices), after = list(s.after), mail_via = mv }
+    notices = list(s.notices), after = list(s.after), mail_via = mv, folder_files = list(s.folder_files),
+    server = list(s.server), server_socket = type(s.server_socket) == "string" and s.server_socket or nil }
   _setups[key] = s
   return vim.deepcopy(s), nil, false
 end
@@ -353,6 +359,52 @@ end
 -- a session id names its context's file: a plain file name, never a dot file
 local function plain_name(session)
   return type(session) == "string" and session ~= "" and session:sub(1, 1) ~= "." and not session:find("[/\\]")
+end
+
+-- AGENT_ROOT holds each crew agent's own folder: <scope, as a file name>/<codename>.
+M.AGENT_ROOT = vim.fs.joinpath(vim.fn.stdpath("state"), "auto-agents", "crew")
+
+---agent_folder is the agent codename's own folder in the scope held, made (0700): what `crew setup
+-----agent-dir` writes its kind's files for (agy's MCP config) and where a Codex agent's own app-server
+---binds its socket. auto-agents' own, never AutoDoc's window folders: two hosts never share one. nil
+---and why with no scope held, a codename that isn't a plain name, or a folder that can't be made.
+---@param codename string
+---@param root string|nil AGENT_ROOT, a test's own
+---@return string|nil folder, string|nil why
+function M.agent_folder(codename, root)
+  local scope = M.held()
+  if not scope then return nil, "no crew scope held" end
+  if not plain_name(codename) then return nil, "codename " .. tostring(codename) .. " isn't a plain name" end
+  local dir = vim.fs.joinpath(root or M.AGENT_ROOT, (scope:gsub("[^%w%._%-]", "_")), codename)
+  local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
+  if not made or vim.fn.isdirectory(dir) == 0 then
+    return nil, "could not make " .. dir .. (made and "" or (": " .. tostring(merr)))
+  end
+  return dir, nil
+end
+
+---write_folder_files writes a setup's folder_files ({path, content}, each path relative to dir)
+---into dir, 0600, their folders 0700: refused, and nothing more written, for a path that is
+---absolute or climbs out of dir. It answers nil, or why.
+---@param dir string
+---@param files table
+---@return string|nil why
+function M.write_folder_files(dir, files)
+  for _, f in ipairs(files or {}) do
+    local rel = type(f) == "table" and f.path or nil
+    if type(rel) ~= "string" or rel == "" or rel:sub(1, 1) == "/" or vim.list_contains(vim.split(rel, "/", { plain = true }), "..") then
+      return "a setup file's path " .. vim.inspect(rel) .. " isn't inside the agent's folder"
+    end
+    local path = vim.fs.joinpath(dir, rel)
+    local made = pcall(vim.fn.mkdir, vim.fs.dirname(path), "p", tonumber("700", 8))
+    if not made then return "could not make the folder of " .. path end
+    local fd, oerr = vim.uv.fs_open(path, "w", tonumber("600", 8))
+    if not fd then return tostring(oerr) end
+    local _, werr = vim.uv.fs_write(fd, type(f.content) == "string" and f.content or "")
+    vim.uv.fs_close(fd)
+    if werr then return tostring(werr) end
+  end
+  return nil
 end
 
 ---write_context writes c as its session's context file in folder (core/crew's WriteContext): mode

@@ -1063,6 +1063,9 @@ local function ensure_main_slot_terminal(slot, winid)
   -- registered first (ADR 1793271500 §4.4): the agent starts with its crew session's context, or,
   -- with no scope held, no workspace served or a registration that failed, as before without one
   local crew_session
+  -- the agent's own folder and its setup's server (a Codex agent's own app-server), started once the
+  -- environment is whole, just before the terminal (auto-agents.crew_server)
+  local agent_dir, crew_setup, server
   if spec.configured ~= false and spec.name then
     M.state.slot_spawning[slot] = true
     local crew = require("auto-agents.crew")
@@ -1071,8 +1074,11 @@ local function ensure_main_slot_terminal(slot, winid)
     -- registration; asked under the agent's own environment, never with it in argv
     local setup, setup_why, older
     if crew.held() then
+      local dir_why
+      agent_dir, dir_why = crew.agent_folder(spec.name)
+      if not agent_dir then logger.warn("crew", spec.name .. " has no folder of its own: " .. tostring(dir_why)) end
       setup, setup_why, older = crew.agent_setup(kind, bin, type(spec.cmd) == "table" and spec.cmd[1] or nil, env, nil,
-        crew.mail_via_offered() and "mcp" or nil)
+        crew.mail_via_offered() and "mcp" or nil, agent_dir)
     end
     local ok, handle, why = pcall(function()
       return crew.begin({ codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
@@ -1103,6 +1109,14 @@ local function ensure_main_slot_terminal(slot, winid)
           vim.notify(("%s: %s"):format(spec.name, n), vim.log.levels.WARN, { title = "auto-agents" })
         end
         crew_session.after = crew.after_argv(setup, bin, os.time() - 2) -- run once it has started
+        if agent_dir and #setup.folder_files > 0 then -- its kind's files in its own folder (agy's MCP config)
+          local fwhy = crew.write_folder_files(agent_dir, setup.folder_files)
+          if fwhy then
+            vim.notify(("%s: its setup's files could not be written: %s"):format(spec.name, fwhy), vim.log.levels.WARN,
+              { title = "auto-agents" })
+          end
+        end
+        crew_setup = setup
       else
         if setup_why and not older then
           logger.warn("crew", spec.name .. "'s setup from AutoDoc failed, built here instead: " .. setup_why)
@@ -1139,11 +1153,24 @@ local function ensure_main_slot_terminal(slot, winid)
       for k, v in pairs(eenv) do env[k] = v end
     end
   end
+  -- the setup's server, before the CLI, under the CLI's whole environment: started, or the spawn is
+  -- refused with nothing left running (auto-agents.crew_server)
+  if crew_setup and #crew_setup.server > 0 then
+    local swhy
+    server, swhy = require("auto-agents.crew_server").start(crew_setup.server, crew_setup.server_socket, agent_dir, env)
+    if not server then
+      require("auto-agents.crew").finish(crew_session, "start_failed")
+      if editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
+      vim.notify(("%s did not start: %s"):format(spec.name, tostring(swhy)), vim.log.levels.ERROR, { title = "auto-agents" })
+      return nil
+    end
+  end
   local term_opts = {
     cmd = spec.cmd,
     cwd = cwd,
     env = env,
     on_exit = function(code)
+      require("auto-agents.crew_server").stop(server) -- the CLI's end stops its server
       require("auto-agents.crew").finish(crew_session, "exit")
       if spec.name and editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
       logger.info("panel", "slot " .. slot .. " (" .. spec.kind .. ") exited code=" .. tostring(code))
@@ -1173,16 +1200,20 @@ local function ensure_main_slot_terminal(slot, winid)
     term, bufnr = M._start_terminal(cfg, term_opts, winid, crew_session)
   end)
   if not started or not term then
+    require("auto-agents.crew_server").stop(server)
     if editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
     if not started then error(start_err, 0) end
     return nil
   end
   term.editor_token = editor_token
   term.crew_session = crew_session
+  -- the server's end ends the CLI (and its session): no TUI left on a dead --remote
+  require("auto-agents.crew_server").bind(server, function() term:kill() end)
   -- the setup's steps once the agent has started (a Codex agent's registration), each detached under
-  -- its environment, its session's context included; what one must wait for, it waits for itself
+  -- its environment, its session's context included, in the agent's working folder (codex-here finds
+  -- the TUI's thread by it); what one must wait for, it waits for itself
   for _, argv in ipairs((crew_session and crew_session.after) or {}) do
-    local okr, rerr = pcall(vim.system, argv, { env = term_opts.env, detach = true })
+    local okr, rerr = pcall(vim.system, argv, { env = term_opts.env, cwd = cwd, detach = true })
     if not okr then logger.warn("crew", spec.name .. "'s setup step failed to start: " .. tostring(rerr)) end
   end
   M.state.slot_terminals[slot] = term

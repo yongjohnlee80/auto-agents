@@ -51,6 +51,10 @@
 ---       told to, keeps the answer's mail_via, and is kept per mode; mail_via_offered only from a 43
 ---       daemon holding the scope; crew.register's 10th parameter is the answered mail_via, sent
 ---       only to a 43 daemon, with prompts (the 9th) sent whatever it is
+---  [20] the agent's own folder: the setup is asked with --agent-dir and kept per folder; its
+---       server, socket and folder files are kept; agent_folder is <root>/<scope>/<codename>, 0700,
+---       only with a scope held and a plain codename; write_folder_files writes 0600 inside the
+---       folder and refuses a path out of it
 ---  [18] the crew guide for the instruction block: none while no scope is held or the daemon lacks
 ---       crew.guide; asked by crew's kind and cached per store, daemon version and kind; an answer
 ---       that fails or doesn't come within the wait is none, not cached, and asked again
@@ -983,6 +987,61 @@ do
       #p == c.want.n and (c.want.p9 == nil or p[9] == c.want.p9) and (c.want.p10 == nil or p[10] == c.want.p10), vim.inspect(p))
     crew.release()
     vim.fn.delete(cwd, "rf")
+  end
+end
+
+-- ── [20] the agent's own folder: --agent-dir, its files, its server ─────────
+
+do
+  crew._reset_setups()
+  local calls = {}
+  local function runner(answer)
+    return function(argv, env, ms)
+      calls[#calls + 1] = { argv = argv }
+      return 0, answer, ""
+    end
+  end
+  local answer = vim.json.encode({ argv = { "--remote", "unix:///a/codex.sock" }, env = { AUTODOC_CODEX_SERVER = "/a/codex.sock" },
+    files = {}, prompts = false, notices = {}, after = {}, mail_via = "mcp",
+    folder_files = { { path = ".agents/mcp_config.json", content = "{}" } },
+    server = { "codex", "app-server", "--listen", "unix:///a/codex.sock" }, server_socket = "/a/codex.sock" })
+  local s = crew.agent_setup("codex", "/opt/autodoc", "codex", { PATH = "/p" }, runner(answer), "mcp", "/a")
+  ok("[20] the setup is asked with the agent's own folder (--agent-dir)",
+    #calls == 1 and calls[1].argv[#calls[1].argv - 1] == "--agent-dir" and calls[1].argv[#calls[1].argv] == "/a",
+    vim.inspect(calls))
+  ok("[20] its server, socket and folder files are kept",
+    s and vim.deep_equal(s.server, { "codex", "app-server", "--listen", "unix:///a/codex.sock" })
+      and s.server_socket == "/a/codex.sock" and #s.folder_files == 1 and s.folder_files[1].path == ".agents/mcp_config.json",
+    vim.inspect(s))
+  crew.agent_setup("codex", "/opt/autodoc", "codex", { PATH = "/p" }, runner(answer), "mcp", "/b")
+  ok("[20] another agent's folder is asked again (the setup is kept per folder)", #calls == 2)
+  crew.agent_setup("codex", "/opt/autodoc", "codex", { PATH = "/p" }, runner(answer), "mcp", "/a")
+  ok("[20] the same folder again asks nothing", #calls == 2)
+
+  -- agent_folder: <root>/<scope as a file name>/<codename>, 0700, only with a scope held
+  local held, root = crew.held, vim.fn.tempname()
+  crew.held = function() return nil, nil end
+  local none, nwhy = crew.agent_folder("cx", root)
+  ok("[20] no scope held: no folder", none == nil and nwhy ~= nil)
+  crew.held = function() return "autodoc:abc/../x", 3 end
+  local dir = crew.agent_folder("cx", root)
+  local st = dir and vim.uv.fs_stat(dir)
+  ok("[20] the folder is the scope's (a file name: no / or ..) and the codename's, made 0700",
+    dir == vim.fs.joinpath(root, "autodoc_abc_.._x", "cx") and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("700", 8),
+    vim.inspect({ dir, st and st.mode }))
+  ok("[20] a codename that isn't a plain name gets none", crew.agent_folder("../cx", root) == nil)
+  crew.held = held
+
+  -- write_folder_files: inside the folder, 0600; refused for a path out of it
+  if dir then
+    local why = crew.write_folder_files(dir, { { path = ".agents/mcp_config.json", content = '{"mcpServers":{}}' } })
+    local fst = vim.uv.fs_stat(vim.fs.joinpath(dir, ".agents", "mcp_config.json"))
+    ok("[20] a setup's file is written in the folder, 0600", why == nil and fst and bit.band(fst.mode, tonumber("777", 8)) == tonumber("600", 8),
+      vim.inspect({ why, fst and fst.mode }))
+    for _, bad in ipairs({ "/etc/x", "../out", "a/../../out", "" }) do
+      ok("[20] a setup file's path " .. vim.inspect(bad) .. " is refused", crew.write_folder_files(dir, { { path = bad, content = "x" } }) ~= nil)
+    end
+    ok("[20] nothing was written out of the folder", vim.uv.fs_stat(vim.fs.joinpath(vim.fs.dirname(dir), "out")) == nil)
   end
 end
 
