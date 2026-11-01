@@ -467,7 +467,13 @@ do
   local daemon = require("auto-core.todo.daemon")
   local hooked = "unset"
   local real_set = notifier.set_crew_recipient
-  if type(real_set) ~= "function" then
+  local client = require("autodoc.session").client()
+  local proto = client and client.hello and tonumber((client:hello() or {}).protocol) or 0
+  if proto < 41 then
+    -- crew.claim and inbox.send arrive at 41: an older daemon (CI's pin) has no crew send to test
+    ok("AutoDoc before protocol 41 serves no crew send (protocol " .. proto .. "): its end-to-end cells need a newer daemon",
+      true)
+  elseif type(real_set) ~= "function" then
     ok("auto-core has the notifier's crew hook (v0.5.4)", false, "set_crew_recipient missing")
   else
     notifier.set_crew_recipient = function(fn) hooked = fn; return real_set(fn) end
