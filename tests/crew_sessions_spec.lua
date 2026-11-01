@@ -47,6 +47,10 @@
 ---       session, and an agent profile of that name keeps its mail, the gateway off (F3); the
 ---       addressbook is the current store's and claim's only: an answer for the old store is dropped,
 ---       so the new store's profile of that name is still protected (Lector #5 r1 F2)
+---  [19] mail_via (protocol 43): the setup asks for the crew MCP server (`--mail-via mcp`) only when
+---       told to, keeps the answer's mail_via, and is kept per mode; mail_via_offered only from a 43
+---       daemon holding the scope; crew.register's 10th parameter is the answered mail_via, sent
+---       only to a 43 daemon, with prompts (the 9th) sent whatever it is
 ---  [18] the crew guide for the instruction block: none while no scope is held or the daemon lacks
 ---       crew.guide; asked by crew's kind and cached per store, daemon version and kind; an answer
 ---       that fails or doesn't come within the wait is none, not cached, and asked again
@@ -928,6 +932,58 @@ do
   local w = new_world()
   w.client.can = function(_, m) return m ~= "crew.guide" end
   ok("[18] a daemon without crew.guide is not asked", crew.guide("claude") == nil and #w.of("crew.guide") == 0)
+end
+
+-- ── [19] mail_via ──────────────────────────────────────────────────────────
+
+do
+  crew._reset_setups()
+  local calls = {}
+  local function runner(answer)
+    return function(argv, env, ms)
+      calls[#calls + 1] = { argv = argv }
+      return 0, vim.json.encode(answer), ""
+    end
+  end
+  local s = crew.agent_setup("claude", "/opt/autodoc", "claude", {}, runner({ argv = {}, mail_via = "mcp" }), "mcp")
+  local argv = calls[1] and calls[1].argv or {}
+  ok("[19] asked for MCP: the setup runs with --mail-via mcp, its mail_via kept",
+    argv[#argv - 1] == "--mail-via" and argv[#argv] == "mcp" and s and s.mail_via == "mcp", vim.inspect({ argv, s }))
+  local s2 = crew.agent_setup("claude", "/opt/autodoc", "claude", {}, runner({ argv = {}, mail_via = "cli" }))
+  ok("[19] not asked: no --mail-via, and the CLI mode is its own kept answer",
+    #calls == 2 and not vim.tbl_contains(calls[2].argv, "--mail-via") and s2 and s2.mail_via == "cli", vim.inspect({ calls, s2 }))
+  local s3 = crew.agent_setup("claude", "/opt/autodoc", "claude", {}, runner({ argv = {}, mail_via = "bogus" }), "cli")
+  ok("[19] a mode the daemon doesn't name is none", s3 and s3.mail_via == nil, vim.inspect(s3))
+  crew._reset_setups()
+end
+
+do
+  for _, c in ipairs({ { protocol = 42, want = false }, { protocol = 43, want = true } }) do
+    local w = new_world({ protocol = c.protocol })
+    ok(("[19] mail_via_offered from a protocol %d daemon: %s"):format(c.protocol, tostring(c.want)), crew.mail_via_offered() == c.want)
+    crew.release()
+    local _ = w
+  end
+end
+
+do
+  for _, c in ipairs({
+    { protocol = 43, prompts = false, mail_via = "mcp", want = { n = 10, p9 = false, p10 = "mcp" } },
+    { protocol = 43, prompts = true, mail_via = "cli", want = { n = 10, p9 = true, p10 = "cli" } },
+    { protocol = 42, prompts = true, mail_via = "mcp", want = { n = 9, p9 = true } },
+    { protocol = 43, prompts = false, mail_via = nil, want = { n = 8 } },
+  }) do
+    local cwd = tmpcwd()
+    local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } }, protocol = c.protocol })
+    crew.begin({ codename = "gold", kind = "claude", cwd = cwd, prompts = c.prompts, mail_via = c.mail_via })
+    local reg = w.of("crew.register")[1]
+    local p = reg and reg.params or {}
+    ok(("[19] mail_via=%s prompts=%s to a protocol %d daemon: %d register params"):format(tostring(c.mail_via), tostring(c.prompts),
+      c.protocol, c.want.n),
+      #p == c.want.n and (c.want.p9 == nil or p[9] == c.want.p9) and (c.want.p10 == nil or p[10] == c.want.p10), vim.inspect(p))
+    crew.release()
+    vim.fn.delete(cwd, "rf")
+  end
 end
 
 crew.stop()

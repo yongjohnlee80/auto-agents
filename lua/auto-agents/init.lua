@@ -1068,10 +1068,12 @@ local function ensure_main_slot_terminal(slot, winid)
     -- registration; asked under the agent's own environment, never with it in argv
     local setup, setup_why, older
     if crew.held() then
-      setup, setup_why, older = crew.agent_setup(kind, bin, type(spec.cmd) == "table" and spec.cmd[1] or nil, env)
+      setup, setup_why, older = crew.agent_setup(kind, bin, type(spec.cmd) == "table" and spec.cmd[1] or nil, env, nil,
+        crew.mail_via_offered() and "mcp" or nil)
     end
     local ok, handle, why = pcall(function()
-      return crew.begin({ codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts })
+      return crew.begin({ codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
+        mail_via = setup ~= nil and setup.mail_via or nil })
     end)
     M.state.slot_spawning[slot] = nil
     if not ok then
