@@ -2,6 +2,15 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.20] — 2026-11-02 — a killed Neovim's editor socket is cleaned up at the next start
+
+- **The editor socket's start sweeps its folder** (#28). A Neovim that was killed never ran `stop()`,
+  so its `editor-<pid>.sock` stayed in `$XDG_RUNTIME_DIR/auto-agents/` until a later process with the
+  same pid started one. `start()` now removes the `editor-<pid>.sock` sockets whose pid is gone, or
+  (where `/proc` says what a process runs) whose pid is no longer a Neovim. A live Neovim's socket,
+  this process's own, files that aren't sockets and other names are kept. Spec [9] and
+  `tests/editor_socket_mutants.sh` (6/6 mutants killed on a green baseline).
+
 ## [v0.3.19] — 2026-11-02 — Codex and agy agents from Neovim get their own folder, and MCP mail
 
 - **Each crew agent gets a folder of its own** (#26): `stdpath("state")/auto-agents/crew/<scope>/
