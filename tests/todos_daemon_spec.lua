@@ -474,7 +474,8 @@ do
     ok("AutoDoc before protocol 41 serves no crew send (protocol " .. proto .. "): its end-to-end cells need a newer daemon",
       true)
   elseif type(real_set) ~= "function" then
-    ok("auto-core has the notifier's crew hook (v0.5.4)", false, "set_crew_recipient missing")
+    -- an auto-core before v0.5.4 (CI's pin) files every assignment itself: nothing to hook
+    ok("auto-core before v0.5.4 has no notifier crew hook: its end-to-end cells need v0.5.4", true)
   else
     notifier.set_crew_recipient = function(fn) hooked = fn; return real_set(fn) end
     local okset = crew.setup({ session = require("autodoc.session"), env = { AUTOVIM_PROJECT = "spec-crew" },
