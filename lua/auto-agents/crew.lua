@@ -38,6 +38,11 @@ M.REGISTER_WAIT_MS = 3000
 -- The daemon protocol from which crew.register takes prompts (whether the host's setup reports the
 -- session's permission prompts) as its 9th parameter.
 M.PROTOCOL_PROMPTS = 41
+-- crew.register's 10th parameter, mail_via (cli or mcp: how the session reads its mail, as its
+-- setup delivered it), and `crew setup --mail-via mcp`, which gives a kind that can read its mail
+-- through the crew MCP server the server: from a daemon of this protocol. A host registers the mode
+-- the setup answers, or its session would be given MCP tools its wake notice never names.
+M.PROTOCOL_MAIL_VIA = 43
 
 -- The refusals that mean a registration or an exit is settled, never to be sent again: crew's own
 -- (core/crew/errors.go), and a daemon that can't take the call at all.
@@ -244,19 +249,23 @@ M.SETUP_WAIT_MS = 5000
 ---@param program string|nil the CLI the agent's command runs
 ---@param env table<string, string>|nil the agent's own environment, over Neovim's
 ---@param run fun(argv: string[], env: table, ms: integer): integer, string, string|nil for tests
+---@param mail_via string|nil "mcp": ask for the crew MCP server (`--mail-via mcp`), only of a daemon of
+---  PROTOCOL_MAIL_VIA; the answer's mail_via is the mode to register
 ---@return table|nil setup, string|nil why, boolean|nil older
-function M.agent_setup(kind, bin, program, env, run)
+function M.agent_setup(kind, bin, program, env, run, mail_via)
   if type(bin) ~= "string" or bin == "" then return nil, "no autodoc binary", false end
   env = env or {}
   program = (type(program) == "string" and program ~= "") and program or kind
   local function from(k) return env[k] or vim.env[k] or "" end
-  local key = table.concat({ plugin_env_key(bin, nil), kind, program, from("PATH"), from("OPENCODE_CONFIG_CONTENT") }, "\0")
+  local key = table.concat({ plugin_env_key(bin, nil), kind, program, from("PATH"), from("OPENCODE_CONFIG_CONTENT"),
+    mail_via or "" }, "\0")
   if _setups[key] then return vim.deepcopy(_setups[key]), nil, false end
   run = run or function(argv, e, ms)
     local r = vim.system(argv, { env = e, text = true }):wait(ms)
     return r.code, r.stdout or "", r.stderr
   end
   local argv = { bin, "crew", "setup", "--kind", kind, "--host", "nvim", "--program", program, "--autodoc", bin }
+  if mail_via == "mcp" then vim.list_extend(argv, { "--mail-via", "mcp" }) end -- only from a daemon of PROTOCOL_MAIL_VIA
   local ok, code, out, err = pcall(run, argv, env, M.SETUP_WAIT_MS)
   if not ok then return nil, tostring(code), false end
   err = vim.trim(err or "")
@@ -269,10 +278,22 @@ function M.agent_setup(kind, bin, program, env, run)
     return nil, ("`autodoc crew setup` answered %q"):format(vim.trim(out or "")), false
   end
   local function list(v) return type(v) == "table" and v or {} end
+  local mv = (s.mail_via == "cli" or s.mail_via == "mcp") and s.mail_via or nil
   s = { argv = list(s.argv), env = list(s.env), files = list(s.files), prompts = s.prompts == true,
-    notices = list(s.notices), after = list(s.after) }
+    notices = list(s.notices), after = list(s.after), mail_via = mv }
   _setups[key] = s
   return vim.deepcopy(s), nil, false
+end
+
+---mail_via_offered is whether this Neovim's daemon takes a session's mail mode (PROTOCOL_MAIL_VIA):
+---only then does a spawn ask its setup for the crew MCP server (`--mail-via mcp`), and register
+---the mode the setup answers.
+---@return boolean
+function M.mail_via_offered()
+  local st = _s
+  local c = st and st.status == "held" and st.session and st.session.client and st.session.client()
+  local h = c and c.hello and c:hello() or {}
+  return (tonumber(h.protocol) or 0) >= M.PROTOCOL_MAIL_VIA
 end
 
 ---_reset_setups forgets agent_setup's kept answers (tests).
@@ -477,7 +498,11 @@ end
 local function send_register(st, r, then_)
   r.inflight = true
   local params = { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret }
-  if r.prompts then params[#params + 1] = true end -- only to a daemon that takes it (PROTOCOL_PROMPTS)
+  if r.mail_via then -- positional: prompts goes too, whatever it is (PROTOCOL_MAIL_VIA is past PROTOCOL_PROMPTS)
+    params[9], params[10] = r.prompts == true, r.mail_via
+  elseif r.prompts then
+    params[9] = true -- only to a daemon that takes it (PROTOCOL_PROMPTS)
+  end
   st.session.call("crew.register", params,
     function(res, err)
       r.inflight = false
@@ -961,14 +986,18 @@ function M.begin(opts)
   end
   -- prompts is crew.register's 9th parameter (protocol 41): an older daemon refuses a 9th
   local prompts = opts.prompts == true and (tonumber(h.protocol) or 0) >= M.PROTOCOL_PROMPTS
-  if r and (r.kind ~= kind or r.workspace ~= ws or (r.prompts == true) ~= prompts) then
+  -- mail_via is its 10th (protocol 43): the mode the agent's setup answered, never one it didn't
+  local mail_via = (opts.mail_via == "cli" or opts.mail_via == "mcp") and (tonumber(h.protocol) or 0) >= M.PROTOCOL_MAIL_VIA
+    and opts.mail_via or nil
+  if r and (r.kind ~= kind or r.workspace ~= ws or (r.prompts == true) ~= prompts or r.mail_via ~= mail_via) then
     resolve(st, r) -- its profile changed since: the session it left is ended first
     return nil, "its last registration is still being ended"
   end
   if not r then
     _instances = _instances + 1
     r = { codename = codename, kind = kind, workspace = ws, instance = ("nvim-%d-%d"):format(vim.uv.os_getpid(), _instances),
-      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder, prompts = prompts }
+      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder, prompts = prompts,
+      mail_via = mail_via }
     st.pending[codename] = r
   end
   r.folder = folder
