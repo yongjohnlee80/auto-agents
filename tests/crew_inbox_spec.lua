@@ -10,7 +10,8 @@
 ---   [2]  connected: asked for a snapshot (cursor 0, the daemon's longest wait, no page)
 ---   [3]  the first snapshot sets the baseline silently: one INFO line if anything is open, no WARN
 ---   [4]  a change re-reads the snapshot; a new request is one WARN, a closed one one INFO
----   [5]  a reconnect with the same requests open announces nothing (the known set outlives it)
+---   [5]  a reconnect with the same requests open announces nothing (the known set outlives it); an
+---        earlier connection's late answer is dropped
 ---   [6]  a snapshot's pages are all read before anything is shown, at its first page's cursor
 ---   [7]  peer text is one inert line: control characters (ESC, CR, LF) are spaces, the subject capped
 ---   [8]  a reply is inbox.reply(message, body, key); a retry of the same text reuses its key
@@ -19,7 +20,7 @@
 ---   [11] answers arriving in a fast event touch nothing until scheduled (no E5560)
 ---   [12] a failure asks again later, backing off; a refused or missing verb stops until reconnect
 ---   [13] the winbar segment is the count alone, clickable, nothing at 0
----   [14] a body is shown as plain text: nofile, text filetype, no modeline
+---   [14] a body is shown as plain text: a scratch buffer (nofile, no modeline), text filetype
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -202,6 +203,11 @@ do
   w.tick() -- the old connections' retry timers
   ok("[5] an earlier connection's loop stops: its retry asks nothing more", #w.held == 1 and #w.of("inbox.watch") == 6,
     vim.inspect(w.calls))
+  local v = started({ request("r1") })
+  v.x:connected() -- a new connection, the old one's watch still held: its answer comes late
+  v.answer("inbox.watch", snapshot(5, { request("r1"), request("late", "bartz") })) -- the old one's
+  ok("[5] a late answer of an earlier connection shows nothing and asks nothing",
+    #v.level(WARN) == 0 and v.x:count() == 1 and #v.held == 1, vim.inspect({ v.notes, v.held }))
 end
 
 do

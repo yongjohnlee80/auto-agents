@@ -334,8 +334,7 @@ function M.click() vim.schedule(M.pick) end
 ---show_body shows an entry's text in a read-only float, as plain text: never markdown, no modeline.
 ---@return integer buf
 function M.show_body(it)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].modeline = false
+  local buf = vim.api.nvim_create_buf(false, true) -- a scratch buffer: nofile, and 'nomodeline'
   vim.bo[buf].bufhidden = "wipe"
   local lines = {
     "From: " .. M.inert(it.from or it.codename, 80),
