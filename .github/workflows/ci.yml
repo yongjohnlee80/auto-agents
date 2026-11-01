@@ -99,7 +99,7 @@ jobs:
       # AutoDoc's daemon, so tests/todos_daemon_spec.lua runs against a real one.
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.10" # autodoc v0.3.6 go.mod
           cache: false
 
       - name: install plugin dependencies
@@ -108,9 +108,13 @@ jobs:
           # outcome; envelope command/code): tests/wake_notice_spec.lua needs
           # them. Pinned at auto-core.nvim#2's head until it is merged and
           # released, then moved to the tag.
-          AUTO_CORE_REF: "5bd0f4be35ecaf025fd7dc3dd2ddb44e550e5fe2"  # auto-core v0.4.0 (the todo cutover; ships with this change)
-          # The daemon the todos.* verbs call (ADR 1791532020 §3 step 4): v0.1.41.
-          AUTODOC_REF:   "0584e785b7b7d839bcfd2671b75896583ef91488"  # autodoc v0.1.41
+          # auto-core v0.5.4: the notifier's crew hook (tests/todos_daemon_spec.lua's crew send
+          # cells). It moves with AutoDoc: v0.4.2+ resolves a todo's $VAR refs through AutoDoc's
+          # workspace.vars, which AutoDoc before it doesn't serve.
+          AUTO_CORE_REF: "5eecf586cbc9cb6031a508143eb91099cdf9f862"  # auto-core v0.5.4
+          # The daemon the todos.* verbs call (ADR 1791532020 §3 step 4), and the crew's (crew.claim,
+          # inbox.send: protocol 41+): v0.3.6.
+          AUTODOC_REF:   "d747fe5a616c4e65ae224d582bdd587cc138a371"  # autodoc v0.3.6
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"  # main @ #38 merge (KB v2 paths)
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
@@ -151,7 +155,7 @@ jobs:
       - name: report how stale the auto-core pin is
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTO_CORE_REF: "5bd0f4be35ecaf025fd7dc3dd2ddb44e550e5fe2"
+          AUTO_CORE_REF: "5eecf586cbc9cb6031a508143eb91099cdf9f862"
         run: |
           # One API call rather than a second clone: compare gives the distance
           # to the default branch directly.
@@ -245,13 +249,13 @@ jobs:
       # AutoDoc's daemon, so tests/todos_daemon_spec.lua runs against a real one.
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.10" # autodoc v0.3.6 go.mod
           cache: false
 
       - name: install plugin dependencies (auto-core at HEAD)
         env:
           AUTO_CORE_REF: ""   # empty => default branch
-          AUTODOC_REF:   "0584e785b7b7d839bcfd2671b75896583ef91488"
+          AUTODOC_REF:   "d747fe5a616c4e65ae224d582bdd587cc138a371"  # autodoc v0.3.6
           WORKTREE_REF:  "767d1e27841ab4d87789242bef4ded4ab06866d0"
           PLENARY_REF:   "74b06c6c75e4eeb3108ec01852001636d85a932b"
         run: ./.github/install-deps.sh
