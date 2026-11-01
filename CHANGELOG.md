@@ -2,6 +2,21 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.21] — 2026-11-02 — the user's crew inbox in Neovim
+
+- **The crew inbox** (#30, ADR 1793271500 §4.8): the decision requests, reports and permission prompts
+  the AutoDoc daemon holds for the user are shown in Neovim and answered from it, with no AutoDoc
+  window open. One `inbox.watch` long-poll per Neovim (`lua/auto-agents/crew_inbox.lua`) keeps the
+  daemon's open set, read again after every change. What you're told is a diff against what this
+  Neovim knows: a new request or a waiting agent is a WARN, a report or a closed request an INFO,
+  and the first snapshot is one line (`2 requests wait: :AutoAgentsInbox`). A reconnect, a daemon
+  restart included, announces nothing already known. `:AutoAgentsInbox` replies to a request
+  (`inbox.reply`, its key reused on a retry of the same text), dismisses it, shows or marks a report
+  read, or raises a waiting agent. The panel winbar shows `!N`, what waits on you, the count alone;
+  clicking it opens the inbox. An agent's text is shown only, one inert line, the body in a read-only
+  plain-text float. Spec `tests/crew_inbox_spec.lua`; `tests/crew_inbox_mutants.sh` (all killed on a
+  green baseline).
+
 ## [v0.3.20] — 2026-11-02 — a killed Neovim's editor socket is cleaned up at the next start
 
 - **The editor socket's start sweeps its folder** (#28). A Neovim that was killed never ran `stop()`,
