@@ -619,6 +619,10 @@ function M.setup(opts)
   local crew_ok, crew_err = pcall(function()
     require("auto-agents.crew").setup({ project_key = M.state.session_project_key })
   end)
+  -- the user's crew inbox (ADR 1793271500 §4.8): requests, reports and permission prompts, answered
+  -- from here (:AutoAgentsInbox). It needs no crew scope; quiet without AutoDoc.
+  local inbox_ok, inbox_err = pcall(function() require("auto-agents.crew_inbox").setup() end)
+  if not inbox_ok then require("auto-agents.log").warn("crew", "the crew inbox did not start: " .. tostring(inbox_err)) end
   -- the editor socket agents reach this Neovim through (ADR 1793271500 phase 5, Q5-1 (a))
   local es_ok, es_path, es_err = pcall(require("auto-agents.editor_socket").start)
   if not es_ok or not es_path then

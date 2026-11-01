@@ -127,6 +127,10 @@ function M.render(focused_slot, available_width)
       string.format("%%%d@v:lua.require'auto-agents.panel.winbar'.click@%s%%X", slot, text)
     )
   end
+  -- what waits on the user in the crew inbox: its count alone, clicking it opens the inbox
+  local inbox = require("auto-agents.crew_inbox")
+  local waiting = inbox.winbar_segment(inbox.count())
+  if waiting ~= "" then table.insert(parts, waiting) end
   return table.concat(parts, " ")
 end
 
