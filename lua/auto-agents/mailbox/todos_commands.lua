@@ -354,7 +354,15 @@ local function h_status(args)
   return ok_response(task)
 end
 
-local function h_assign(args)
+---assigned_by is the agent that sent a command, by name: nil for the user, Neovim or no sender
+---(ctx.from, auto-core's command dispatch; an older auto-core gives none).
+local function assigned_by(ctx)
+  local from = type(ctx) == "table" and ctx.from or nil
+  if type(from) ~= "string" then return nil end
+  return from:match("^agent:([^:]+)")
+end
+
+local function h_assign(args, ctx)
   local bad = need_id(args); if bad then return bad end
   -- `assignee` is allowed to be nil to clear; we just type-check.
   if args.assignee ~= nil and args.assignee ~= vim.NIL and type(args.assignee) ~= "string" then
@@ -364,13 +372,20 @@ local function h_assign(args)
     return err_response("invalid_args", "args.reason, when provided, must be a string")
   end
   local who = type(args.assignee) == "string" and args.assignee or ""
-  local ctx, cerr = resolve()
-  if not ctx then return failed(cerr) end
+  -- an agent's assignment says so in its reason, which the assignee's message carries: the crew
+  -- sends it as the user, so this is how a peer's task is told from the user's
+  local reason = args.reason
+  local by = who ~= "" and assigned_by(ctx) or nil
+  if by then
+    reason = ((type(reason) == "string" and reason ~= "") and (reason .. "\n") or "") .. "Assigned by: " .. by
+  end
+  local at, cerr = resolve()
+  if not at then return failed(cerr) end
   -- the assignee, the reason and this project's scope, as every writer builds them: a bare
   -- assignee reaches this project's agent only (ADR 1791532020 §2.5a)
   local sc = todo_scope()
-  local extra = sc and sc.assign_params(who, args.reason) or { who, (args.reason ~= "" and args.reason) or nil }
-  local failure, _, task = move(ctx, "assign", args.id, args.rev, unpack(extra))
+  local extra = sc and sc.assign_params(who, reason) or { who, (reason ~= "" and reason) or nil }
+  local failure, _, task = move(at, "assign", args.id, args.rev, unpack(extra))
   if failure then return failure end
   store.publish("core.todo:changed", { kind = "assign", id = args.id })
   if who ~= "" then store.poke_notifier() end

@@ -64,6 +64,17 @@ M.FALLBACK_RETRY_MS = 5000
 -- how to answer it, since a withdrawn delivery takes no reply.
 M.FALLBACK_FROM = "nvim"
 
+-- inbox.send's answers (core/inbox, core/mail errors.go) that the todo notifier's crew send reads:
+-- handed over is accepted (the recipient's host carries it); the others are refused for certain.
+M.CODE_HANDED_OVER = -32136
+M.CODE_UNREACHABLE = -32135
+M.CODE_INBOX_TOO_LARGE = -32134
+M.CODE_INBOX_KEY_REUSED = -32133
+M.CODE_NO_RECIPIENT = -32110
+M.CODE_KEY_REUSED = -32111
+M.CODE_TOO_LARGE = -32112
+M.CODE_AMBIGUOUS = -32114
+
 -- The session contexts' folder (core/crew's ContextDir), under <cwd>/.auto-agents/crew/: inside the
 -- workspace's gitignored .auto-agents/, never the project's own tree.
 M.CONTEXT_DIR = ".autodoc-crew"
@@ -1108,8 +1119,21 @@ function M.setup(opts)
     mailbox_of = opts.mailbox_of or function(codename)
       return require("auto-core.mailbox.path").full_id("agent:" .. codename)
     end,
+    -- the crew send's verb call, from inside the todo notifier's daemon.run (crew_send)
+    rpc = opts.rpc or function(method, params) return require("auto-core.todo.daemon").rpc(method, params) end,
   }
   _s = st
+  -- the todo notifier sends crew agents' assignments through crew_send: an auto-core without the
+  -- hook keeps filing every assignment as a file notice
+  local notifier = opts.notifier
+  if notifier == nil then
+    local ok, n = pcall(require, "auto-core.todo.notifier")
+    notifier = ok and n or false
+  end
+  if notifier and type(notifier.set_crew_recipient) == "function" then
+    pcall(notifier.set_crew_recipient, M.crew_send)
+    st.notifier = notifier
+  end
   local events = opts.events
   if events == nil then
     local ok, ev = pcall(require, "auto-core.events")
@@ -1137,6 +1161,66 @@ function M.setup(opts)
   return true
 end
 
+-- certain is an inbox.send refusal that stored nothing: the notifier files its own notice instead.
+local function certain(c)
+  return c == M.CODE_UNREACHABLE or c == M.CODE_INBOX_TOO_LARGE or c == M.CODE_INBOX_KEY_REUSED
+    or c == M.CODE_NO_RECIPIENT or c == M.CODE_KEY_REUSED or c == M.CODE_TOO_LARGE or c == M.CODE_AMBIGUOUS
+    or c == M.CODE_STALE_EPOCH or c == M.CODE_SCOPE_BUSY or c == M.CODE_BAD_CREDENTIAL
+    or c == M.CODE_INVALID_PARAMS or c == M.CODE_METHOD_NOT_FOUND
+end
+
+---crew_send is the todo notifier's crew hook (auto-core notifier.set_crew_recipient, ADR 1793489028
+---§4.7): it sends an assignment to name through AutoDoc's crew, as the user, under this Neovim's
+---claim (inbox.send with fire), keyed by the notifier's message id mid, so a repeat is the same send.
+---It is the one sender of an assignment Neovim sees: this Neovim's todos.assign, and one no surface
+---sends (a bare `autodoc --call todos.add`). The notifier asks it only for an assignment of this
+---scope, of no scope, or of this instance. A scoped one is sent by the bare name, which the daemon
+---resolves in this scope first. An unscoped one (how.unscoped) was made by no project, and every
+---Neovim resolves a bare name in its own scope first, so the first to send would pick the recipient:
+---it is sent only when crew.list shows exactly one live profile of that name, to name@scope, and
+---is otherwise not sent (false). Runs inside the notifier's daemon.run. Answers:
+---  - true: rang, or handed over (the recipient's host carries it as a fallback job);
+---  - false: refused for certain (no such agent, ambiguous, unreachable, a reused key, a stale
+---    epoch, an older daemon): the notifier files its file notice;
+---  - "retry": any other answer, its outcome unknown: the notifier asks again with the same mid;
+---  - nil: no scope held here, so nothing was asked.
+---@param name string the assignee's name
+---@param mid string the notifier's message id: the send's key
+---@param msg table { kind, subject, body }
+---@param how table|nil { unscoped = boolean }
+---@return boolean|string|nil
+function M.crew_send(name, mid, msg, how)
+  local st = _s
+  local scope, epoch = M.held()
+  if not st or not scope or type(name) ~= "string" or name == "" or name == M.GATEWAY_CODENAME then return nil end
+  if type(mid) ~= "string" or mid == "" or type(msg) ~= "table" then return nil end
+  local to = name
+  if type(how) == "table" and how.unscoped then
+    local book, lerr = st.rpc("crew.list", {})
+    if lerr ~= nil then
+      if certain(code(lerr)) then return false end
+      return "retry"
+    end
+    local found = {}
+    for _, e in ipairs(type(book) == "table" and book or {}) do
+      if type(e) == "table" and e.codename == name and e.presence == "live" and type(e.scope) == "string" then
+        found[#found + 1] = e.scope
+      end
+    end
+    if #found ~= 1 then return false end -- none, or two projects' agents: the no-notice rule stands
+    to = name .. "@" .. found[1]
+  end
+  local _, err = st.rpc("inbox.send", { scope, st.run, epoch, { to }, msg.body, mid, msg.kind, msg.subject, true })
+  if err == nil then return true end
+  local c = code(err)
+  if c == M.CODE_HANDED_OVER then return true end
+  if certain(c) then return false end
+  return "retry"
+end
+
+---_run_for_tests is this process's run token while a scope is set up (tests only).
+function M._run_for_tests() return _s and _s.run end
+
 ---stop forgets the scope without releasing it (tests, a reload): its lease lapses on its own.
 function M.stop()
   local st = _s
@@ -1147,6 +1231,7 @@ function M.stop()
     if st.events then pcall(st.events.unsubscribe, sub) end
   end
   if st.augroup then pcall(vim.api.nvim_del_augroup_by_id, st.augroup) end
+  if st.notifier then pcall(st.notifier.set_crew_recipient, nil) end
   _s = nil
 end
 

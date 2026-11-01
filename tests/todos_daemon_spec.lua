@@ -52,7 +52,8 @@ vim.fn.mkdir(sb .. "/state", "p")
 vim.fn.mkdir(sb .. "/ad/state", "p")
 vim.fn.mkdir(sb .. "/ad/data", "p")
 require("auto-core.state").configure({ persist_dir = sb .. "/state" })
-local sock = string.format("/tmp/aa-ad-%d.sock", vim.uv.os_getpid())
+-- in the sandbox: AutoDoc refuses a socket in a folder others can write (/tmp itself)
+local sock = sb .. "/ad.sock"
 local cfg = sb .. "/ad/config.toml"
 vim.fn.writefile({
   "[server]",
@@ -81,10 +82,10 @@ worktree.set_workspace_root(proj)
 
 local todos = require("auto-agents.mailbox.todos_commands")
 local SPECS = todos._SPECS
-local function run(verb, args)
+local function run(verb, args, ctx)
   local spec = SPECS[verb]
   if not spec then return { ok = false, code = "no_such_verb", error = verb } end
-  local okc, res = pcall(spec.handler, args or {}, {})
+  local okc, res = pcall(spec.handler, args or {}, ctx or {})
   if not okc then return { ok = false, code = "raised", error = tostring(res) } end
   return res
 end
@@ -260,6 +261,17 @@ do
   p = last_params["assign"]
   ok(scoped and "… with no reason, an empty one holds the scope's place" or "… with no reason, none",
     r.ok and p and p[5] == (scoped and "" or nil) and p[6] == want, vim.inspect({ r, p }))
+  -- an agent's assignment says who made it: the crew sends it as the user (ADR 1793489028 §4.7)
+  r = run("todos.assign", { id = id, assignee = "agent:someone", reason = "scoped" }, { from = "agent:gold-man:1-2" })
+  p = last_params["assign"]
+  ok("an agent's assign adds \"Assigned by: <name>\" to its reason (ctx.from)",
+    r.ok and p and p[5] == "scoped\nAssigned by: gold-man" and p[6] == want, vim.inspect({ r, p }))
+  r = run("todos.assign", { id = id, assignee = "agent:someone" }, { from = "agent:gold-man:1-2" })
+  p = last_params["assign"]
+  ok("… and is the whole reason when none was given", r.ok and p and p[5] == "Assigned by: gold-man", vim.inspect({ r, p }))
+  r = run("todos.assign", { id = id, assignee = "agent:someone", reason = "scoped" }, { from = "user" })
+  p = last_params["assign"]
+  ok("the user's assign keeps its reason as given", r.ok and p and p[5] == "scoped", vim.inspect({ r, p }))
   r = run("todos.add", { title = "Created assigned, scoped", assignee = "agent:someone" })
   p = last_params["add"]
   ok(scoped and "add with an assignee is an assignment: it sends the scope" or "add with an assignee: no scope",
@@ -442,6 +454,49 @@ do
   r = run("todos.set_dir", { path = "" })
   ok("an empty path goes back to <root>/.todo-list", r.ok and r.value.todo_dir == proj .. "/.todo-list",
     vim.inspect(r))
+end
+
+-- ─────────────────────────────────────────────────────────────
+section("the crew send, end to end: this daemon, auto-core's notifier hook (ADR 1793489028 §4.7)")
+do
+  local crew = require("auto-agents.crew")
+  local notifier = require("auto-core.todo.notifier")
+  local daemon = require("auto-core.todo.daemon")
+  local hooked = "unset"
+  local real_set = notifier.set_crew_recipient
+  if type(real_set) ~= "function" then
+    ok("auto-core has the notifier's crew hook (v0.5.4)", false, "set_crew_recipient missing")
+  else
+    notifier.set_crew_recipient = function(fn) hooked = fn; return real_set(fn) end
+    local okset = crew.setup({ session = require("autodoc.session"), env = { AUTOVIM_PROJECT = "spec-crew" },
+      project_key = "k", proc = "", notify = function() end })
+    vim.wait(10000, function() return crew.held() ~= nil end, 20)
+    ok("crew claims this project's scope from the real daemon", okset and crew.held() == "autovim:spec-crew",
+      vim.inspect({ okset, crew.held() }))
+    ok("… and registers crew_send as the notifier's crew hook", hooked == crew.crew_send, tostring(hooked))
+    local msg = { kind = "message", subject = "[todos] task assigned to you: e2e", body = "You have been assigned a task." }
+    -- the daemon's own answer, read directly: the code crew_send maps must be the one it sends
+    local scope, epoch = crew.held()
+    local okd, _, rerr = daemon.sync(function()
+      return daemon.rpc("inbox.send", { scope, "not-the-run", epoch, { "nobody-here" }, "x", "e2e-direct", "message", "s", true })
+    end)
+    ok("the daemon refuses a stranger's run token (the claim is crew's own)", okd and type(rerr) == "table"
+      and rerr.code ~= nil, vim.inspect({ okd, rerr }))
+    local oks, got = daemon.sync(function() return crew.crew_send("nobody-here", "todo-e2e-1", msg) end)
+    ok("a name no profile has: the real daemon refuses it, and crew_send answers false (the file notice)",
+      oks and got == false, vim.inspect({ oks, got }))
+    local oku, gotu = daemon.sync(function() return crew.crew_send("nobody-here", "todo-e2e-2", msg, { unscoped = true }) end)
+    ok("unscoped: the real crew.list has no live profile of the name, so it isn't sent", oku and gotu == false,
+      vim.inspect({ oku, gotu }))
+    local ok_code, _, nerr = daemon.sync(function()
+      return daemon.rpc("inbox.send", { scope, crew._run_for_tests(), epoch, { "nobody-here" }, "x", "e2e-3", "message", "s", true })
+    end)
+    ok("… which is the daemon's no-recipient code, as crew_send reads it", ok_code and type(nerr) == "table"
+      and nerr.code == crew.CODE_NO_RECIPIENT, vim.inspect(nerr))
+    crew.stop()
+    ok("stop clears the hook", hooked == nil, tostring(hooked))
+    notifier.set_crew_recipient = real_set
+  end
 end
 
 -- ─────────────────────────────────────────────────────────────
