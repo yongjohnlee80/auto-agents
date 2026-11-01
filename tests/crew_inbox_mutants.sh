@@ -41,7 +41,7 @@ mutants=(
   "$C|a permission prompt not counted|  for _, a in pairs(self.open.attention) do if a.what == \"permission\" then k = k + 1 end end|  local _ = k"
   "$C|a focus ignored|      self.focus(ch.ref) -- the user asked for this agent: raised when it is this Neovim's|      local _ = ch.ref"
   "$C|the winbar segment shown at 0|  if n <= 0 then return \"\" end|  if n < 0 then return \"\" end"
-  "$C|the body float reads modelines|  vim.bo[buf].modeline = false|  local _ = buf"
+  "$C|the body float not a scratch buffer (a file buffer, modelines read)|  local buf = vim.api.nvim_create_buf(false, true) -- a scratch buffer: nofile, and 'nomodeline'|  local buf = vim.api.nvim_create_buf(false, false)"
 )
 
 killed=0; survived=0; broken=0; i=0
