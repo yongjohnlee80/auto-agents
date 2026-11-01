@@ -2,6 +2,19 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.14] — 2026-11-01 — AutoDoc gives Neovim's agents their setup and hands back mail they missed
+
+- **A crew agent's setup comes from AutoDoc** (#17). Before spawning a crew agent, Neovim asks
+  `autodoc crew setup` for the agent's arguments, environment, files, notices and after steps, under
+  the agent's own environment (never its arguments, which any user can read). A Claude agent's
+  permission prompts are reported at registration, as a window's are, to a daemon of protocol 41 or
+  later. An AutoDoc without `crew setup` (v0.3.6 and older) gets the setup Neovim built before.
+- **Mail an agent didn't receive in time comes back to Neovim, and lands in its mailbox** (#18).
+  From a daemon of protocol 42, a Neovim holding its scope takes the crew's fallback jobs: each is
+  filed once as a message in the recipient's file mailbox, whose router wakes it, and reported back
+  to AutoDoc. The user is told of each one, and given the text to send by hand if it couldn't be
+  filed. An older daemon is never asked, so its mail stays queued as before.
+
 ## [v0.3.13] — 2026-10-31 — a stray .git stub never makes a shared folder a project
 
 - **A `.git` stub is never a project root in a folder that can't be one project** (#16). v0.3.3
