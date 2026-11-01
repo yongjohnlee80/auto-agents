@@ -2,6 +2,16 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## v0.3.16 — 2026-11-01 — a slot starts in the project root, whichever window has focus
+
+- **A slot starts in auto-core's project root** (`git.worktree.project_root`, auto-core v0.5.6; the
+  same chain on an older auto-core), unless `terminal.cwd` or `cwd_provider` is set. Before, a slot
+  started while a terminal, panel or picker had focus got no working directory, its crew
+  registration failed (`crew session for <name> failed: vim/_core/shared:1082: s: expected string,
+  got nil`), and crew mail never reached it. `terminal.git_repo_cwd` is no longer read.
+- The crew gateway registers with the same root; `crew.begin` refuses a missing working directory
+  with a reason instead of raising.
+
 ## [v0.3.15] — 2026-11-01 — assignments reach crew agents through AutoDoc, and Neovim's agents get MCP mail
 
 - **A todo assignment to a crew agent is sent through AutoDoc's crew** (#21). With auto-core v0.5.4,
