@@ -16,6 +16,8 @@
 ---   [7] move_grants: the agent's directory grants (--add-dir, -s) leave its command, which ends
 ---       with them, for its server's config (sandbox_mode, sandbox_workspace_write.writable_roots,
 ---       TOML strings); grants not at its end, or an argument it can't move, move nothing
+---   [8] with_context: each MCP server the argv configures gets the session's context file as its
+---       env (Codex starts MCP servers with a filtered environment); one already given keeps its own
 ---
 --- The fake server stays a shell for as long as it runs, so its command line names its socket, as
 --- a real one's does (an `exec sleep` would put sleep's command line in its place).
@@ -207,6 +209,20 @@ do
   local c3, sv3 = server.move_grants({ "codex", "--weird", "x" }, { "--weird", "x" }, { "codex", "app-server" })
   ok("[7] an argument it doesn't know how to move: nothing moves",
     vim.deep_equal(c3, { "codex", "--weird", "x" }) and vim.deep_equal(sv3, { "codex", "app-server" }))
+end
+
+-- ── [8] the MCP servers get the session's context ──────────────────────────
+do
+  local argv = { "codex", "app-server", "--listen", "unix:///a/codex.sock",
+    "-c", 'mcp_servers.autodoc.command="/bin/autodoc"', "-c", 'mcp_servers.autodoc.args=["crew","mcp"]',
+    "-c", 'mcp_servers.other.command="/x"', "-c", 'mcp_servers.other.env.AUTODOC_CREW_CONTEXT="/own"' }
+  local out = server.with_context(argv, '/p/.auto-agents/crew/.autodoc-crew/s1')
+  ok("[8] each MCP server is given the session's context as its env (Codex filters theirs)",
+    vim.list_contains(out, 'mcp_servers.autodoc.env.AUTODOC_CREW_CONTEXT="/p/.auto-agents/crew/.autodoc-crew/s1"'), vim.inspect(out))
+  ok("[8] a server already given one keeps its own, nothing added twice",
+    #vim.tbl_filter(function(a) return a:find("mcp_servers.other.env", 1, true) ~= nil end, out) == 1
+      and #out == #argv + 2, vim.inspect(out))
+  ok("[8] no context: the argv as it was", vim.deep_equal(server.with_context(argv, nil), argv))
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
