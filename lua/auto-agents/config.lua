@@ -53,7 +53,6 @@ M.defaults = {
     provider = "auto",
     cwd = nil,
     cwd_provider = nil,
-    git_repo_cwd = true,
   },
   term = {
     -- Playground terminals T1..T4 — shared user/agent shells, separate

@@ -3470,8 +3470,16 @@ do
   ok("32: empty .git resolves to the absolute project root", root == project, root)
   ok("32: empty .git preserves the project config key",
     vim.fn.sha256(root or project):sub(1, 16) == key, root)
-  ok("32: terminal git_repo_cwd receives the absolute root",
-    cwd.resolve({ git_repo_cwd = true }, { cwd = project }) == project)
+  -- a slot starts in auto-core's project root (Johno, 2026-11-01), never the focused buffer's folder
+  local wt = require("auto-core.git.worktree")
+  local saved_ws = wt.get_workspace_root()
+  wt.set_workspace_root(project)
+  ok("32: a slot starts in auto-core's project root", cwd.resolve({}, { cwd = "/elsewhere" }) == project)
+  ok("32: … whatever the focused buffer's folder", cwd.resolve({ git_repo_cwd = true },
+    { cwd = project, file_dir = "term://~/x//1:/bin" }) == project)
+  ok("32: … and with no terminal config", cwd.resolve(nil, {}) == project)
+  ok("32: an explicit terminal.cwd still wins", cwd.resolve({ cwd = fixture }, {}) == fixture)
+  wt.set_workspace_root(saved_ws)
   local saved_key, saved_root, saved_source, saved_config =
     aa.state.session_project_key, aa.state.session_project_root, aa.state.config_source, aa.state.config
   aa.state.session_project_key, aa.state.session_project_root, aa.state.config_source, aa.state.config = nil, nil, "project", { kb = {} }

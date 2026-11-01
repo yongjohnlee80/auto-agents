@@ -635,7 +635,7 @@ function M.setup(opts)
   -- the recipients cut over to crew mail take it through the daemon (phase 4e); none by default
   local gw_ok, gw_err = pcall(function()
     local cut = M.state.config.crew and M.state.config.crew.cutover
-    require("auto-agents.crew_gateway").setup({ cutover = cut, cwd = vim.fn.getcwd() })
+    require("auto-agents.crew_gateway").setup({ cutover = cut, cwd = require("auto-agents.cwd").project_root() })
   end)
   if not gw_ok then
     require("auto-agents.log").warn("crew", "crew gateway setup failed: " .. tostring(gw_err))
@@ -653,7 +653,10 @@ end
 local function build_cwd_ctx(cfg)
   local current_buf = vim.api.nvim_get_current_buf()
   local current_file = vim.api.nvim_buf_get_name(current_buf)
-  local file_dir = (current_file ~= "") and vim.fn.fnamemodify(current_file, ":h") or nil
+  -- a file's folder only: a terminal's `term://…` name, a panel or a picker has none
+  local file_dir = (current_file ~= "" and vim.bo[current_buf].buftype == "")
+    and vim.fn.fnamemodify(current_file, ":h") or nil
+  if file_dir and vim.fn.isdirectory(file_dir) ~= 1 then file_dir = nil end
   return {
     cwd = vim.fn.getcwd(),
     file_dir = file_dir,
