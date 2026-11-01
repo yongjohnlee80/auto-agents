@@ -178,6 +178,34 @@ function M.move_grants(cmd, grant, server)
   return vim.list_slice(cmd, 1, n - g), out
 end
 
+---with_context gives each MCP server the server's argv configures (`-c mcp_servers.<name>.command=…`)
+---the session's context, context (its file's path, $AUTODOC_CREW_CONTEXT), as that server's env: Codex
+---starts its MCP servers with a filtered environment, so `autodoc crew mcp` would see neither the
+---variable nor, the server running in the agent's working folder, a ./.autodoc-crew/ that names one
+---(rows N, 2026-11-01: "no session context"). The path is no secret: the credential is in the 0600
+---file. A server already given the variable keeps its own.
+---@param argv string[]
+---@param context string|nil
+---@return string[]
+function M.with_context(argv, context)
+  if type(context) ~= "string" or context == "" then return argv end
+  local out, names, given = vim.list_slice(argv), {}, {}
+  for i = 1, #argv - 1 do
+    if argv[i] == "-c" then
+      local name = argv[i + 1]:match("^mcp_servers%.([%w_%-]+)%.command=")
+      if name and not vim.list_contains(names, name) then names[#names + 1] = name end
+      local has = argv[i + 1]:match("^mcp_servers%.([%w_%-]+)%.env%.AUTODOC_CREW_CONTEXT=")
+      if has then given[has] = true end
+    end
+  end
+  for _, name in ipairs(names) do
+    if not given[name] then
+      vim.list_extend(out, { "-c", ("mcp_servers.%s.env.AUTODOC_CREW_CONTEXT=%s"):format(name, toml_string(context)) })
+    end
+  end
+  return out
+end
+
 ---bind ties the server to the agent's terminal: when the server ends first, kill is called (the
 ---terminal's), so the CLI ends and its session with it. The CLI's end stops the server: the
 ---caller's on_exit calls stop.

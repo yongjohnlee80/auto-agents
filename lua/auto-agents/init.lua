@@ -1163,7 +1163,9 @@ local function ensure_main_slot_terminal(slot, winid)
   -- refused with nothing left running (auto-agents.crew_server)
   if crew_setup and #crew_setup.server > 0 then
     local swhy
-    server, swhy = require("auto-agents.crew_server").start(crew_setup.server, crew_setup.server_socket, agent_dir, env, cwd)
+    local cs = require("auto-agents.crew_server")
+    local argv = cs.with_context(crew_setup.server, crew_session and crew_session.context)
+    server, swhy = cs.start(argv, crew_setup.server_socket, agent_dir, env, cwd)
     if not server then
       require("auto-agents.crew").finish(crew_session, "start_failed")
       if editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
