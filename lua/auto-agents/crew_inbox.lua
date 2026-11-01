@@ -37,7 +37,8 @@ local REREAD = { request = true, report = true, answered = true, dismissed = tru
   attention = true, cleared = true }
 
 ---inert is s as one plain line: every control character (ESC, CR, LF, BEL, TAB …) a space, runs of
----space one, at most max bytes (cut on a character boundary, "..." marking the cut).
+---space one, at most max bytes ("..." marking the cut; a multibyte character at the cut is dropped
+---whole, never split, and so may the one before it).
 ---@param s any
 ---@param max integer|nil
 ---@return string
@@ -81,6 +82,10 @@ local function random_key()
   if ok and bytes then return (bytes:gsub(".", function(c) return ("%02x"):format(c:byte()) end)) end
   return ("%x%x"):format(os.time(), math.random(0, 0x7fffffff))
 end
+
+-- waits_on_user is whether an attention is an agent showing the user a prompt: a permission prompt,
+-- or blocked. The badge and the first snapshot's line count both.
+local function waits_on_user(a) return a.what == "permission" or a.what == "blocked" end
 
 local function sorted(set)
   local out = {}
@@ -274,7 +279,7 @@ function Inbox:baseline()
   local parts = {}
   local function add(k, one, many) if k > 0 then parts[#parts + 1] = ("%d %s"):format(k, k == 1 and one or many) end end
   local prompts = 0
-  for _, a in pairs(self.open.attention) do if a.what == "permission" or a.what == "blocked" then prompts = prompts + 1 end end
+  for _, a in pairs(self.open.attention) do if waits_on_user(a) then prompts = prompts + 1 end end
   add(n(self.open.requests), "request", "requests")
   add(prompts, "agent prompt", "agent prompts")
   add(n(self.open.reports), "report", "reports")
@@ -287,11 +292,12 @@ function Inbox:requests() return sorted(self.open.requests) end
 function Inbox:reports() return sorted(self.open.reports) end
 function Inbox:attention() return sorted(self.open.attention) end
 
----count is what waits on the user: the open requests and the agents on a permission prompt.
+---count is what waits on the user: the open requests and the agents on a prompt of theirs (a
+---permission prompt, or blocked), as the first snapshot's line counts them.
 function Inbox:count()
   local k = 0
   for _ in pairs(self.open.requests) do k = k + 1 end
-  for _, a in pairs(self.open.attention) do if a.what == "permission" then k = k + 1 end end
+  for _, a in pairs(self.open.attention) do if waits_on_user(a) then k = k + 1 end end
   return k
 end
 
