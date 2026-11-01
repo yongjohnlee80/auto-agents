@@ -5,6 +5,8 @@
 ---   [1] a started server is waited for until its socket is there, runs in a process group of its
 ---       own (never Neovim's), has its pid in the folder's pid file; stopping it ends its group and
 ---       removes the file; a second stop is nothing
+---  [1b] the server runs in the agent's working folder (Codex gives a thread its server's folder),
+---       its pid file the agent folder's
 ---   [2] a server that never listens is stopped and refused, its pid file removed, nothing left
 ---   [3] a server that ends before it listens is refused
 ---   [4] a stale server (its pid file, its command line naming the socket) is stopped before the
@@ -98,6 +100,18 @@ do
     server.stop(h)
     ok("[1] a second stop is nothing", true)
   end
+end
+
+-- ── [1b] the server runs in the agent's working folder ─────────────────────
+do
+  local dir, socket = folder()
+  local work = vim.fn.tempname()
+  vim.fn.mkdir(work, "p")
+  local h = server.start(fake(socket, true), socket, dir, {}, work)
+  local cwd = h and vim.uv.fs_readlink("/proc/" .. h.pid .. "/cwd")
+  ok("[1b] the server runs in the agent's working folder, its pid file in the agent's folder",
+    cwd == vim.uv.fs_realpath(work) and vim.uv.fs_stat(vim.fs.joinpath(dir, server.PID_FILE)) ~= nil, vim.inspect(cwd))
+  server.stop(h)
 end
 
 -- ── [2] ────────────────────────────────────────────────────────────────

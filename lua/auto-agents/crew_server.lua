@@ -63,14 +63,19 @@ local function environ(env)
   return out
 end
 
----start starts argv in dir with env (over Neovim's), a stale server of the folder stopped first,
----and waits for socket. It answers the server's handle, or nil and why with nothing left running.
+---start starts argv in cwd with env (over Neovim's), a stale server of the agent's folder dir
+---stopped first, and waits for socket. It answers the server's handle, or nil and why with nothing
+---left running. cwd is the agent's working folder (the user's project): Codex gives a thread its
+---server's folder, so a server in the agent's own folder would have the agent work there, and
+---codex-here, run in the working folder, find no thread of its (rows N, 2026-11-01). Its pid file is
+---the agent folder's.
 ---@param argv string[]
 ---@param socket string
 ---@param dir string the agent's folder
 ---@param env table<string, string>|nil
+---@param cwd string|nil the agent's working folder (dir when nil)
 ---@return table|nil handle, string|nil why
-function M.start(argv, socket, dir, env)
+function M.start(argv, socket, dir, env, cwd)
   if type(argv) ~= "table" or #argv == 0 or type(socket) ~= "string" or socket == "" then
     return nil, "the setup gave a server with no command or no socket"
   end
@@ -78,7 +83,7 @@ function M.start(argv, socket, dir, env)
   M.stop_stale(pid_file, socket)
   local h = { pid_file = pid_file, exited = false }
   local proc, pid = vim.uv.spawn(argv[1], {
-    args = vim.list_slice(argv, 2), cwd = dir, env = environ(env),
+    args = vim.list_slice(argv, 2), cwd = cwd or dir, env = environ(env),
     detached = true, -- its own session and process group: stopped whole, never Neovim's
   }, function(code)
     h.exited, h.code = true, code
