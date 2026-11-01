@@ -46,6 +46,19 @@ M.CODE_INSTANCE_REUSED = -32093
 M.CODE_BAD_CREDENTIAL = -32094
 M.CODE_INVALID_PARAMS = -32602
 
+-- The fallback (AutoDoc's "The fallback, exactly once"): mail the crew couldn't get received in
+-- time comes back to this Neovim, the recipient's host, as jobs. A daemon serves them from protocol
+-- FALLBACK_PROTOCOL; asking for them (mail.fallbacks) is what makes this host take them, so a
+-- daemon before it leaves its agents' mail queued, woken as before.
+M.FALLBACK_PROTOCOL = 42
+M.FALLBACK_WAIT_MS = 25000 -- one mail.fallbacks' longest wait (the daemon's own cap)
+-- NOTE: can't announce: a failed poll (a lost connection, a store failure) says nothing about when
+-- the daemon answers again, so it is asked again after a fixed gap.
+M.FALLBACK_RETRY_MS = 5000
+-- The file mailbox's sender for a fallback: the host. The crew sender is named in the text, with
+-- how to answer it, since a withdrawn delivery takes no reply.
+M.FALLBACK_FROM = "nvim"
+
 -- The session contexts' folder (core/crew's ContextDir), under <cwd>/.auto-agents/crew/: inside the
 -- workspace's gitignored .auto-agents/, never the project's own tree.
 M.CONTEXT_DIR = ".autodoc-crew"
@@ -695,6 +708,70 @@ function M.in_addressbook(codename)
   return g ~= nil and g.book ~= nil and codename ~= M.GATEWAY_CODENAME and g.book[codename] ~= nil
 end
 
+---deliver_job files a fallback job in its recipient's file mailbox, once: as
+---`inbox/<job id>.json` (written whole, by transport.send's temp-and-rename), from the host, its
+---router waking the agent. The file is the job's record: a job whose file is already there, in
+---any state (queued, claimed, done), was filed before, by this run or an earlier one, and is
+---reported delivered, never filed twice. Returns the outcome mail.fallback_done takes, and why
+---when it is "unknown" (nothing filed).
+---@param job table mail.fallbacks' job: id, codename, from, text, message
+---@param transport table auto-core.mailbox.transport (send, message_state)
+---@param mailbox_of fun(codename: string): string the codename's file mailbox id
+---@return string outcome, string|nil why
+function M.deliver_job(job, transport, mailbox_of)
+  local to = mailbox_of(job.codename)
+  if transport.message_state(to, job.id) then return "delivered" end
+  local msg = type(job.message) == "table" and job.message or {}
+  local subject = type(msg.subject) == "string" and msg.subject ~= "" and msg.subject or ("mail from " .. tostring(job.from))
+  local _, err = transport.send({ id = job.id, from = M.FALLBACK_FROM, to = to, kind = "message",
+    subject = subject, body = job.text })
+  if err then return "unknown", tostring(err) end
+  return "delivered"
+end
+
+---take_job delivers one job and reports it; the user is told of every outcome.
+local function take_job(st, job)
+  local outcome, why = M.deliver_job(job, st.transport(), st.mailbox_of)
+  if outcome == "delivered" then
+    st.notify(("%s couldn't be woken: AutoDoc put %s's message in its mailbox"):format(job.codename, tostring(job.from)),
+      vim.log.levels.INFO)
+  else
+    st.notify(("AutoDoc couldn't give %s the message from %s (%s), so send it there yourself:\n%s")
+      :format(job.codename, tostring(job.from), why or "?", tostring(job.text)), vim.log.levels.WARN)
+  end
+  -- a report the daemon doesn't take is answered again from the file when the job comes back
+  st.session.call("mail.fallback_done", { st.scope, st.run, st.epoch, job.id, job.lease, outcome }, function() end)
+end
+
+---takes_fallbacks is whether the daemon serves this host fallback jobs.
+local function takes_fallbacks(st)
+  local c = st.session and st.session.client and st.session.client()
+  if not c then return false end
+  local h = c.hello and c:hello() or {}
+  return (tonumber(h.protocol) or 0) >= M.FALLBACK_PROTOCOL and (not c.can or c:can("mail.fallbacks"))
+end
+
+---poll_fallbacks asks for the scope's jobs while claim attempt a and its epoch hold, delivering
+---each, and asks again once an answer is handled. A daemon that has no such verb, or an epoch
+---lost, ends it: the claim that follows starts it again.
+local function poll_fallbacks(st, a)
+  if not live(st) or st.attempt ~= a or st.status ~= "held" or not takes_fallbacks(st) then return end
+  local epoch = st.epoch
+  st.session.call("mail.fallbacks", { st.scope, st.run, epoch, M.FALLBACK_WAIT_MS }, function(res, err)
+    if not live(st) or st.attempt ~= a or st.epoch ~= epoch then return end
+    if err then
+      local c = code(err)
+      if c == M.CODE_METHOD_NOT_FOUND or c == M.CODE_STALE_EPOCH then return end
+      later(st, a, M.FALLBACK_RETRY_MS, function() poll_fallbacks(st, a) end)
+      return
+    end
+    for _, job in ipairs(type(res) == "table" and type(res.jobs) == "table" and res.jobs or {}) do
+      if type(job) == "table" and type(job.id) == "string" and type(job.codename) == "string" then take_job(st, job) end
+    end
+    later(st, a, 0, function() poll_fallbacks(st, a) end) -- off this answer: the next poll waits on the daemon
+  end)
+end
+
 local function renew_later(st, a)
   later(st, a, M.RENEW_MS, function()
     st.session.call("crew.renew", { st.scope, st.run, st.epoch }, function(_, err)
@@ -777,6 +854,7 @@ claim = function(st, lost)
     ensure_gateway(st)
     refresh_addressbook(st)
     renew_later(st, a)
+    poll_fallbacks(st, a)
   end)
 end
 
@@ -995,6 +1073,12 @@ function M.setup(opts)
     sessions = {},
     pending = {},
     owed = {},
+    -- the file mailbox, for the fallback's jobs: auto-core's transport, and a codename's mailbox id
+    transport = opts.transport and function() return opts.transport end
+      or function() return require("auto-core.mailbox.transport") end,
+    mailbox_of = opts.mailbox_of or function(codename)
+      return require("auto-core.mailbox.path").full_id("agent:" .. codename)
+    end,
   }
   _s = st
   local events = opts.events
