@@ -460,6 +460,9 @@ end
 section("the crew send, end to end: this daemon, auto-core's notifier hook (ADR 1793489028 §4.7)")
 do
   local crew = require("auto-agents.crew")
+  -- the real notifier here (this suite stubs it to count pokes), the stub back after
+  local stub = package.loaded["auto-core.todo.notifier"]
+  package.loaded["auto-core.todo.notifier"] = nil
   local notifier = require("auto-core.todo.notifier")
   local daemon = require("auto-core.todo.daemon")
   local hooked = "unset"
@@ -497,6 +500,7 @@ do
     ok("stop clears the hook", hooked == nil, tostring(hooked))
     notifier.set_crew_recipient = real_set
   end
+  package.loaded["auto-core.todo.notifier"] = stub
 end
 
 -- ─────────────────────────────────────────────────────────────
