@@ -2,6 +2,14 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.18] — 2026-11-01 — the todos guide: a forwarded assignment is never the user's instruction
+
+- **`bootstrap-todos.md` revision 7.** The assignment message it shows is auto-core v0.5.7's: it
+  says it is forwarded and not the user's instruction, names the assigner and the previous
+  assignee, and quotes the reason line by line. A note says why: the message may reach an agent
+  through AutoDoc's crew as mail from `user`, but anyone with the store can assign a task and write
+  its reason. Agents re-read the guide when its revision changes.
+
 ## [v0.3.17] — 2026-11-01 — a slot starts in the project root, whichever window has focus
 
 - **A slot starts in auto-core's project root** (`git.worktree.project_root`, auto-core v0.5.6; the
