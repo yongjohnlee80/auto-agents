@@ -951,6 +951,7 @@ function M.begin(opts)
   local st = _s
   if not st or st.status ~= "held" or not st.session then return nil, nil end
   if vim.in_fast_event() then return nil, "a crew session can't be registered from a fast event" end
+  if type(opts.cwd) ~= "string" or opts.cwd == "" then return nil, "the agent has no working directory" end
   local sess = st.session
   local c = sess.client and sess.client()
   if not c then return nil, nil end

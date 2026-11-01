@@ -324,7 +324,7 @@ Top-level lua `opts` is now small — just runtime settings:
     slot_rail     = "winbar",  -- winbar|vertical|off
     bottom_margin = 1,         -- TUI footer breathing room (overridden per-slot in TOML)
   },
-  terminal = { provider = "auto", git_repo_cwd = true },
+  terminal = { provider = "auto" },  -- a slot starts in auto-core's project root unless cwd / cwd_provider is set
 }
 ```
 

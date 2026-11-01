@@ -89,13 +89,32 @@ function M.git_root(start_dir)
   return nil
 end
 
----Resolve the effective working directory based on terminal config and context
+---project_root is the AutoVim project this Neovim serves, as auto-core answers it
+---(git.worktree.project_root, v0.5.6): the workspace root, else the active worktree, else
+---Neovim's cwd. An older auto-core is read through the same chain.
+---@return string
+function M.project_root()
+  local ok, wt = pcall(require, "auto-core.git.worktree")
+  if ok and type(wt) == "table" then
+    if type(wt.project_root) == "function" then return wt.project_root() end
+    local ws = wt.get_workspace_root and wt.get_workspace_root()
+    if type(ws) == "string" and ws ~= "" then return ws end
+    local active = wt.get_active and wt.get_active()
+    if type(active) == "string" and active ~= "" then return active end
+  end
+  return vim.fn.getcwd()
+end
+
+---Resolve the effective working directory: an explicit `cwd_provider` or `cwd`, else the
+---project auto-core serves, so an agent, its mailbox, its crew context and the todo store
+---agree on one folder whichever window has focus. `git_repo_cwd` is no longer read: it took
+---the focused buffer's folder, a terminal's `term://` name included.
 ---@param term_cfg AutoAgentsTerminalConfig
 ---@param ctx AutoAgentsCwdContext
----@return string|nil
+---@return string
 function M.resolve(term_cfg, ctx)
   if type(term_cfg) ~= "table" then
-    return nil
+    return M.project_root()
   end
 
   local provider = term_cfg.cwd_provider
@@ -114,15 +133,7 @@ function M.resolve(term_cfg, ctx)
     return static_cwd
   end
 
-  if term_cfg.git_repo_cwd then
-    local start_dir = ctx and (ctx.file_dir or ctx.cwd) or vim.fn.getcwd()
-    local root = M.git_root(start_dir)
-    if root then
-      return root
-    end
-  end
-
-  return nil
+  return M.project_root()
 end
 
 return M

@@ -29,7 +29,7 @@
 ---@field provider "auto"|"snacks"|"native"|"none"
 ---@field cwd string|nil
 ---@field cwd_provider (fun(ctx: AutoAgentsCwdContext): string|nil)|nil
----@field git_repo_cwd boolean
+---@field git_repo_cwd boolean|nil  -- deprecated, not read: a slot starts in auto-core's project root
 
 ---@class AutoAgentsCwdContext
 ---@field cwd string|nil
