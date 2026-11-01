@@ -248,6 +248,32 @@ local function serve_client(client)
   end)
 end
 
+-- held reports whether pid could still be serving its socket: alive, and a Neovim where the system
+-- says what a process runs (/proc on Linux). Elsewhere a live pid is taken to be one.
+local function held(pid)
+  local _, _, name = vim.uv.kill(pid, 0)
+  if name == "ESRCH" then return false end
+  local f = io.open(("/proc/%d/comm"):format(pid), "r")
+  if not f then return true end
+  local comm = f:read("*l") or ""
+  f:close()
+  return comm:match("^nvim") ~= nil
+end
+
+---sweep removes the sockets in dir that no process serves: a Neovim that was killed never ran
+---stop(), and its socket stays until a later pid of the same number starts one. A socket whose pid
+---is gone, or now runs something other than Neovim, is removed; this process's own is left to start.
+---@param dir string
+function M.sweep(dir)
+  local own = vim.uv.os_getpid()
+  for name, kind in vim.fs.dir(dir) do
+    local pid = tonumber(name:match("^editor%-(%d+)%.sock$"))
+    if pid and pid ~= own and kind == "socket" and not held(pid) then
+      vim.uv.fs_unlink(vim.fs.joinpath(dir, name))
+    end
+  end
+end
+
 ---start serves the socket. opts (tests): dir.
 ---@param opts table|nil
 ---@return string|nil path, string|nil err
@@ -261,6 +287,7 @@ function M.start(opts)
     or bit.band(st.mode, tonumber("077", 8)) ~= 0 then
     return nil, "no socket folder only this user can reach: " .. dir
   end
+  M.sweep(dir)
   local path = vim.fs.joinpath(dir, ("editor-%d.sock"):format(vim.uv.os_getpid()))
   vim.uv.fs_unlink(path) -- this pid's own, left by a process that held it before
   local server = vim.uv.new_pipe(false)
