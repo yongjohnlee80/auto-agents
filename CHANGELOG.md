@@ -2,7 +2,7 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
-## v0.3.16 — 2026-11-01 — a slot starts in the project root, whichever window has focus
+## [v0.3.16] — 2026-11-01 — a slot starts in the project root, whichever window has focus
 
 - **A slot starts in auto-core's project root** (`git.worktree.project_root`, auto-core v0.5.6; the
   same chain on an older auto-core), unless `terminal.cwd` or `cwd_provider` is set. Before, a slot
