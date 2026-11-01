@@ -16,7 +16,8 @@
 ---   [7]  peer text is one inert line: control characters (ESC, CR, LF) are spaces, the subject capped
 ---   [8]  a reply is inbox.reply(message, body, key); a retry of the same text reuses its key
 ---   [9]  a refused reply is said plainly; dismiss and a report's ack call their verbs
----   [10] a permission prompt is one WARN and counts; a focus for this Neovim's session raises it
+---   [10] a permission prompt is one WARN and counts, a blocked agent too; a focus for this Neovim's
+---        session raises it
 ---   [11] answers arriving in a fast event touch nothing until scheduled (no E5560)
 ---   [12] a failure asks again later, backing off; a refused or missing verb stops until reconnect
 ---   [13] the winbar segment is the count alone, clickable, nothing at 0
@@ -283,6 +284,11 @@ do
     vim.inspect(w.notes))
   w.answer("inbox.watch", changes(9, { { seq = 9, kind = "focus", ref = "s-mine" } }))
   ok("[10] a focus raises this Neovim's agent of that session", w.focused[1] == "s-mine", vim.inspect(w.focused))
+  local v = started({ request("r1") }, { { session = "s-noctis", codename = "noctis", owner = "autovim:alpha", kind = "blocked",
+    text = "which branch?" } })
+  local line = v.level(INFO)[1] or ""
+  ok("[10] a blocked agent counts in the badge as in the first snapshot's line",
+    v.x:count() == 2 and line:find("1 request", 1, true) and line:find("1 agent prompt", 1, true), vim.inspect({ v.x:count(), v.notes }))
 end
 
 do
