@@ -2,6 +2,31 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.19] — 2026-11-02 — Codex and agy agents from Neovim get their own folder, and MCP mail
+
+- **Each crew agent gets a folder of its own** (#26): `stdpath("state")/auto-agents/crew/<scope>/
+  <codename>`, mode 0700, passed to `autodoc crew setup` as `--agent-dir`. The setup is kept per
+  folder, and its files are written there (agy's `.agents/mcp_config.json`).
+- **A Codex agent from Neovim gets its own app-server and MCP mail**, with an AutoDoc whose `crew
+  setup` gives Codex a server (AutoDoc's canary). auto-agents runs that server as AutoDoc's window
+  does (`auto-agents.crew_server`):
+  - started before the CLI, in the agent's working folder and a process group of its own;
+  - the TUI attached with `--remote` once the server's socket is there;
+  - stopped with the CLI, its whole group; its end ends the CLI;
+  - a stale one, left by a Neovim that died, stopped at the next start.
+
+  Its directory grants (`--add-dir`, `-s workspace-write`) go to the server's config, since a TUI on
+  `--remote` refuses `--add-dir`. Its MCP servers are given the session's context, since Codex
+  starts them with a filtered environment. Its mail then goes over the crew MCP tools, with no
+  sandbox prompt per `autodoc` call.
+- **An agy agent from Neovim gets its folder and MCP mail.** Before, its setup refused for want of a
+  folder, and it had no crew mail.
+- **The setup's after steps run in the agent's working folder**, not Neovim's: codex-here finds the
+  TUI's thread by it.
+- With the release AutoDoc (no Codex server in its setup), a Codex agent starts exactly as with
+  v0.3.18: no server, no `--remote`, the grants on its command line, mail by the CLI. This was
+  checked live (crew harness rows N0, NG; N-A/B/S/K against AutoDoc's canary).
+
 ## [v0.3.18] — 2026-11-01 — the todos guide: a forwarded assignment is never the user's instruction
 
 - **`bootstrap-todos.md` revision 7.** The assignment message it shows is auto-core v0.5.7's: it
