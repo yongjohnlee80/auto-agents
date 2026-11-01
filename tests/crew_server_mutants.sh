@@ -51,6 +51,7 @@ mutants=(
   "$S|the writable roots not given the server|    vim.list_extend(out, { \"-c\", \"sandbox_workspace_write.writable_roots=[\" .. table.concat(items, \", \") .. \"]\" })|    local _ = items"
   "$S|the sandbox mode not given the server|  if mode then vim.list_extend(out, { \"-c\", \"sandbox_mode=\" .. toml_string(mode) }) end|"
   "$S|a quote in a path left unescaped|    if c == '\"' then return '\\\\\"' end|    if c == '\"' then return '\"' end"
+  "$S|the server in the agent's own folder, not its working one|    args = vim.list_slice(argv, 2), cwd = cwd or dir, env = environ(env),|    args = vim.list_slice(argv, 2), cwd = dir, env = environ(env),"
   "$C|--agent-dir never passed|  if type(agent_dir) == \"string\" and agent_dir ~= \"\" then vim.list_extend(argv, { \"--agent-dir\", agent_dir }) end|"
   "$C|the setup kept across folders|    mail_via or \"\", agent_dir or \"\" }, \"\\0\")|    mail_via or \"\" }, \"\\0\")"
   "$C|the server not kept|    server = list(s.server), server_socket|    server = {}, server_socket"
