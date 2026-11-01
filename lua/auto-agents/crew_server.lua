@@ -126,6 +126,53 @@ function M.stop(h)
   vim.uv.fs_unlink(h.pid_file)
 end
 
+---toml_string is s as a TOML basic string: its backslashes, quotes and control characters escaped,
+---nothing else (JSON's `\/`, which an encoder may write, is no TOML escape).
+---@param s string
+---@return string
+local function toml_string(s)
+  return '"' .. s:gsub('[\\"%c]', function(c)
+    if c == "\\" then return "\\\\" end
+    if c == '"' then return '\\"' end
+    return ("\\u%04X"):format(c:byte())
+  end) .. '"'
+end
+
+---move_grants moves an agent's directory grants (permissions' argv: `--add-dir <dir>` repeated, and
+---the `-s workspace-write` that makes them writable) from its command to its server's: a Codex TUI
+---attached with --remote refuses --add-dir ("configure additional workspace roots on the server",
+---codex-cli 0.163.0), so the server gets them as config overrides, sandbox_mode and
+---sandbox_workspace_write.writable_roots. cmd loses exactly grant, its last arguments as appended;
+---a cmd that doesn't end with them is left as it is, and so is the server.
+---@param cmd string[]
+---@param grant string[]
+---@param server string[]
+---@return string[] cmd, string[] server
+function M.move_grants(cmd, grant, server)
+  local n, g = #cmd, #grant
+  if g == 0 or n < g or not vim.deep_equal(vim.list_slice(cmd, n - g + 1, n), grant) then return cmd, server end
+  local dirs, mode = {}, nil
+  local i = 1
+  while i <= g do
+    if (grant[i] == "--add-dir") and grant[i + 1] then
+      dirs[#dirs + 1] = grant[i + 1]
+      i = i + 2
+    elseif (grant[i] == "-s" or grant[i] == "--sandbox") and grant[i + 1] then
+      mode = grant[i + 1]
+      i = i + 2
+    else
+      return cmd, server -- an argument this doesn't know how to move: nothing is moved
+    end
+  end
+  local out = vim.list_slice(server)
+  if mode then vim.list_extend(out, { "-c", "sandbox_mode=" .. toml_string(mode) }) end
+  if #dirs > 0 then
+    local items = vim.tbl_map(toml_string, dirs)
+    vim.list_extend(out, { "-c", "sandbox_workspace_write.writable_roots=[" .. table.concat(items, ", ") .. "]" })
+  end
+  return vim.list_slice(cmd, 1, n - g), out
+end
+
 ---bind ties the server to the agent's terminal: when the server ends first, kill is called (the
 ---terminal's), so the CLI ends and its session with it. The CLI's end stops the server: the
 ---caller's on_exit calls stop.
