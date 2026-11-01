@@ -37,7 +37,7 @@ mutants=(
   "crew_send_spec|$C|the hook never registered|    pcall(notifier.set_crew_recipient, M.crew_send)|    local _ = notifier"
   "crew_send_spec|$C|handed over counted not sent|  if c == M.CODE_HANDED_OVER then return true end|  if c == M.CODE_HANDED_OVER then return false end"
   "crew_send_spec|$C|a certain refusal retried|  if certain(c) then return false end|  if false then return false end"
-  "crew_send_spec|$C|an unknown answer counted refused|  return \"retry\"\nend\n\n---stop|  return false\nend\n\n---stop"
+  "crew_send_spec|$C|an unknown answer counted refused|  return \"retry\"\nend\n\n---_run_for_tests|  return false\nend\n\n---_run_for_tests"
   "crew_send_spec|$C|unscoped sent by the bare name|  if type(how) == \"table\" and how.unscoped then|  if false then"
   "crew_send_spec|$C|two live profiles: one picked|    if #found ~= 1 then return false end|    if #found == 0 then return false end"
   "crew_send_spec|$C|an offline profile counted live|e.codename == name and e.presence == \"live\" and|e.codename == name and"
