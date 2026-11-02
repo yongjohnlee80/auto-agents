@@ -103,8 +103,9 @@ end
 ---proc_ref is this process's reference, "<boot id>:<pid ns>:<pid>:<start time>", as core/crew's
 ---ProcRef makes it; "" when /proc can't say (not Linux, or a read fails): then the lease decides.
 ---@param root string|nil the /proc root (tests)
+---@param pid integer|nil another process's (default: this one's)
 ---@return string
-function M.proc_ref(root)
+function M.proc_ref(root, pid)
   root = root or "/proc"
   local function read(p)
     local f = io.open(p, "r")
@@ -115,7 +116,7 @@ function M.proc_ref(root)
   end
   local boot = read(root .. "/sys/kernel/random/boot_id")
   local ns = vim.uv.fs_readlink(root .. "/self/ns/pid")
-  local pid = vim.uv.os_getpid()
+  pid = pid or vim.uv.os_getpid()
   local stat = read(root .. "/" .. pid .. "/stat")
   if not boot or not ns or not stat then return "" end
   boot = vim.trim(boot)
@@ -360,15 +361,139 @@ function M.context_folder(cwd)
   return vim.fs.joinpath(cwd, ".auto-agents", "crew")
 end
 
+---incarnation names this Neovim's run: its pid and the first 12 hex digits of its run token. Every
+---crew path of a host sits under its scope and its incarnation, so two Neovims (another holding the
+---same scope, another scope in the same folder, a crashed one and its successor) never share one.
+---@return string
+local _incarnation
+function M.incarnation()
+  _incarnation = _incarnation or ("%d-%s"):format(vim.uv.os_getpid(), M.run_token():sub(1, 12))
+  return _incarnation
+end
+
+local function scope_file(scope)
+  return (tostring(scope or "_"):gsub("[^%w%._%-]", "_"))
+end
+
+---host_path is this incarnation's folder for scope under base: where its slots' paths go.
+---@param base string
+---@param scope string|nil
+---@return string
+function M.host_path(base, scope)
+  return vim.fs.joinpath(base, scope_file(scope), M.incarnation())
+end
+
+---private_dir makes dir (0700, with its parents) and checks dir itself: a real directory, never a
+---link, of this user, private. One of this user's with broader bits is narrowed to 0700; anything
+---else is refused, naming it.
+---@param dir string
+---@return string|nil dir, string|nil why
+function M.private_dir(dir)
+  local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
+  if not made then return nil, "could not make " .. dir .. ": " .. tostring(merr) end
+  local st = vim.uv.fs_lstat(dir)
+  if not st or st.type ~= "directory" then return nil, dir .. " isn't a directory of its own (a link, or another file)" end
+  if st.uid ~= vim.uv.getuid() then return nil, dir .. " belongs to another user" end
+  if bit.band(st.mode, tonumber("077", 8)) ~= 0 and not vim.uv.fs_chmod(dir, tonumber("700", 8)) then
+    return nil, "could not make " .. dir .. " private"
+  end
+  return dir, nil
+end
+
+-- write_private writes body to path through an exclusive 0600 temporary file renamed over it: a
+-- reader sees the whole file or none, a link at path is replaced (never followed), and an older
+-- file's broader mode never stays.
+local function write_private(path, body)
+  local tmp = vim.fs.joinpath(vim.fs.dirname(path), "." .. vim.fs.basename(path) .. "." .. M.run_token():sub(1, 12))
+  vim.uv.fs_unlink(tmp) -- a temporary file a crash of this very run left
+  local fd, oerr = vim.uv.fs_open(tmp, "wx", tonumber("600", 8))
+  if not fd then return oerr end
+  local _, werr = vim.uv.fs_write(fd, body)
+  vim.uv.fs_close(fd)
+  if not werr then
+    local ok, rerr = vim.uv.fs_rename(tmp, path)
+    if ok then return nil end
+    werr = rerr
+  end
+  vim.uv.fs_unlink(tmp)
+  return tostring(werr)
+end
+
+-- owner_dead reports whether the incarnation folder dir's owner is provably gone: its owner file
+-- names a pid that runs no more, or runs as another process (another start) now. A folder whose
+-- owner can't be read is never proven gone.
+local function owner_dead(dir, proc_root)
+  local f = io.open(vim.fs.joinpath(dir, "owner"), "r")
+  if not f then return false end
+  local body = f:read("*a")
+  f:close()
+  local pid, ref = body:match("^(%d+) (%S+)")
+  pid = tonumber(pid)
+  if not pid or ref == "" or pid == vim.uv.os_getpid() then return false end
+  if not vim.uv.fs_stat((proc_root or "/proc") .. "/" .. pid) then return true end
+  local now = M.proc_ref(proc_root, pid)
+  return now ~= "" and now ~= ref
+end
+
+local _host_dirs = {} -- this run's incarnation folders, made and swept once each
+
+---ensure_host_dir makes this incarnation's folder dir (host_path) private, writes its owner file
+---(this process's pid and reference), and, the first time, removes every sibling incarnation folder
+---whose owner is provably gone (owner_dead): a crashed run's. Another live host's is never touched.
+---@param dir string
+---@param proc_root string|nil the /proc root (tests)
+---@return string|nil dir, string|nil why
+function M.ensure_host_dir(dir, proc_root)
+  if _host_dirs[dir] then return dir, nil end
+  local parent = vim.fs.dirname(dir)
+  local ok, why = M.private_dir(parent)
+  if ok then ok, why = M.private_dir(dir) end
+  if not ok then return nil, why end
+  why = write_private(vim.fs.joinpath(dir, "owner"), ("%d %s\n"):format(vim.uv.os_getpid(), M.proc_ref(proc_root)))
+  if why then return nil, "could not write the owner of " .. dir .. ": " .. why end
+  for name, kind in vim.fs.dir(parent) do
+    local sib = vim.fs.joinpath(parent, name)
+    if kind == "directory" and sib ~= dir and name:match("^%d+%-%x+$") then
+      local st = vim.uv.fs_lstat(sib)
+      if st and st.type == "directory" and st.uid == vim.uv.getuid() and owner_dead(sib, proc_root) then
+        vim.fn.delete(sib, "rf")
+      end
+    end
+  end
+  _host_dirs[dir] = true
+  return dir, nil
+end
+
+---remove_host_dirs removes this run's incarnation folders: the host is going.
+function M.remove_host_dirs()
+  for dir in pairs(_host_dirs) do vim.fn.delete(dir, "rf") end
+  _host_dirs = {}
+end
+
+---_set_denied sets the claim's busy refusal (a test's).
+---@param v boolean
+function M._set_denied(v)
+  if _s then _s.denied = v end
+end
+
+---scope_denied reports whether this Neovim's claim was refused because another live Neovim holds
+---the scope: then nothing crew-side is written here (no folder, setup file, credential or server).
+---@return boolean
+function M.scope_denied()
+  return _s ~= nil and _s.denied == true
+end
+
 ---context_path is the context file of the agent codename started in cwd: one path for the slot's
----whole life, named in its environment ($AUTODOC_CREW_CONTEXT) when it starts, before any session
----exists. Each registration of the slot writes its session's context there (begin, the join at a
----claim); between them it is absent, so `autodoc crew` answers its usual "no session context".
+---whole life in this Neovim, under its scope and incarnation (host_path), named in its environment
+---($AUTODOC_CREW_CONTEXT) when it starts, before any session exists. Each registration of the slot
+---writes its session's context there (begin, the join at a claim); between them it is absent, so
+---`autodoc crew` answers its usual "no session context". Nothing is made here.
 ---@param cwd string
 ---@param codename string
 ---@return string
 function M.context_path(cwd, codename)
-  return vim.fs.joinpath(M.context_folder(cwd), M.CONTEXT_DIR, "slot-" .. tostring(codename))
+  return vim.fs.joinpath(M.host_path(vim.fs.joinpath(M.context_folder(cwd), M.CONTEXT_DIR), M.held() or M.scope()),
+    "slot-" .. tostring(codename))
 end
 
 -- a session id names its context's file: a plain file name, never a dot file
@@ -390,32 +515,32 @@ local function plain_name(session)
   return type(session) == "string" and session ~= "" and session:sub(1, 1) ~= "." and not session:find("[/\\]")
 end
 
--- AGENT_ROOT holds each crew agent's own folder: <scope, as a file name>/<codename>.
+-- AGENT_ROOT holds each crew agent's own folder: <scope, as a file name>/<incarnation>/<codename>.
 M.AGENT_ROOT = vim.fs.joinpath(vim.fn.stdpath("state"), "auto-agents", "crew")
 
----agent_folder is the agent codename's own folder in the scope held, made (0700): what `crew setup
------agent-dir` writes its kind's files for (agy's MCP config) and where a Codex agent's own app-server
----binds its socket. auto-agents' own, never AutoDoc's window folders: two hosts never share one. The
----scope is this Neovim's, held or not yet (a slot spawned before the claim gets its folder). nil and
----why with no crew set up, a codename that isn't a plain name, or a folder that can't be made.
+---agent_folder is the agent codename's own folder, made private: what `crew setup --agent-dir`
+---writes its kind's files for (agy's MCP config), where a Codex agent's own app-server binds its
+---socket and where its editor credential is written. It is this Neovim's alone (under its scope and
+---incarnation), held or not yet (a slot spawned before the claim gets its folder); none while
+---another live Neovim holds the scope. nil and why with no crew set up, the scope held elsewhere, a
+---codename that isn't a plain name, or a folder that can't be made private.
 ---@param codename string
 ---@param root string|nil AGENT_ROOT, a test's own
 ---@return string|nil folder, string|nil why
 function M.agent_folder(codename, root)
   local scope = M.held() or M.scope()
   if not scope then return nil, "no crew scope" end
+  if M.scope_denied() then return nil, "another live Neovim holds the crew scope " .. scope end
   if not plain_name(codename) then return nil, "codename " .. tostring(codename) .. " isn't a plain name" end
-  local dir = vim.fs.joinpath(root or M.AGENT_ROOT, (scope:gsub("[^%w%._%-]", "_")), codename)
-  local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
-  if not made or vim.fn.isdirectory(dir) == 0 then
-    return nil, "could not make " .. dir .. (made and "" or (": " .. tostring(merr)))
-  end
-  return dir, nil
+  local host, why = M.ensure_host_dir(M.host_path(root or M.AGENT_ROOT, scope))
+  if not host then return nil, why end
+  return M.private_dir(vim.fs.joinpath(host, codename))
 end
 
 ---write_folder_files writes a setup's folder_files ({path, content}, each path relative to dir)
----into dir, 0600, their folders 0700: refused, and nothing more written, for a path that is
----absolute or climbs out of dir. It answers nil, or why.
+---into dir, each through an exclusive 0600 temporary file renamed over it (never through a link,
+---never keeping an older mode), their folders private: refused, and nothing more written, for a
+---path that is absolute or climbs out of dir. It answers nil, or why.
 ---@param dir string
 ---@param files table
 ---@return string|nil why
@@ -426,50 +551,45 @@ function M.write_folder_files(dir, files)
       return "a setup file's path " .. vim.inspect(rel) .. " isn't inside the agent's folder"
     end
     local path = vim.fs.joinpath(dir, rel)
-    local made = pcall(vim.fn.mkdir, vim.fs.dirname(path), "p", tonumber("700", 8))
-    if not made then return "could not make the folder of " .. path end
-    local fd, oerr = vim.uv.fs_open(path, "w", tonumber("600", 8))
-    if not fd then return tostring(oerr) end
-    local _, werr = vim.uv.fs_write(fd, type(f.content) == "string" and f.content or "")
-    vim.uv.fs_close(fd)
-    if werr then return tostring(werr) end
+    local folder = vim.fs.dirname(path)
+    if folder ~= dir then
+      local ok, why = M.private_dir(folder)
+      if not ok then return why end
+    end
+    local why = write_private(path, type(f.content) == "string" and f.content or "")
+    if why then return why end
   end
   return nil
 end
 
----write_context writes c as its session's context file in folder (core/crew's WriteContext): mode
----0600, through a dot file renamed over it, so a reader sees the whole context or none. The file is
----name (a slot's, context_path), else the session's id. It answers the file's path, which the agent
----is told ($AUTODOC_CREW_CONTEXT).
+---write_context writes c as its session's context file (core/crew's WriteContext): mode 0600,
+---through a dot file renamed over it, so a reader sees the whole context or none. The file is name
+---in dir (a slot's, context_path: this incarnation's folder), else the session's id in folder's
+---.autodoc-crew. Its folder is made private first. It answers the file's path, which the agent is
+---told ($AUTODOC_CREW_CONTEXT).
 ---@param folder string
 ---@param c { store: string, socket: string, scope: string, profile: string, session: string, credential: string, kind: string }
 ---@param name string|nil
+---@param dir string|nil a slot's folder (the context_path's)
 ---@return string|nil path, string|nil err
-function M.write_context(folder, c, name)
+function M.write_context(folder, c, name, dir)
   if not plain_name(c.session) then return nil, "session id " .. tostring(c.session) end
   name = name or c.session
   if not plain_name(name) then return nil, "context file " .. tostring(name) end
-  local dir = vim.fs.joinpath(folder, M.CONTEXT_DIR)
-  -- mkdir raises (E739) when it can't make the folder: an error here, never a raise mid-spawn
-  local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
-  if not made or vim.fn.isdirectory(dir) == 0 then
-    return nil, "could not make " .. dir .. (made and "" or (": " .. tostring(merr)))
+  local ok, why
+  if dir then
+    ok, why = M.ensure_host_dir(dir) -- a slot's file: this incarnation's folder
+  else
+    dir = vim.fs.joinpath(folder, M.CONTEXT_DIR)
+    ok, why = M.private_dir(dir)
   end
+  if not ok then return nil, why end
   local body = vim.json.encode({ store = c.store, socket = c.socket, scope = c.scope, profile = c.profile,
     session = c.session, credential = c.credential, kind = c.kind })
-  local tmp = vim.fs.joinpath(dir, "." .. name .. "." .. M.run_token():sub(1, 12))
-  local fd, oerr = vim.uv.fs_open(tmp, "wx", tonumber("600", 8))
-  if not fd then return nil, oerr end
-  local _, werr = vim.uv.fs_write(fd, body)
-  vim.uv.fs_close(fd)
   local path = vim.fs.joinpath(dir, name)
-  if not werr then
-    local ok, rerr = vim.uv.fs_rename(tmp, path)
-    if ok then return path, nil end
-    werr = rerr
-  end
-  vim.uv.fs_unlink(tmp)
-  return nil, werr
+  local werr = write_private(path, body)
+  if werr then return nil, werr end
+  return path, nil
 end
 
 ---remove_context removes session's context file from folder once the session has ended, so no
@@ -807,6 +927,7 @@ claim = function(st, lost)
         return
       end
       if c == M.CODE_SCOPE_BUSY then
+        st.denied = true -- another live Neovim holds it: nothing crew-side is written here
         if not st.busy_said then
           st.busy_said = true
           st.notify(("Crew scope %s is held by another live Neovim: this one's agents stay unregistered until it's free."):format(st.scope),
@@ -827,7 +948,7 @@ claim = function(st, lost)
       later(st, r, M.RENEW_MS, function() claim(st, before) end)
       return
     end
-    st.busy_said = false
+    st.busy_said, st.denied = false, false
     if before and epoch ~= before then
       st.notify(("This Neovim lost its crew scope %s while away and claimed it again (epoch %d): agents registered before must register again.")
         :format(st.scope, epoch), vim.log.levels.WARN)
@@ -857,6 +978,7 @@ function M.release()
   -- the agents stop with this Neovim: their contexts go now, and the release ends their sessions
   for _, s in pairs(st.sessions) do remove_session_file(s) end
   st.sessions, st.pending, st.owed, st.handles = {}, {}, {}, {}
+  M.remove_host_dirs() -- this run's own folders go with it; a crashed run's are swept by the next
   if not epoch then return end
   local done = false
   st.session.call("crew.release", { st.scope, st.run, epoch }, function() done = true end)
@@ -975,7 +1097,8 @@ function M.begin(opts)
     return nil, "the crew scope changed while the session was registered"
   end
   local path, werr = M.write_context(folder, { store = store, socket = socket, scope = s.scope, profile = s.profile,
-    session = s.id, credential = s.id .. "." .. r.secret, kind = kind }, opts.path and vim.fs.basename(opts.path) or nil)
+    session = s.id, credential = s.id .. "." .. r.secret, kind = kind }, opts.path and vim.fs.basename(opts.path) or nil,
+    opts.path and vim.fs.dirname(opts.path) or nil)
   r.secret = nil -- kept no longer than it is needed
   if not path then
     end_session(st, s, "start_failed")
@@ -1087,7 +1210,7 @@ local function rejoin(st, h)
       return
     end
     local path, werr = M.write_context(folder, { store = store, socket = socket, scope = s.scope, profile = s.profile,
-      session = s.id, credential = s.id .. "." .. r.secret, kind = h.kind }, vim.fs.basename(h.path))
+      session = s.id, credential = s.id .. "." .. r.secret, kind = h.kind }, vim.fs.basename(h.path), vim.fs.dirname(h.path))
     r.secret = nil
     if not path then
       end_session(st, s, "start_failed")

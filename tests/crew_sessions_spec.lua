@@ -883,7 +883,7 @@ do
   crew.agent_setup("codex", "/opt/autodoc", "codex", { PATH = "/p" }, runner(answer), "mcp", "/a")
   ok("[20] the same folder again asks nothing", #calls == 2)
 
-  -- agent_folder: <root>/<scope as a file name>/<codename>, 0700, only with a scope held
+  -- agent_folder: <root>/<scope as a file name>/<incarnation>/<codename>, 0700, only with a scope
   local held, scope, root = crew.held, crew.scope, vim.fn.tempname()
   crew.held = function() return nil, nil end
   crew.scope = function() return nil end
@@ -892,13 +892,13 @@ do
   crew.scope = function() return "autodoc:pre" end
   local pre = crew.agent_folder("cx", root)
   ok("[20] a scope not yet held: the folder all the same (a slot spawned before the claim)",
-    pre == vim.fs.joinpath(root, "autodoc_pre", "cx"), vim.inspect(pre))
+    pre == vim.fs.joinpath(root, "autodoc_pre", crew.incarnation(), "cx"), vim.inspect(pre))
   crew.scope = scope
   crew.held = function() return "autodoc:abc/../x", 3 end
   local dir = crew.agent_folder("cx", root)
   local st = dir and vim.uv.fs_stat(dir)
-  ok("[20] the folder is the scope's (a file name: no / or ..) and the codename's, made 0700",
-    dir == vim.fs.joinpath(root, "autodoc_abc_.._x", "cx") and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("700", 8),
+  ok("[20] the folder is the scope's (a file name: no / or ..), this run's and the codename's, made 0700",
+    dir == vim.fs.joinpath(root, "autodoc_abc_.._x", crew.incarnation(), "cx") and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("700", 8),
     vim.inspect({ dir, st and st.mode }))
   ok("[20] a codename that isn't a plain name gets none", crew.agent_folder("../cx", root) == nil)
   crew.held = held
@@ -1037,6 +1037,94 @@ do -- a registration refused while the scope is held: asked again at a renewal, 
     vim.inspect({ h.session, w.logs }))
   ok("[21] the waiting slot's registration is its own: never replayed by a renewal and ended",
     #w.of("crew.exit") == 0, vim.inspect(w.of("crew.exit")))
+  crew.stop()
+end
+
+-- ── [23] every crew path is this Neovim's own (its scope and its incarnation) ─────
+
+do
+  local w = new_world()
+  local cwd, root = tmpcwd(), vim.fn.tempname()
+  local mine = crew.incarnation()
+  local reg = { codename = "cx", kind = "codex", cwd = cwd, path = crew.context_path(cwd, "cx") }
+  local h = crew.begin(reg)
+  local my_dir = crew.agent_folder("cx", root)
+  ok("[23] this host's context and folder are under its scope and incarnation",
+    h and vim.startswith(reg.path, vim.fs.joinpath(cwd, ".auto-agents", "crew", ".autodoc-crew", "autovim_alpha", mine) .. "/")
+      and read_json(reg.path) and my_dir == vim.fs.joinpath(root, "autovim_alpha", mine, "cx"), vim.inspect({ reg.path, my_dir }))
+  -- another Neovim (another incarnation) of the same scope and cwd, its claim refused as busy
+  local real = crew.incarnation
+  crew.incarnation = function() return "999999-0123456789ab" end
+  local other_path = crew.context_path(cwd, "cx")
+  ok("[23] another host's slot of the same name has its own context path, absent: nothing of this host's to read",
+    other_path ~= reg.path and vim.uv.fs_stat(other_path) == nil, other_path)
+  crew._set_denied(true)
+  local denied_dir, denied_why = crew.agent_folder("cx", root)
+  ok("[23] a host denied the scope gets no folder (no setup file, credential or server), and says why",
+    denied_dir == nil and denied_why and denied_why:find("another live Neovim", 1, true), tostring(denied_why))
+  crew._set_denied(false)
+  crew.incarnation = real
+  local held = crew.held
+  crew.held = function() return "autovim:beta", 5 end
+  ok("[23] another scope in the same cwd: another context path", crew.context_path(cwd, "cx") ~= reg.path)
+  crew.held = held
+  ok("[23] this host's context and token folder are untouched by the others", read_json(reg.path) and vim.uv.fs_stat(my_dir) ~= nil)
+  crew.finish(h, "exit")
+  crew.stop()
+end
+
+do -- the sweep: a crashed run's incarnation folder goes; another live host's stays
+  new_world()
+  local root = vim.fn.tempname()
+  local parent = vim.fs.joinpath(root, "autovim_alpha")
+  local function sibling(name, owner)
+    local d = vim.fs.joinpath(parent, name)
+    vim.fn.mkdir(d, "p", tonumber("700", 8))
+    if owner then vim.fn.writefile({ owner }, vim.fs.joinpath(d, "owner")) end
+    vim.fn.writefile({ "x" }, vim.fs.joinpath(d, "leftover"))
+    return d
+  end
+  local dead = sibling("4194301-aaaaaaaaaaaa", "4194301 boot:1:4194301:1") -- no such pid
+  local ppid = vim.uv.os_getppid()
+  local live = sibling(ppid .. "-bbbbbbbbbbbb", ppid .. " " .. crew.proc_ref(nil, ppid))
+  local reused = sibling(ppid .. "-cccccccccccc", ppid .. " boot:1:" .. ppid .. ":1") -- the pid runs as another process now
+  local unknown = sibling("4194302-dddddddddddd", nil) -- no owner file: never proven gone
+  local dir = crew.agent_folder("cx", root)
+  ok("[23] this run's folder is made, with its owner file", dir and vim.uv.fs_stat(vim.fs.joinpath(vim.fs.dirname(dir), "owner")) ~= nil)
+  ok("[23] a crashed run's folder (its pid gone) is swept", vim.uv.fs_stat(dead) == nil)
+  ok("[23] one whose pid runs as another process now is swept", vim.uv.fs_stat(reused) == nil)
+  ok("[23] another live host's folder is kept", vim.uv.fs_stat(live) ~= nil)
+  ok("[23] one whose owner can't be read is kept", vim.uv.fs_stat(unknown) ~= nil)
+  crew.stop()
+end
+
+do -- F4: an existing folder or file is made private, or refused; never followed through a link
+  new_world()
+  local root = vim.fn.tempname()
+  local host = crew.host_path(root, "autovim:alpha")
+  vim.fn.mkdir(host, "p", tonumber("755", 8))
+  vim.uv.fs_chmod(host, tonumber("755", 8))
+  local dir = crew.agent_folder("cx", root)
+  local hst = vim.uv.fs_stat(host)
+  ok("[23] an existing broad folder of this user's is narrowed to 0700",
+    dir and hst and bit.band(hst.mode, tonumber("777", 8)) == tonumber("700", 8), vim.inspect(hst and hst.mode))
+  local target = vim.fn.tempname()
+  vim.fn.writefile({ "keep" }, target)
+  vim.uv.fs_symlink(target, vim.fs.joinpath(dir, "linked.json"))
+  local open = vim.fs.joinpath(dir, "open.json")
+  vim.fn.writefile({ "old" }, open)
+  vim.uv.fs_chmod(open, tonumber("644", 8))
+  local why = crew.write_folder_files(dir, { { path = "linked.json", content = "new" }, { path = "open.json", content = "new" } })
+  local lst, ost = vim.uv.fs_lstat(vim.fs.joinpath(dir, "linked.json")), vim.uv.fs_stat(open)
+  ok("[23] a link at a setup file's path is replaced, never written through",
+    why == nil and lst and lst.type == "file" and vim.fn.readfile(target)[1] == "keep", vim.inspect({ why, lst and lst.type }))
+  ok("[23] an existing 0644 setup file is replaced 0600",
+    ost and bit.band(ost.mode, tonumber("777", 8)) == tonumber("600", 8) and vim.fn.readfile(open)[1] == "new", vim.inspect(ost and ost.mode))
+  local elsewhere = vim.fn.tempname()
+  vim.fn.mkdir(elsewhere, "p")
+  vim.uv.fs_symlink(elsewhere, vim.fs.joinpath(dir, "sub"))
+  ok("[23] a link in place of a folder is refused, naming it",
+    (crew.write_folder_files(dir, { { path = "sub/x.json", content = "x" } }) or ""):find("isn't a directory of its own", 1, true) ~= nil)
   crew.stop()
 end
 

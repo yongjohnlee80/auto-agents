@@ -891,7 +891,9 @@ local function ensure_main_slot_terminal(slot, winid)
     -- answered joins at the claim (crew.defer) with nothing to restart
     local setup, setup_why, older
     local ctx_path = crew.context_path(cwd, spec.name)
-    if crew.scope() then
+    -- another live Neovim holding the scope: nothing crew-side here (no folder, setup file,
+    -- credential or server); the slot's context stays this host's own, absent until it joins
+    if crew.scope() and not crew.scope_denied() then
       local dir_why
       agent_dir, dir_why = crew.agent_folder(spec.name)
       if not agent_dir then logger.warn("crew", spec.name .. " has no folder of its own: " .. tostring(dir_why)) end
