@@ -258,11 +258,11 @@ local function render_block(spec, kb, crew)
     "",
     "Every message to you, from the user or a peer, goes through AutoDoc's",
     "daemon (its crew mail); there is no file mailbox. When",
-    "`$AUTODOC_CREW_CONTEXT` is set (your crew session), read and send mail",
-    "as the daemon's guide below says. If it isn't set (you started while",
-    "the daemon was away), or `autodoc crew whoami` fails or says the",
-    "context doesn't match, tell the user: mail can't reach you until",
-    "you're restarted with the daemon up.",
+    "`autodoc crew whoami` answers (your crew session), read and send mail",
+    "as the daemon's guide below says. If it says there is no session",
+    "context, you started before AutoDoc's daemon answered: Neovim joins",
+    "you to the crew as soon as it does, so ask again in a minute. If it",
+    "still fails, or says the context doesn't match, tell the user.",
     "",
   })
   if crew.guide then

@@ -876,19 +876,32 @@ local function ensure_main_slot_terminal(slot, winid)
     local kind, bin = crew.crew_kind(spec.kind), crew.autodoc_binary()
     -- AutoDoc's setup for the agent first (ADR 1793271500 r15 P2): its prompts go into the
     -- registration; asked under the agent's own environment, never with it in argv
+    -- wired whether or not the scope is held yet (row 20): the setup is AutoDoc's local answer, and the
+    -- context file's path is the slot's for its whole life, so a slot started before the daemon
+    -- answered joins at the claim (crew.defer) with nothing to restart
     local setup, setup_why, older
-    if crew.held() then
+    local ctx_path = crew.context_path(cwd, spec.name)
+    if crew.scope() then
       local dir_why
       agent_dir, dir_why = crew.agent_folder(spec.name)
       if not agent_dir then logger.warn("crew", spec.name .. " has no folder of its own: " .. tostring(dir_why)) end
       setup, setup_why, older = crew.agent_setup(kind, bin, type(spec.cmd) == "table" and spec.cmd[1] or nil, env, nil,
         crew.mail_via_offered() and "mcp" or nil, agent_dir)
     end
-    local ok, handle, why = pcall(function()
-      return crew.begin({ codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
-        mail_via = setup ~= nil and setup.mail_via or nil })
-    end)
+    local reg = { codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
+      mail_via = setup ~= nil and setup.mail_via or nil, path = ctx_path }
+    local ok, handle, why = pcall(function() return crew.begin(reg) end)
     M.state.slot_spawning[slot] = nil
+    if ok and not handle then
+      -- no session now: the slot starts wired all the same, and joins at the next claim; one
+      -- notice names it, and its join is logged
+      handle = crew.defer(reg)
+      if handle then
+        vim.notify(("%s starts before AutoDoc's crew answers%s: it joins once the daemon does."):format(spec.name,
+          why and (" (" .. why .. ")") or ""), vim.log.levels.WARN, { title = "auto-agents" })
+        why = nil
+      end
+    end
     if not ok then
       logger.warn("crew", "crew session for " .. spec.name .. " failed: " .. tostring(handle))
     elseif handle then
@@ -917,7 +930,13 @@ local function ensure_main_slot_terminal(slot, winid)
         for _, n in ipairs(setup.notices) do
           vim.notify(("%s: %s"):format(spec.name, n), vim.log.levels.WARN, { title = "auto-agents" })
         end
-        crew_session.after = crew.after_argv(setup, bin, os.time() - 2) -- run once it has started
+        crew_session.after = crew.after_argv(setup, bin, os.time() - 2) -- run once it has started and has a session
+        -- agy's launch prompt, typed once at its join when its bridge never registered (crew.defer)
+        if kind == "agy" then
+          for i, a in ipairs(setup.argv) do
+            if a == "-i" and type(setup.argv[i + 1]) == "string" then crew_session.agy_prompt = setup.argv[i + 1] end
+          end
+        end
         if agent_dir and #setup.folder_files > 0 then -- its kind's files in its own folder (agy's MCP config)
           local fwhy = crew.write_folder_files(agent_dir, setup.folder_files)
           if fwhy then
@@ -1039,11 +1058,9 @@ local function ensure_main_slot_terminal(slot, winid)
   require("auto-agents.crew_server").bind(server, function() term:kill() end)
   -- the setup's steps once the agent has started (a Codex agent's registration), each detached under
   -- its environment, its session's context included, in the agent's working folder (codex-here finds
-  -- the TUI's thread by it); what one must wait for, it waits for itself
-  for _, argv in ipairs((crew_session and crew_session.after) or {}) do
-    local okr, rerr = pcall(vim.system, argv, { env = term_opts.env, cwd = cwd, detach = true })
-    if not okr then logger.warn("crew", spec.name .. "'s setup step failed to start: " .. tostring(rerr)) end
-  end
+  -- the TUI's thread by it); what one must wait for, it waits for itself. A slot with no session yet
+  -- runs them at its join (crew.started)
+  require("auto-agents.crew").started(crew_session, term_opts.env)
   M.state.slot_terminals[slot] = term
   pcall(function()
     require("auto-agents.status.observer").attach(slot, bufnr, spec.kind)

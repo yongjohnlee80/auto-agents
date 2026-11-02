@@ -45,8 +45,16 @@
 ---       only to a 43 daemon, with prompts (the 9th) sent whatever it is
 ---  [20] the agent's own folder: the setup is asked with --agent-dir and kept per folder; its
 ---       server, socket and folder files are kept; agent_folder is <root>/<scope>/<codename>, 0700,
----       only with a scope held and a plain codename; write_folder_files writes 0600 inside the
+---       only with the crew's scope (held or not yet) and a plain codename; write_folder_files writes 0600 inside the
 ---       folder and refuses a path out of it
+---  [21] a slot started before the claim (row 20): wired at once (its context path in its env), the
+---       file absent until it joins; the claim registers it, writes the context 0600 in a 0700
+---       folder, runs its after-steps once and logs the join (no second notice); a second claim, or
+---       a renewal, registers nothing twice; a claim at another epoch replaces the file with the new
+---       session's (the old credential never reused) and runs the steps once more; an older session
+---       ending late never removes a newer one's file; a slot that stopped never joins; a Claude
+---       slot is never typed into; an agy slot whose bridge didn't register gets its launch prompt
+---       once per session; a registration refused while held is asked again at a renewal, logged once
 ---  [18] the crew guide for the instruction block: none while no scope is held or the daemon lacks
 ---       crew.guide; asked by crew's kind and cached per store, daemon version and kind; an answer
 ---       that fails or doesn't come within the wait is none, not cached, and asked again
@@ -73,7 +81,7 @@ local crew = require("auto-agents.crew")
 
 local function new_world(opts)
   opts = opts or {}
-  local w = { calls = {}, notices = {}, timers = {}, subs = {}, answer = {}, pending = {}, deferred = {},
+  local w = { calls = {}, notices = {}, timers = {}, subs = {}, answer = {}, pending = {}, deferred = {}, ran = {}, logs = {}, typed = {},
     workspaces = opts.workspaces or { kb = { name = "kb", root = "/proj", id = 7 } }, listed = opts.listed ~= false }
   local function new_client(addr)
     return {
@@ -154,6 +162,9 @@ local function new_world(opts)
     session = w.session, events = w.events, env = { AUTOVIM_PROJECT = "alpha" }, project_key = "k1", proc = "",
     notify = function(msg) w.notices[#w.notices + 1] = msg end,
     after = function(_, fn) w.timers[#w.timers + 1] = fn end,
+    run = function(argv, h) w.ran[#w.ran + 1] = { argv = argv, session = h.session and h.session.id } end,
+    log = function(msg) w.logs[#w.logs + 1] = msg end,
+    type_once = function(codename, key, text) w.typed[#w.typed + 1] = { codename = codename, key = key, text = text }; return true end,
     wait = function(_, cond)
       if w.on_wait then
         local f = w.on_wait
@@ -873,10 +884,16 @@ do
   ok("[20] the same folder again asks nothing", #calls == 2)
 
   -- agent_folder: <root>/<scope as a file name>/<codename>, 0700, only with a scope held
-  local held, root = crew.held, vim.fn.tempname()
+  local held, scope, root = crew.held, crew.scope, vim.fn.tempname()
   crew.held = function() return nil, nil end
+  crew.scope = function() return nil end
   local none, nwhy = crew.agent_folder("cx", root)
-  ok("[20] no scope held: no folder", none == nil and nwhy ~= nil)
+  ok("[20] no crew here: no folder", none == nil and nwhy ~= nil)
+  crew.scope = function() return "autodoc:pre" end
+  local pre = crew.agent_folder("cx", root)
+  ok("[20] a scope not yet held: the folder all the same (a slot spawned before the claim)",
+    pre == vim.fs.joinpath(root, "autodoc_pre", "cx"), vim.inspect(pre))
+  crew.scope = scope
   crew.held = function() return "autodoc:abc/../x", 3 end
   local dir = crew.agent_folder("cx", root)
   local st = dir and vim.uv.fs_stat(dir)
@@ -897,6 +914,123 @@ do
     end
     ok("[20] nothing was written out of the folder", vim.uv.fs_stat(vim.fs.joinpath(vim.fs.dirname(dir), "out")) == nil)
   end
+end
+
+
+-- ── [21] a slot started before the claim joins at it (row 20) ───────────────
+
+do
+  local w = new_world({ claim = false })
+  local cwd = tmpcwd()
+  local path = crew.context_path(cwd, "cx")
+  ok("[21] the scope is known before it is held", crew.scope() ~= nil and crew.held() == nil)
+  local h0, why0 = crew.begin({ codename = "cx", kind = "codex", cwd = cwd, path = path })
+  ok("[21] no scope held: begin registers nothing", h0 == nil and why0 == nil and #w.of("crew.register") == 0)
+  local h = crew.defer({ codename = "cx", kind = "codex", cwd = cwd, path = path })
+  ok("[21] defer: the slot's env names its context path", h and h.env.AUTODOC_CREW_CONTEXT == path and h.context == path)
+  ok("[21] before the claim the context file is absent, never a placeholder", vim.uv.fs_stat(path) == nil)
+  h.after = { { "autodoc", "crew", "endpoint", "--codex-here", "--wait", "60s" } }
+  crew.started(h, { AUTODOC_CREW_CONTEXT = path })
+  ok("[21] its after-steps don't run before it has a session", #w.ran == 0, vim.inspect(w.ran))
+  local notices = #w.notices
+  w.subs["autodoc.session:connected"]({})
+  local regs = w.of("crew.register")
+  ok("[21] the claim registers the slot once", #regs == 1 and regs[1].params[4] == "cx", vim.inspect(regs))
+  local c = read_json(path)
+  local st = vim.uv.fs_stat(path)
+  local dst = vim.uv.fs_stat(vim.fs.dirname(path))
+  ok("[21] its context is written at its path, 0600 in a 0700 folder, for its session",
+    c and h.session and c.session == h.session.id and c.credential:sub(1, #h.session.id + 1) == h.session.id .. "."
+      and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("600", 8)
+      and dst and bit.band(dst.mode, tonumber("777", 8)) == tonumber("700", 8), vim.inspect({ c, st and st.mode, dst and dst.mode }))
+  ok("[21] its after-steps run once it joined", #w.ran == 1 and w.ran[1].session == h.session.id, vim.inspect(w.ran))
+  ok("[21] the join is logged, with no second notice", #w.notices == notices and #w.logs == 1 and w.logs[1]:find("cx joined", 1, true),
+    vim.inspect({ w.notices, w.logs }))
+  local first = h.session.id
+  w.subs["autodoc.session:connected"]({}) -- a reattach at the same epoch
+  w.tick() -- a renewal
+  ok("[21] a second claim and a renewal register nothing twice, run nothing twice",
+    #w.of("crew.register") == 1 and #w.ran == 1 and h.session.id == first, vim.inspect({ #w.of("crew.register"), w.ran }))
+
+  -- a claim at another epoch (the daemon restarted and the lease lapsed): the old session's file
+  -- goes, and the slot joins again under a new session, its steps run once more
+  w.answer["crew.claim"] = { epoch = 6 }
+  w.answer["crew.renew"] = function() return nil, { code = crew.CODE_STALE_EPOCH, message = "stale" } end
+  w.tick()
+  w.answer["crew.renew"] = {}
+  local c2 = read_json(path)
+  ok("[21] a new epoch: the slot joins again, its file holds the new session (the old credential never reused)",
+    #w.of("crew.register") == 2 and h.session.id ~= first and c2 and c2.session == h.session.id
+      and c2.credential ~= c.credential, vim.inspect({ c2, first }))
+  ok("[21] its steps run once for the new session", #w.ran == 2 and w.ran[2].session == h.session.id, vim.inspect(w.ran))
+  crew.finish({ session = { id = first, path = path, folder = crew.context_folder(cwd) } }, "exit")
+  ok("[21] an older session ending late leaves the newer one's file", read_json(path) and read_json(path).session == h.session.id)
+  crew.finish(h, "exit")
+  ok("[21] finish removes the slot's file", vim.uv.fs_stat(path) == nil)
+  crew.stop()
+end
+
+do -- a slot that stopped before the claim never joins; a Claude slot is never typed into
+  local w = new_world({ claim = false })
+  local cwd = tmpcwd()
+  local gone = crew.defer({ codename = "gone", kind = "codex", cwd = cwd, path = crew.context_path(cwd, "gone") })
+  crew.finish(gone, "exit")
+  local cl = crew.defer({ codename = "cl", kind = "claude", cwd = cwd, path = crew.context_path(cwd, "cl") })
+  cl.agy_prompt = "never typed into Claude"
+  crew.started(cl, {})
+  w.answer["crew.list"] = { { codename = "cl", scope = crew.scope(), why = "no_endpoint" } }
+  w.subs["autodoc.session:connected"]({})
+  for _ = 1, 3 do w.tick() end
+  local names = vim.tbl_map(function(r) return r.params[4] end, w.of("crew.register"))
+  ok("[21] a slot that stopped never joins; the running one does", vim.deep_equal(names, { "cl" }), vim.inspect(names))
+  ok("[21] a Claude slot is never typed into", #w.typed == 0, vim.inspect(w.typed))
+  crew.stop()
+end
+
+do -- agy: its launch prompt typed once per session when its bridge didn't register
+  local w = new_world({ claim = false })
+  local cwd = tmpcwd()
+  local h = crew.defer({ codename = "ag", kind = "antigravity", cwd = cwd, path = crew.context_path(cwd, "ag") })
+  h.agy_prompt = "run the bridge"
+  crew.started(h, {})
+  w.answer["crew.list"] = { { codename = "ag", scope = crew.scope(), why = "no_endpoint" } }
+  w.subs["autodoc.session:connected"]({})
+  ok("[21] agy: nothing is typed at the join itself", #w.typed == 0)
+  for _ = 1, 3 do w.tick() end
+  ok("[21] agy: its launch prompt is typed once, keyed by its session",
+    #w.typed == 1 and w.typed[1].codename == "ag" and w.typed[1].key == "agy-bridge:" .. h.session.id
+      and w.typed[1].text == "run the bridge", vim.inspect(w.typed))
+  crew.stop()
+  local w2 = new_world({ claim = false })
+  local h2 = crew.defer({ codename = "ag", kind = "antigravity", cwd = cwd, path = crew.context_path(cwd, "ag") })
+  h2.agy_prompt = "run the bridge"
+  w2.answer["crew.list"] = { { codename = "ag", scope = crew.scope(), why = "" } }
+  w2.subs["autodoc.session:connected"]({})
+  for _ = 1, 3 do w2.tick() end
+  ok("[21] agy: a bridge that registered gets nothing typed", #w2.typed == 0, vim.inspect(w2.typed))
+  crew.stop()
+end
+
+do -- a registration refused while the scope is held: asked again at a renewal, logged once
+  local w = new_world()
+  local cwd = tmpcwd()
+  local refusals = 0
+  w.answer["crew.register"] = function()
+    refusals = refusals + 1
+    if refusals <= 2 then return nil, { code = -32000, message = "the store is busy" } end
+    return { session = "late-1", profile = "p1" }
+  end
+  local reg = { codename = "rx", kind = "codex", cwd = cwd, path = crew.context_path(cwd, "rx") }
+  local h, why = crew.begin(reg)
+  ok("[21] a failed registration while held answers why", h == nil and why ~= nil)
+  h = crew.defer(reg)
+  crew.started(h, {})
+  w.tick() -- a renewal: refused again, logged once
+  w.tick() -- the next: registered
+  ok("[21] it joins at a later renewal, its failure logged once",
+    h.session and h.session.id == "late-1" and #vim.tbl_filter(function(l) return l:find("couldn't join", 1, true) end, w.logs) == 1,
+    vim.inspect({ h.session, w.logs }))
+  crew.stop()
 end
 
 crew.stop()

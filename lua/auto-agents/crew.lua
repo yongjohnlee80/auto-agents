@@ -305,6 +305,13 @@ end
 ---@return boolean
 function M.mail_via_offered()
   local st = _s
+  if st and st.status ~= "held" and st.status ~= "released" and st.status ~= "stopped" and not st.dormant then
+    -- no daemon answering yet (a slot spawned before the claim, which joins later): its setup is
+    -- asked as for today's daemons; a registration to an older one leaves mail_via out
+    local c = st.session and st.session.client and st.session.client()
+    local h = c and c.hello and c:hello() or nil
+    if not h or not h.protocol then return true end
+  end
   local c = st and st.status == "held" and st.session and st.session.client and st.session.client()
   local h = c and c.hello and c:hello() or {}
   return (tonumber(h.protocol) or 0) >= M.PROTOCOL_MAIL_VIA
@@ -353,6 +360,17 @@ function M.context_folder(cwd)
   return vim.fs.joinpath(cwd, ".auto-agents", "crew")
 end
 
+---context_path is the context file of the agent codename started in cwd: one path for the slot's
+---whole life, named in its environment ($AUTODOC_CREW_CONTEXT) when it starts, before any session
+---exists. Each registration of the slot writes its session's context there (begin, the join at a
+---claim); between them it is absent, so `autodoc crew` answers its usual "no session context".
+---@param cwd string
+---@param codename string
+---@return string
+function M.context_path(cwd, codename)
+  return vim.fs.joinpath(M.context_folder(cwd), M.CONTEXT_DIR, "slot-" .. tostring(codename))
+end
+
 -- a session id names its context's file: a plain file name, never a dot file
 local function plain_name(session)
   return type(session) == "string" and session ~= "" and session:sub(1, 1) ~= "." and not session:find("[/\\]")
@@ -363,14 +381,15 @@ M.AGENT_ROOT = vim.fs.joinpath(vim.fn.stdpath("state"), "auto-agents", "crew")
 
 ---agent_folder is the agent codename's own folder in the scope held, made (0700): what `crew setup
 -----agent-dir` writes its kind's files for (agy's MCP config) and where a Codex agent's own app-server
----binds its socket. auto-agents' own, never AutoDoc's window folders: two hosts never share one. nil
----and why with no scope held, a codename that isn't a plain name, or a folder that can't be made.
+---binds its socket. auto-agents' own, never AutoDoc's window folders: two hosts never share one. The
+---scope is this Neovim's, held or not yet (a slot spawned before the claim gets its folder). nil and
+---why with no crew set up, a codename that isn't a plain name, or a folder that can't be made.
 ---@param codename string
 ---@param root string|nil AGENT_ROOT, a test's own
 ---@return string|nil folder, string|nil why
 function M.agent_folder(codename, root)
-  local scope = M.held()
-  if not scope then return nil, "no crew scope held" end
+  local scope = M.held() or M.scope()
+  if not scope then return nil, "no crew scope" end
   if not plain_name(codename) then return nil, "codename " .. tostring(codename) .. " isn't a plain name" end
   local dir = vim.fs.joinpath(root or M.AGENT_ROOT, (scope:gsub("[^%w%._%-]", "_")), codename)
   local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
@@ -405,13 +424,17 @@ function M.write_folder_files(dir, files)
 end
 
 ---write_context writes c as its session's context file in folder (core/crew's WriteContext): mode
----0600, through a dot file renamed over it, so a reader sees the whole context or none. It answers
----the file's path, which the agent is told ($AUTODOC_CREW_CONTEXT).
+---0600, through a dot file renamed over it, so a reader sees the whole context or none. The file is
+---name (a slot's, context_path), else the session's id. It answers the file's path, which the agent
+---is told ($AUTODOC_CREW_CONTEXT).
 ---@param folder string
 ---@param c { store: string, socket: string, scope: string, profile: string, session: string, credential: string, kind: string }
+---@param name string|nil
 ---@return string|nil path, string|nil err
-function M.write_context(folder, c)
+function M.write_context(folder, c, name)
   if not plain_name(c.session) then return nil, "session id " .. tostring(c.session) end
+  name = name or c.session
+  if not plain_name(name) then return nil, "context file " .. tostring(name) end
   local dir = vim.fs.joinpath(folder, M.CONTEXT_DIR)
   -- mkdir raises (E739) when it can't make the folder: an error here, never a raise mid-spawn
   local made, merr = pcall(vim.fn.mkdir, dir, "p", tonumber("700", 8))
@@ -420,12 +443,12 @@ function M.write_context(folder, c)
   end
   local body = vim.json.encode({ store = c.store, socket = c.socket, scope = c.scope, profile = c.profile,
     session = c.session, credential = c.credential, kind = c.kind })
-  local tmp = vim.fs.joinpath(dir, "." .. c.session .. "." .. M.run_token():sub(1, 12))
+  local tmp = vim.fs.joinpath(dir, "." .. name .. "." .. M.run_token():sub(1, 12))
   local fd, oerr = vim.uv.fs_open(tmp, "wx", tonumber("600", 8))
   if not fd then return nil, oerr end
   local _, werr = vim.uv.fs_write(fd, body)
   vim.uv.fs_close(fd)
-  local path = vim.fs.joinpath(dir, c.session)
+  local path = vim.fs.joinpath(dir, name)
   if not werr then
     local ok, rerr = vim.uv.fs_rename(tmp, path)
     if ok then return path, nil end
@@ -445,6 +468,20 @@ function M.remove_context(folder, session)
   vim.uv.fs_unlink(vim.fs.joinpath(folder, M.CONTEXT_DIR, session))
 end
 
+-- remove_session_file removes session s's context: its slot's file (s.path) only while that file
+-- still holds s, so an older session ending late never removes a newer one's context; else the
+-- file named by its id.
+local function remove_session_file(s)
+  if not s.path then return M.remove_context(s.folder, s.id) end
+  local f = io.open(s.path, "r")
+  if not f then return end
+  local body = f:read("*a")
+  f:close()
+  local okj, c = pcall(vim.json.decode, body)
+  if okj and type(c) == "table" and c.session ~= s.id then return end -- a later session's now
+  vim.uv.fs_unlink(s.path)
+end
+
 -- The state of one setup, st, is never reached through a global by a callback or a timer: each
 -- captures st and the attempt it was made for, and does nothing once st is no longer the module's
 -- (a stop, or a setup that replaced it) or a later attempt superseded it.
@@ -457,6 +494,15 @@ end
 --                 is reported held until a claim answers again (a retry is scheduled)
 --   "released"    given up on exit: nothing claims again in this process
 --   "stopped"     forgotten (stop, or a newer setup)
+
+---scope is this Neovim's crew scope while its crew is set up and not given up, held or not yet; nil
+---with no crew (none set up, released, or an AutoDoc without crew).
+---@return string|nil
+function M.scope()
+  local st = _s
+  if not st or st.status == "released" or st.status == "stopped" or st.dormant then return nil end
+  return st.scope
+end
 
 ---held is the scope and epoch this process holds, nil when it holds none for sure.
 ---@return string|nil scope, integer|nil epoch
@@ -500,6 +546,7 @@ local function next_attempt(st)
 end
 
 local claim -- forward
+local rejoin_all -- forward: the slots' joins at a claim (below begin)
 
 -- later runs fn after ms for attempt a of st, only while that attempt is current.
 local function later(st, a, ms, fn)
@@ -543,7 +590,7 @@ end
 -- end_session ends s, why: its context file goes at once, so no later process reads its credential,
 -- and the daemon is told; until it answers, the exit is owed.
 local function end_session(st, s, why)
-  M.remove_context(s.folder, s.id)
+  remove_session_file(s)
   st.sessions[s.id] = nil
   st.owed[s.id] = { s = s, why = why }
   send_exit(st, s.id)
@@ -621,7 +668,7 @@ end
 local function drop_sessions(st)
   for id, s in pairs(st.sessions) do
     if s.epoch ~= st.epoch then
-      M.remove_context(s.folder, id)
+      remove_session_file(s)
       st.sessions[id] = nil
     end
   end
@@ -705,6 +752,7 @@ local function renew_later(st, a)
         return
       end
       settle(st)
+      rejoin_all(st) -- a slot whose registration failed while the scope was held tries again
       renew_later(st, a)
     end)
   end)
@@ -765,6 +813,7 @@ claim = function(st, lost)
     drop_sessions(st)
     st.publish(M.TOPIC_CLAIMED, { scope = st.scope, epoch = epoch, reattached = before == epoch })
     settle(st)
+    rejoin_all(st) -- every running slot without a live session joins now
     renew_later(st, a)
     poll_fallbacks(st, a)
   end)
@@ -783,8 +832,8 @@ function M.release()
   -- a reattach in flight still has the epoch it held: give that up now; a late accepted claim is
   -- given back when it arrives (a second release of one epoch is harmless)
   -- the agents stop with this Neovim: their contexts go now, and the release ends their sessions
-  for id, s in pairs(st.sessions) do M.remove_context(s.folder, id) end
-  st.sessions, st.pending, st.owed = {}, {}, {}
+  for _, s in pairs(st.sessions) do remove_session_file(s) end
+  st.sessions, st.pending, st.owed, st.handles = {}, {}, {}, {}
   if not epoch then return end
   local done = false
   st.session.call("crew.release", { st.scope, st.run, epoch }, function() done = true end)
@@ -903,13 +952,149 @@ function M.begin(opts)
     return nil, "the crew scope changed while the session was registered"
   end
   local path, werr = M.write_context(folder, { store = store, socket = socket, scope = s.scope, profile = s.profile,
-    session = s.id, credential = s.id .. "." .. r.secret, kind = kind })
+    session = s.id, credential = s.id .. "." .. r.secret, kind = kind }, opts.path and vim.fs.basename(opts.path) or nil)
   r.secret = nil -- kept no longer than it is needed
   if not path then
     end_session(st, s, "start_failed")
     return nil, "its session context could not be written: " .. tostring(werr)
   end
-  return { session = s, context = path, env = { AUTODOC_CREW_CONTEXT = path } }, nil
+  if opts.path then s.path = path end
+  local h = { session = s, context = path, env = { AUTODOC_CREW_CONTEXT = path }, codename = codename, kind = kind,
+    cwd = opts.cwd, prompts = opts.prompts, mail_via = opts.mail_via, path = opts.path, ran = {} }
+  if opts.path then st.handles[h] = true end -- a slot's: it joins again at a claim that ended its session
+  return h, nil
+end
+
+---defer is the handle of a slot that starts with no session yet (no scope held, no daemon answering,
+---or a registration that failed): its environment names its context file (opts.path, context_path)
+---and the slot starts wired as any crew agent. It joins at the next claim (rejoin_all): registered,
+---its context written there, its after-steps run. nil with no crew here (scope).
+---@param opts { codename: string, kind: string|nil, cwd: string, prompts: boolean|nil, mail_via: string|nil, path: string }
+---@return table|nil
+function M.defer(opts)
+  local st = _s
+  if not M.scope() or not st or type(opts.path) ~= "string" or not plain_name(opts.codename) then return nil end
+  local h = { deferred = true, context = opts.path, env = { AUTODOC_CREW_CONTEXT = opts.path }, codename = opts.codename,
+    kind = M.crew_kind(opts.kind), cwd = opts.cwd, prompts = opts.prompts, mail_via = opts.mail_via, path = opts.path, ran = {} }
+  st.handles[h] = true
+  return h
+end
+
+-- AGY_PROMPT_WAIT_MS is how long after an agy slot joins its bridge has to register before its
+-- launch prompt is typed into it once.
+M.AGY_PROMPT_WAIT_MS = 20000
+
+-- run_after runs h's after-steps for its session, once per session: never before it has one, so
+-- nothing reaches a CLI that hasn't registered.
+local function run_after(st, h)
+  local s = h.session
+  if not s or not h.run_env or h.ran[s.id] then return end
+  h.ran[s.id] = true
+  for _, argv in ipairs(h.after or {}) do st.run(argv, h) end
+end
+
+-- agy_bridge_check types an agy slot's launch prompt once for session s when, AGY_PROMPT_WAIT_MS
+-- after it joined, its bridge has registered no endpoint: the prompt it started with ran before its
+-- session existed. Only agy; a Claude or Codex slot is never typed into.
+local function agy_bridge_check(st, h, s)
+  if h.kind ~= "agy" or type(h.agy_prompt) ~= "string" or h.agy_prompt == "" then return end
+  st.after(M.AGY_PROMPT_WAIT_MS, function()
+    if _s ~= st or h.ended or h.session ~= s or st.sessions[s.id] ~= s then return end
+    st.session.call("crew.list", {}, function(res, err)
+      if err or _s ~= st or h.ended or h.session ~= s then return end
+      for _, e in ipairs(type(res) == "table" and res or {}) do
+        if type(e) == "table" and e.codename == h.codename and e.scope == st.scope and e.why == "no_endpoint" then
+          st.type_once(h.codename, "agy-bridge:" .. s.id, h.agy_prompt)
+          return
+        end
+      end
+    end)
+  end)
+end
+
+-- rejoin registers slot h again under the scope held, without waiting: its context is written at
+-- its path, its after-steps run, and the join is logged. A slot with a live session, one already
+-- joining, or one whose codename another live session holds is left alone, so a second claim
+-- registers nothing twice.
+local function rejoin(st, h)
+  if h.ended or h.joining or st.status ~= "held" then return end
+  if h.session and st.sessions[h.session.id] == h.session then return end
+  for _, other in pairs(st.sessions) do
+    if other.codename == h.codename then return end
+  end
+  local sess = st.session
+  local c = sess and sess.client and sess.client()
+  if not c then return end
+  local hello = c.hello and c:hello() or {}
+  local store, socket = hello.store_id, c.addr and c:addr() or nil
+  if type(store) ~= "string" or store == "" or type(socket) ~= "string" or socket == "" then return end
+  local r = st.pending[h.codename]
+  if r and r.inflight then return end
+  local name = sess.workspace_of and sess.workspace_of(h.cwd) or nil
+  name = name or (sess.primary_workspace and sess.primary_workspace()) or nil
+  local w = name and sess.workspace and sess.workspace(name) or nil
+  local ws = (w and tonumber(w.id) and tonumber(w.id) > 0) and tostring(tonumber(w.id)) or M.NO_WORKSPACE
+  local prompts = h.prompts == true and (tonumber(hello.protocol) or 0) >= M.PROTOCOL_PROMPTS
+  local mail_via = (h.mail_via == "cli" or h.mail_via == "mcp") and (tonumber(hello.protocol) or 0) >= M.PROTOCOL_MAIL_VIA
+    and h.mail_via or nil
+  if r and (r.scope ~= st.scope or r.epoch ~= st.epoch or r.store ~= store or r.kind ~= h.kind or r.workspace ~= ws
+    or (r.prompts == true) ~= prompts or r.mail_via ~= mail_via) then
+    if r.scope == st.scope and r.epoch == st.epoch then resolve(st, r) return end -- ended first; the next claim joins
+    st.pending[h.codename] = nil
+    r = nil
+  end
+  local folder = M.context_folder(h.cwd)
+  if not r then
+    _instances = _instances + 1
+    r = { codename = h.codename, kind = h.kind, workspace = ws, instance = ("nvim-%d-%d"):format(vim.uv.os_getpid(), _instances),
+      secret = M.run_token(), scope = st.scope, epoch = st.epoch, store = store, folder = folder, prompts = prompts,
+      mail_via = mail_via }
+    st.pending[h.codename] = r
+  end
+  h.joining = true
+  send_register(st, r, function(s, err)
+    h.joining = false
+    if not s then
+      local why = message(err)
+      if h.last_why ~= why then st.log(("%s couldn't join the crew: %s"):format(h.codename, why)) end
+      h.last_why = why -- said once per reason: a renewal asks again
+      return
+    end
+    if h.ended or _s ~= st then
+      end_session(st, s, "exit") -- its slot stopped while it was answered
+      return
+    end
+    local path, werr = M.write_context(folder, { store = store, socket = socket, scope = s.scope, profile = s.profile,
+      session = s.id, credential = s.id .. "." .. r.secret, kind = h.kind }, vim.fs.basename(h.path))
+    r.secret = nil
+    if not path then
+      end_session(st, s, "start_failed")
+      st.log(("%s couldn't join the crew: its session context could not be written: %s"):format(h.codename, tostring(werr)))
+      return
+    end
+    s.path = path
+    h.session, h.deferred = s, false
+    st.log(("%s joined the crew (session %s)"):format(h.codename, s.id))
+    run_after(st, h)
+    agy_bridge_check(st, h, s)
+  end)
+end
+
+rejoin_all = function(st)
+  for h in pairs(st.handles) do rejoin(st, h) end
+end
+
+---started is the slot's terminal started under env: its after-steps run now when it has a session
+---(once per session), else at its join. env is kept for the joins to come.
+---@param handle table|nil
+---@param env table|nil the terminal's environment
+function M.started(handle, env)
+  local st = _s
+  if not handle or handle.ended then return end
+  handle.run_env = env or {}
+  if st and st.handles[handle] or (st and handle.session and st.sessions[handle.session.id] == handle.session) then
+    run_after(st, handle)
+  end
 end
 
 ---finish ends handle's session, why: "exit" when the agent's process ended, "start_failed" when it
@@ -921,10 +1106,12 @@ function M.finish(handle, why)
   if not handle or handle.ended then return end
   handle.ended = true
   local s, st = handle.session, _s
+  if st and st.handles then st.handles[handle] = nil end
+  if not s then return end -- a slot that never joined: no session, and no context written
   if st and st.sessions[s.id] == s then
     end_session(st, s, why or "exit")
   else
-    M.remove_context(s.folder, s.id) -- the scope changed hands or was released: its session ended with it
+    remove_session_file(s) -- the scope changed hands or was released: its session ended with it
   end
 end
 
@@ -985,6 +1172,16 @@ function M.setup(opts)
     sessions = {},
     pending = {},
     owed = {},
+    -- the running slots' handles (begin with a path, defer): each joins again at a claim that left
+    -- it without a live session (rejoin_all)
+    handles = {},
+    -- a slot's after-step, run detached under its terminal's environment in its folder
+    run = opts.run or function(argv, h)
+      local okr, rerr = pcall(vim.system, argv, { env = h.run_env, cwd = h.cwd, detach = true })
+      if not okr then pcall(function() require("auto-agents.log").warn("crew", h.codename .. "'s setup step failed to start: " .. tostring(rerr)) end) end
+    end,
+    -- the log of what a join did: never a second notice
+    log = opts.log or function(msg) pcall(function() require("auto-agents.log").info("crew", msg) end) end,
     -- the fallback's jobs, typed into their agents' terminals once each (auto-agents.fallback)
     type_once = opts.type_once or function(codename, key, text)
       return require("auto-agents.fallback").type_once(codename, key, text)
