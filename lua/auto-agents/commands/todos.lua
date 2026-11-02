@@ -1,5 +1,5 @@
----auto-agents.mailbox.todos_commands — register the 12 mailbox
----verbs that expose the project's todo store to peer agents (ADR-0031 §5).
+---auto-agents.commands.todos — register the 12 command
+---verbs, on auto-core's command registry, that expose the project's todo store to peer agents (ADR-0031 §5).
 ---
 ---AutoDoc's daemon owns the store: its format, its rules and every write
 ---(ADR 1791532020). Each verb calls the daemon's `todos.*` verbs itself,
@@ -7,9 +7,8 @@
 ---answers once the daemon has; auto-core only says where this project's
 ---store is. Without AutoDoc every verb answers `dependency_unavailable`
 ---("AutoDoc required"): there is no Lua fallback. The verbs share the
----`todos.` namespace prefix so they group visually distinct from the
----existing `wake` / `say` / `addressbook` / `commands_list` / `diff_queue`
----etc. surface in `commands_list` output.
+---`todos.` namespace prefix so they group apart from the other verbs
+---(`peek` / `say` / `diff_queue`, `review.*`) in the registry.
 ---
 ---Verb roster (12 total):
 ---
@@ -50,7 +49,7 @@
 ---1791532020 §2.5). This module only asks it to poll at once. Direct YAML
 ---`assignee:` edits stay metadata-only by design.
 ---
----@module 'auto-agents.mailbox.todos_commands'
+---@module 'auto-agents.commands.todos'
 
 local M = {}
 
@@ -65,8 +64,8 @@ local STATUSES = {
   open = true, ["in-progress"] = true, deferred = true, completed = true, archived = true,
 }
 
----Build an OK response envelope matching the existing mailbox
----commands convention.
+---Build an OK response envelope matching the other command verbs'
+---convention.
 ---@param value any
 ---@return table
 local function ok_response(value)
@@ -83,7 +82,7 @@ local function err_response(code, message)
 end
 
 ---The envelope for a door error (auto-agents.todos.store): the daemon's
----code as a mailbox code (stale, not_found, invalid_args, unclaimed, …), or
+---code as a command's error code (stale, not_found, invalid_args, unclaimed, …), or
 ---dependency_unavailable when AutoDoc or auto-core's store resolution is
 ---missing.
 ---@param err table
@@ -272,7 +271,7 @@ local function h_add(args)
   if type(args.title) ~= "string" or args.title == "" then
     return err_response("invalid_args", "args.title must be a non-empty string")
   end
-  -- Whitelist the hand-editable fields we let mailbox callers set
+  -- Whitelist the hand-editable fields we let callers set
   -- at creation. Everything else (id, lifecycle timestamps,
   -- managed fields) is AutoDoc's.
   local spec = { title = args.title }
@@ -465,7 +464,7 @@ local SPECS = {
     -- NOTE: every list field of the task format (tags / adr / review /
     -- blocked) MUST be "any?" here — the list arrives as a Lua table and
     -- the gate's "string?" would reject it ("expected string, got
-    -- table"). AutoDoc validates the lists; this mailbox gate only
+    -- table"). AutoDoc validates the lists; this schema gate only
     -- screens shape. Keep this mirror in sync.
     schema      = {
       title       = "string",
@@ -495,7 +494,7 @@ local SPECS = {
   },
   ["todos.assign"] = {
     owner       = "auto-agents",
-    description = "Set the task's assignee. Assigning an `open` task makes it `in-progress` in the same write (D1). auto-core's notifier sends the recipient a one-shot 'assigned to you' mailbox message (its id makes a repeat a duplicate). Pass `assignee = nil` to clear. Direct YAML `assignee:` edits stay metadata-only by design — use this verb when you want the recipient to be notified.",
+    description = "Set the task's assignee. Assigning an `open` task makes it `in-progress` in the same write (D1). auto-core's notifier sends the recipient one 'assigned to you' crew message (its id makes a repeat a duplicate). Pass `assignee = nil` to clear. Direct YAML `assignee:` edits stay metadata-only by design — use this verb when you want the recipient to be notified.",
     schema      = { id = "string", rev = "string?", assignee = "string?", reason = "string?" },
     handler     = h_assign,
   },
@@ -529,14 +528,13 @@ local SPECS = {
 M._SPECS = SPECS  -- exposed for tests / introspection
 
 ---Register every todos.* command. Idempotent — safe to call on
----every setup. Mirrors the existing
----`auto-agents.mailbox.commands.register_all` pattern.
+---every setup. Mirrors `auto-agents.commands.register_all`.
 ---@return { registered: string[], skipped: string[] }
 function M.register_all()
-  local mailbox = require("auto-core").mailbox
+  local commands = require("auto-core.commands")
   local out = { registered = {}, skipped = {} }
   for name, spec in pairs(SPECS) do
-    local ok, regerr = mailbox.commands.register(name, spec)
+    local ok, regerr = commands.register(name, spec)
     if ok then
       _registered[name] = true
       out.registered[#out.registered + 1] = name
@@ -547,7 +545,7 @@ function M.register_all()
       -- hard dep already required at the top of this function, so the
       -- log wrapper (which only delegates to auto-core.log) cannot
       -- fail here; log unconditionally.
-      require("auto-agents.log").warn("mailbox.commands",
+      require("auto-agents.log").warn("commands",
         string.format("register('%s') failed: %s", name, tostring(regerr)))
     end
   end

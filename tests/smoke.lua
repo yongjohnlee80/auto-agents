@@ -1489,18 +1489,18 @@ do
   aa.state.config.kb = saved_kb
 end
 
--- ────────── 20. Phase 4: peek + say mailbox commands + admin `run` ──────────
+-- ────────── 20. Phase 4: peek + say command verbs + admin `run` ──────────
 print("\n[20] Phase 4: peek + say + admin run")
 do
-  local cmds = require("auto-agents.mailbox.commands")
-  local core = require("auto-core")
+  local cmds = require("auto-agents.commands")
+  local registry = require("auto-core.commands")
   -- Make sure auto-agents commands are registered (other sections
   -- may have unregistered them).
   cmds.register_all()
 
-  -- 20a. peek + say show up in the live registry with the right
-  -- owner/description (commands_list discovery surface).
-  local registry_entries = core.mailbox.commands.list() or {}
+  -- 20a. peek + say show up in auto-core's command registry with the
+  -- right owner/description.
+  local registry_entries = registry.list() or {}
   local by_name = {}
   for _, e in ipairs(registry_entries) do by_name[e.name] = e end
   ok("Phase 4: `peek` registered with auto-agents owner",
@@ -1532,7 +1532,7 @@ do
 
   -- 20b. peek returns the last 20 real lines (default), strips
   -- trailing blanks, reports terminal_alive=true.
-  local peek_spec = by_name.peek and core.mailbox.commands.get("peek")
+  local peek_spec = by_name.peek and registry.get("peek")
   local peek_res = peek_spec and peek_spec.handler({ slot = 2 }, {})
   ok("peek: ok=true on live slot",
     type(peek_res) == "table" and peek_res.ok == true,
@@ -1570,7 +1570,7 @@ do
 
   -- 20d. say injects text via send_slot. send_calls captures the
   -- payload the terminal received (with bracketed-paste wrapping).
-  local say_spec = by_name.say and core.mailbox.commands.get("say")
+  local say_spec = by_name.say and registry.get("say")
   local say_res = say_spec and say_spec.handler(
     { slot = 2, text = "hello world", submit = false }, {})
   ok("say: ok=true on live slot",
@@ -1836,7 +1836,7 @@ end
 -- (tests/todos_daemon_spec.lua runs them against a real one).
 print("\n[24] todos.* mailbox surface (automation and import removed, ADR 1791532020)")
 do
-  local todos_mod = require("auto-agents.mailbox.todos_commands")
+  local todos_mod = require("auto-agents.commands.todos")
 
   -- 24f. Assignment notices are auto-core's notifier's (ADR §2.5): no
   -- subscriber here can send a second copy.
@@ -1848,7 +1848,7 @@ do
   -- command. Each probe is checked against something that IS present, so
   -- a probe that could never succeed does not pass vacuously.
   local ok_aa_auto = pcall(require, "auto-agents.todo_automation")
-  ok("24g: control — auto-agents.mailbox.todos_commands loads", type(todos_mod) == "table")
+  ok("24g: control — auto-agents.commands.todos loads", type(todos_mod) == "table")
   ok("24g: auto-agents.todo_automation no longer exists", ok_aa_auto == false)
   ok("24g: control — todos.list is in SPECS", type(todos_mod._SPECS["todos.list"]) == "table")
   ok("24g: todos.fire is not in SPECS", todos_mod._SPECS["todos.fire"] == nil)
@@ -1862,11 +1862,11 @@ do
     pcall(require, "auto-agents.todos.migrate_kb") == false)
   ok("24g: todos.import is not in SPECS", todos_mod._SPECS["todos.import"] == nil)
 
-  -- 24n. The todos.* verbs still register with the mailbox and the todo
-  -- bootstrap doc still resolves.
+  -- 24n. The todos.* verbs register on auto-core's command registry and
+  -- the todo bootstrap doc still resolves.
   local reg = todos_mod.register_all()
   local listed = {}
-  for _, e in ipairs(require("auto-core").mailbox.commands.list() or {}) do listed[e.name] = true end
+  for _, e in ipairs(require("auto-core.commands").list() or {}) do listed[e.name] = true end
   local missing = {}
   for _, verb in ipairs({ "todos.list", "todos.show", "todos.list_dirs", "todos.get_dir", "todos.add",
                           "todos.update", "todos.status", "todos.assign", "todos.archive",
@@ -1893,15 +1893,15 @@ end
 -- via the verb at all. Fix: `review = "any?"`, matching its
 -- list-type siblings.
 --
--- Tested at the validator gate (auto-core.mailbox.commands.validate_args),
+-- Tested at the validator gate (auto-core.commands.validate_args),
 -- which is the exact bug surface. We deliberately do NOT run a full
 -- todo.add round-trip: the post-gate path (h_add → todo.add →
 -- auto-core string_list) already works, and a real todo.add would
 -- write into the live `.todo-list/` store.
 print("\n[24k] todos.add review schema drift (bug 2026-05-29)")
 do
-  local commands  = require("auto-core.mailbox.commands")
-  local todos_mod = require("auto-agents.mailbox.todos_commands")
+  local commands  = require("auto-core.commands")
+  local todos_mod = require("auto-agents.commands.todos")
   local add_spec  = todos_mod._SPECS["todos.add"]
 
   ok("24k: todos.add spec registered",
@@ -1960,7 +1960,7 @@ end
 -- path off a function IN the SPECS table guarantees they are the same file.
 print("\n[24l] todos roster doc-comment vs SPECS (bug 2026-09-05)")
 do
-  local todos_mod = require("auto-agents.mailbox.todos_commands")
+  local todos_mod = require("auto-agents.commands.todos")
   local specs = todos_mod._SPECS
 
   local src

@@ -29,7 +29,7 @@ out="$(run_suite "$base")"
 if red "$out"; then echo "BASELINE NOT GREEN: $(summary_of "$out")"; printf '%s\n' "$out" | grep FAIL; exit 1; fi
 echo "baseline: $(summary_of "$out")"
 
-H=lua/auto-agents/mailbox/todos_commands.lua
+H=lua/auto-agents/commands/todos.lua
 D=lua/auto-agents/todos/store.lua
 # file|name|old|new — literal strings; old must occur exactly once.
 mutants=(

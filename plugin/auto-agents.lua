@@ -265,7 +265,7 @@ end, {
 -- :AutoAgentsTodos <verb> [key=value ...]
 --
 -- Tab-completes the 13 verbs registered by
--- `auto-agents.mailbox.todos_commands`. Each verb is dispatched
+-- `auto-agents.commands.todos`. Each verb is dispatched
 -- through its registered handler — same code path agents hit via
 -- the mailbox — so behavior + side effects (events, mailbox
 -- routing) match exactly.
@@ -329,9 +329,9 @@ vim.api.nvim_create_user_command("AutoAgentsTodos", function(opts)
     return
   end
 
-  local ok, mod = pcall(require, "auto-agents.mailbox.todos_commands")
+  local ok, mod = pcall(require, "auto-agents.commands.todos")
   if not ok then
-    vim.notify("auto-agents.mailbox.todos_commands not loaded: " .. tostring(mod),
+    vim.notify("auto-agents.commands.todos not loaded: " .. tostring(mod),
       vim.log.levels.ERROR)
     return
   end
@@ -390,9 +390,9 @@ end, {
 })
 
 vim.api.nvim_create_user_command("AutoAgentsTodosDoc", function()
-  local ok, mod = pcall(require, "auto-agents.mailbox.todos_commands")
+  local ok, mod = pcall(require, "auto-agents.commands.todos")
   if not ok then
-    vim.notify("auto-agents.mailbox.todos_commands not loaded", vim.log.levels.ERROR)
+    vim.notify("auto-agents.commands.todos not loaded", vim.log.levels.ERROR)
     return
   end
   local path = mod.bootstrap_doc_path()

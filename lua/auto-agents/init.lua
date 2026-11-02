@@ -466,56 +466,23 @@ function M.setup(opts)
   -- diff-review — runs whether or not the MCP bridge is enabled.
   install_resize_hooks()
 
-  -- v0.2.7: wire the auto-core mailbox subsystem. Start the central
-  -- router and register the `nvim` executioner mailbox so agents can
-  -- send `kind="command"` messages back to us. Per-agent registration
-  -- happens later in `build_agent_env` so each spawn gets a fresh
-  -- per-instance mailbox + the four
-  -- `AUTO_AGENTS_INSTANCE_ID/MAILBOX_ID/MAILBOX_DIR/MAILBOX_BOOTSTRAP_DOC`
-  -- env vars consumers need.
-  --
-  -- v0.2.8: register auto-agents-owned mailbox commands with auto-core's
-  -- whitelist registry — `send_slot` (wake hook used by the router on
-  -- inbox/responses arrival; previously a no-op because nothing claimed
-  -- the name) and `send_user` (vim.notify bridge). Other plugins
-  -- (md-harpoon for `harpoon`, the diff MCP for an `openDiff` mirror,
-  -- etc.) register their own commands via the same
-  -- `auto-core.mailbox.commands.register` API when they load — this is
-  -- just auto-agents' contribution to the whitelist.
-  -- ADR-0039 C4: capture + log — a silent failure here means agents
-  -- lose their entire command surface (wake/say/todos.*) with zero
-  -- diagnostics. Failures here are ERROR-class per auto-family-logging.
+  -- The command verbs (peek, say, diff_queue, todos.*, review.*) on auto-core's command registry
+  -- (auto-core.commands), which the editor socket, admin `run` and :AutoAgentsTodos serve.
+  local ok_cmds, cmds_err = pcall(function() require("auto-agents.commands").register_every() end)
+  if not ok_cmds then
+    require("auto-agents.log").error("init", "the command verbs are DOWN: " .. tostring(cmds_err))
+  end
+  -- The file mailbox (auto-core.mailbox): the router and the `nvim` executioner mailbox, and the
+  -- mailbox-only verbs (auto-agents.mailbox.commands). Retired in auto-agents v0.4.0.
   local ok_mailbox_wire, mailbox_wire_err = pcall(function()
     local mailbox = require("auto-core").mailbox
     mailbox.configure({ autostart = true })
     mailbox.register("nvim", { root = mailbox.host_fallback_root() })
     require("auto-agents.mailbox.commands").register_all()
-    -- Register the todos.* command verbs. Assignment notices are
-    -- auto-core's notifier's (ADR 1791532020 §2.5), not a subscriber here.
-    local ok_todos, todos_mod = pcall(require, "auto-agents.mailbox.todos_commands")
-    if ok_todos then
-      todos_mod.register_all()
-    else
-      require("auto-agents.log").warn("init",
-        "todos.* mailbox surface unavailable: " .. tostring(todos_mod))
-    end
-
-    -- ADR-0067 A3: the review.* surface, registered INDEPENDENTLY of todos.*.
-    -- It was nested inside the todos success branch, so an unrelated todos
-    -- module load failure removed the entire review surface — two unrelated
-    -- capabilities sharing one failure.
-    local ok_rev, rev_mod = pcall(require, "auto-agents.mailbox.review_commands")
-    if ok_rev then
-      rev_mod.register_all()
-    else
-      require("auto-agents.log").warn("init",
-        "review.* mailbox surface unavailable: " .. tostring(rev_mod))
-    end
   end)
   if not ok_mailbox_wire then
     require("auto-agents.log").error("init",
-      "mailbox wiring failed — agent command surface is DOWN: "
-      .. tostring(mailbox_wire_err))
+      "mailbox wiring failed: " .. tostring(mailbox_wire_err))
   end
 
   -- Editor-window-floor invariant. AutoVim's three-column layout
@@ -760,7 +727,7 @@ local function build_agent_env(spec, cwd)
   -- kb.todo_convention_doc). Agents track the convention's
   -- `revision:` in their own local memory and re-ingest on
   -- change per the doc's own protocol.
-  local ok_todos, todos_mod = pcall(require, "auto-agents.mailbox.todos_commands")
+  local ok_todos, todos_mod = pcall(require, "auto-agents.commands.todos")
   if ok_todos and type(todos_mod.bootstrap_doc_path) == "function" then
     local doc_path = todos_mod.bootstrap_doc_path()
     if doc_path and doc_path ~= "" then
@@ -3122,6 +3089,8 @@ function M.teardown()
   end
   pcall(function() require("auto-agents.mcp.server").stop() end)
   pcall(function() require("auto-agents.mailbox.commands").unregister_all() end)
+  local ok_cmds, cmds = pcall(require, "auto-agents.commands")
+  if ok_cmds then pcall(cmds.unregister_all) end
   pcall(function()
     local mailbox = require("auto-core").mailbox
     local cfg = M.state.config

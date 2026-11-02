@@ -1,9 +1,9 @@
----auto-agents.mailbox.review_commands — the `review.*` mailbox surface
----(ADR-0067 A3).
+---auto-agents.commands.review — the `review.*` command verbs
+---(ADR-0067 A3), on auto-core's command registry.
 ---
 ---Gives agents the same write path a human gets from the diff view, so both
 ---produce the same artifact through the same validator. Thin wrappers over
----`worktree.review`; the `review.` namespace groups them in `commands_list`
+---`worktree.review`; the `review.` namespace groups them in the registry
 ---beside `todos.*`.
 ---
 ---Verb roster (4):
@@ -26,7 +26,7 @@
 ---**`review.validate` exists so a bad payload is diagnosed without spending a
 ---revision number.** Reserving one and failing retires it permanently
 ---(ADR-0067 §2.1), which is cheap but not free.
----@module 'auto-agents.mailbox.review_commands'
+---@module 'auto-agents.commands.review'
 
 local M = {}
 
@@ -80,7 +80,7 @@ local function resolve_slug(arg)
   -- worktree: handed a worktree path it used it as `--git-dir`, silently keyed
   -- off the wrong thing, and `review.list` answered `count = 0` against a store
   -- that had the review in it. A worktree and its repo must resolve to the same
-  -- slug or the mailbox reads a different store than the panel writes.
+  -- slug or the verb reads a different store than the panel writes.
   local common = arg
   local res = vim.system({ "git", "-C", arg, "rev-parse", "--git-common-dir" }, {}):wait()
   if res.code == 0 then
@@ -144,7 +144,7 @@ local function h_create(args)
   end
 
   -- The SHARED envelope constructor (ADR-0067 §2.4, criterion 11): the panel
-  -- and the mailbox must produce equivalent artifacts, which they cannot while
+  -- and the verbs must produce equivalent artifacts, which they cannot while
   -- each builds its own. It also DERIVES repo identity from the slug, which is
   -- what makes this verb's documented minimal call — repo/commit/reviewer/
   -- markdown, no url or owner — actually valid.
@@ -173,7 +173,7 @@ local function h_create(args)
     })
   end)
   if not ok_pub then
-    require("auto-agents.log").warn("mailbox.review",
+    require("auto-agents.log").warn("commands.review",
       "core.review:changed not published — an open view will not refresh: "
       .. tostring(puberr))
   end
@@ -251,19 +251,19 @@ local SPECS = {
   },
 }
 
----register_all mirrors `todos_commands.register_all`.
+---register_all mirrors `auto-agents.commands.todos.register_all`.
 ---@return { registered: string[], skipped: string[] }
 function M.register_all()
-  local mailbox = require("auto-core").mailbox
+  local commands = require("auto-core.commands")
   local out = { registered = {}, skipped = {} }
   for name, spec in pairs(SPECS) do
-    local ok, regerr = mailbox.commands.register(name, spec)
+    local ok, regerr = commands.register(name, spec)
     if ok then
       _registered[name] = true
       out.registered[#out.registered + 1] = name
     else
       out.skipped[#out.skipped + 1] = name
-      require("auto-agents.log").warn("mailbox.commands",
+      require("auto-agents.log").warn("commands",
         string.format("register('%s') failed: %s", name, tostring(regerr)))
     end
   end

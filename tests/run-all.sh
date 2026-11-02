@@ -46,6 +46,13 @@ if [ ! -f "$core/lua/auto-core/kb.lua" ]; then
   echo "run-all: FAILED"
   exit 1
 fi
+# auto-agents v0.4.0 registers its verbs on auto-core.commands (auto-core v0.6.0).
+if [ ! -f "$core/lua/auto-core/commands.lua" ]; then
+  echo "run-all: auto-core at '$core' has no lua/auto-core/commands.lua."
+  echo "         Point AUTO_CORE_ROOT at an auto-core checkout with auto-core.commands (v0.6.0)."
+  echo "run-all: FAILED"
+  exit 1
+fi
 export AUTO_CORE_ROOT="$(cd "$core" && pwd)"
 
 overall=0

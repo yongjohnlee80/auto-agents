@@ -80,7 +80,7 @@ vim.fn.mkdir(proj, "p")
 local worktree = require("auto-core.git.worktree")
 worktree.set_workspace_root(proj)
 
-local todos = require("auto-agents.mailbox.todos_commands")
+local todos = require("auto-agents.commands.todos")
 local SPECS = todos._SPECS
 local function run(verb, args, ctx)
   local spec = SPECS[verb]

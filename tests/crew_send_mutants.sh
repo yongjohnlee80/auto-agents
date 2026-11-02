@@ -31,7 +31,7 @@ for spec in crew_send_spec todos_daemon_spec; do
 done
 
 C=lua/auto-agents/crew.lua
-T=lua/auto-agents/mailbox/todos_commands.lua
+T=lua/auto-agents/commands/todos.lua
 # spec|file|name|old|new — literal strings (\n = newline); old must occur exactly once.
 mutants=(
   "crew_send_spec|$C|the hook never registered|    pcall(notifier.set_crew_recipient, M.crew_send)|    local _ = notifier"
