@@ -131,5 +131,25 @@ do
   ok("[5] one attached with --remote adds nothing", vim.deep_equal(b, {}), vim.inspect(b))
 end
 
+-- [6] a slot started while another Neovim holds the scope: its setup stripped of its server, the
+-- command it really starts with keeps it off Codex's shared daemon (--no-daemon), as one with no
+-- crew setup at all; one whose private server runs needs nothing
+do
+  local aa = require("auto-agents")
+  local crew = require("auto-agents.crew")
+  local setup = { argv = { "--remote", "unix:///f/codex.sock", "-c", "x=1" }, env = { AUTODOC_CODEX_SERVER = "/f/codex.sock" },
+    server = { "codex", "app-server", "--listen", "unix:///f/codex.sock" }, server_socket = "/f/codex.sock", after = {} }
+  local stripped = crew.without_server(setup)
+  local cmd = vim.list_extend({ "codex" }, stripped.argv)
+  local spec = { kind = "codex", configured = true, cmd = cmd }
+  ok("[6] a denied slot's stripped setup leaves no private server: the safeguard applies",
+    aa._codex_safeguard(spec, stripped, nil) == true)
+  local extra = cd.argv(cmd, { PATH = codex(NEWER) }, folder())
+  ok("[6] its real command gets --no-daemon", vim.deep_equal(extra, { "--no-daemon" }), vim.inspect({ cmd, extra }))
+  ok("[6] a slot whose private server runs needs no safeguard", aa._codex_safeguard(spec, setup, { pid = 1 }) == false)
+  ok("[6] a slot with no crew setup at all gets it too", aa._codex_safeguard({ kind = "codex", cmd = { "codex" } }, nil, nil) == true)
+  ok("[6] another kind never", aa._codex_safeguard({ kind = "claude", cmd = { "claude" } }, nil, nil) == false)
+end
+
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
 if fail > 0 then os.exit(1) end

@@ -1030,10 +1030,12 @@ local function ensure_main_slot_terminal(slot, winid)
       return nil
     end
   end
-  -- a Codex agent with no crew setup is kept off Codex's shared daemon, which runs its commands
-  -- with whichever agent's environment started it (auto-agents.codex_daemon): --no-daemon when its
-  -- Codex takes it, or the spawn refused when that can't be told
-  if spec.configured ~= false and spec.kind == "codex" and not crew_setup and type(spec.cmd) == "table" and spec.cmd[1] then
+  -- a Codex agent with no private server of its own (no crew setup, or one stripped of its server
+  -- because another Neovim holds the scope) is kept off Codex's shared daemon, which runs its
+  -- commands with whichever agent's environment started it (auto-agents.codex_daemon): --no-daemon
+  -- when its Codex takes it, nothing when its command already says --no-daemon or --remote, or the
+  -- spawn refused when that can't be told
+  if M._codex_safeguard(spec, crew_setup, server) then
     local extra, cwhy = require("auto-agents.codex_daemon").argv(spec.cmd, env, cwd)
     if not extra then
       require("auto-agents.crew").finish(crew_session, "start_failed")
@@ -1541,6 +1543,19 @@ end
 -- call errored (`attempt to call global '_bootstrap_entry'`) — a
 -- v0.2.39 regression that broke the auto-finder `A` assign keymap.
 local _bootstrap_entry
+
+---_codex_safeguard reports whether a spawn's Codex agent must be kept off Codex's shared daemon
+---(auto-agents.codex_daemon): a configured codex slot with a command and no private server of its
+---own running: whether it had no crew setup, or one stripped of its server (without_server).
+---@param spec table
+---@param crew_setup table|nil its crew setup, if any
+---@param server table|nil the private server started for it, if any
+---@return boolean
+function M._codex_safeguard(spec, crew_setup, server)
+  local private = server ~= nil and crew_setup ~= nil and #(crew_setup.server or {}) > 0
+  return spec.configured ~= false and spec.kind == "codex" and not private and type(spec.cmd) == "table"
+    and spec.cmd[1] ~= nil
+end
 
 ---v0.2.39: enumerate every currently-spawned agent slot. Returns
 ---a list of `{slot, name, kind, agent_id}` entries — one per
