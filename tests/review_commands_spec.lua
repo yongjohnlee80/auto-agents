@@ -1,4 +1,4 @@
--- Headless tests for auto-agents.mailbox.review_commands (ADR-0067 A3). Run:
+-- Headless tests for auto-agents.commands.review (ADR-0067 A3). Run:
 --   nvim --headless -u NONE -l tests/review_commands_spec.lua
 --
 -- The verbs are thin, so the assertions are about the CONTRACT rather than the
@@ -55,27 +55,26 @@ local function ok(n, c, d)
   io.stdout:flush()
 end
 
-local rc = require("auto-agents.mailbox.review_commands")
+local rc = require("auto-agents.commands.review")
 local store = require("worktree.store")
 local review = require("worktree.review")
 store._root_override = sb .. "/wtstore"
 
--- The handlers are private; drive them the way the mailbox does, through the
+-- The handlers are private; drive them the way the registry does, through the
 -- registered specs, so the schema and the handler are exercised together.
 local handlers = {}
 do
-  local fake = { commands = { register = function(name, spec)
+  local fake = { register = function(name, spec)
     handlers[name] = spec.handler; return true
-  end } }
+  end }
   -- Require the REAL auto-core first. `package.loaded[...] or {}` created an
   -- empty stub when it had not been loaded yet, which then shadowed the real
   -- module for the rest of the run — `.events` was nil and the event assertion
   -- could not have worked whatever production did.
-  local core = require("auto-core")
-  local real = core.mailbox
-  core.mailbox = fake
+  local real = require("auto-core.commands")
+  package.loaded["auto-core.commands"] = fake
   local out = rc.register_all()
-  core.mailbox = real
+  package.loaded["auto-core.commands"] = real
   ok("all four verbs register", #out.registered == 4 and #out.skipped == 0,
     vim.inspect(out))
   ok("and the roster matches what registered",

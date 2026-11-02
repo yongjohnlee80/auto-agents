@@ -9,7 +9,7 @@
 ---   [3] grants: the defaults read the page and review; editor.open needs commands; a roster's own
 ---       list replaces the defaults
 ---   [4] editor.read and editor.find on a buffer: text and revision; 1-based character positions
----   [5] the bridged mailbox commands: the registered handler runs with the args and the agent as
+---   [5] the bridged command verbs (auto-core.commands): the registered handler runs with the args and the agent as
 ---       sender; ok answers its value, a refusal is the editor's refused code, bad args are invalid
 ---       params, an unregistered one is method-not-found
 ---   [6] framing: a request split across writes is answered once, two in one write both, and bytes
@@ -36,9 +36,11 @@ local function ok(name, cond, detail)
   end
 end
 
--- a stub of auto-core's command registry, for the bridged verbs
+-- a stub of auto-core's command registry (auto-core.commands), for the bridged verbs; auto-core
+-- itself has no mailbox, as from v0.6.0, so a bridge that still looked there finds nothing
 local registry, seen = {}, {}
-package.loaded["auto-core"] = { mailbox = { commands = {
+package.loaded["auto-core"] = {}
+package.loaded["auto-core.commands"] = {
   get = function(name) return registry[name] end,
   validate_args = function(args, schema)
     for k, t in pairs(schema) do
@@ -46,7 +48,7 @@ package.loaded["auto-core"] = { mailbox = { commands = {
     end
     return true
   end,
-} } }
+}
 
 local es = require("auto-agents.editor_socket")
 
@@ -166,7 +168,7 @@ do
   ok("[4] an empty term is invalid params", ferr and ferr.code == es.CODE_INVALID_PARAMS)
 end
 
--- ── [5] the bridged mailbox commands ────────────────────────────────────────
+-- ── [5] the bridged command verbs ──────────────────────────────────────────
 
 do
   local tok = es.agent_env("reviewer").AUTODOC_EDITOR_TOKEN

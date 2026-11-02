@@ -352,10 +352,10 @@ local function dispatch(input)
     end
 
   elseif verb == "run" then
-    -- Dispatch any registered mailbox command from the admin REPL.
-    -- Shares one source of truth (auto-core.mailbox.commands) with
-    -- the agent-facing `commands_list` registry — admin and peer
-    -- agents invoke the same handlers with the same arg shape.
+    -- Dispatch any registered command verb from the admin REPL.
+    -- Shares one source of truth (auto-core.commands) with the editor
+    -- socket, which serves the agents — admin and agents invoke the
+    -- same handlers with the same arg shape.
     --
     -- Usage:
     --   run                      → list registered commands
@@ -364,15 +364,15 @@ local function dispatch(input)
     --   run say  <slot> <text>   → positional shortcut (text = rest of input)
     --   run <verb> k=v k2=v2 ... → generic key=value args
     local cmd_name = toks[2]
-    local ok_core, core = pcall(require, "auto-core")
-    if not ok_core then
-      emit({ "run: require('auto-core') failed" })
+    local ok_cmds, commands = pcall(require, "auto-core.commands")
+    if not ok_cmds then
+      emit({ "run: require('auto-core.commands') failed" })
       return
     end
 
     if not cmd_name then
       -- List the live registry.
-      local entries = core.mailbox.commands.list() or {}
+      local entries = commands.list() or {}
       table.sort(entries, function(a, b) return tostring(a.name) < tostring(b.name) end)
       local lines = { "Registered commands (run <verb> args...):" }
       for _, e in ipairs(entries) do
@@ -383,7 +383,7 @@ local function dispatch(input)
       return
     end
 
-    local spec = core.mailbox.commands.get(cmd_name)
+    local spec = commands.get(cmd_name)
     if not spec then
       emit({ "run: unknown command '" .. cmd_name
              .. "' (type 'run' for the live list)" })
@@ -947,12 +947,12 @@ local function complete_at(prompt, cursor_col)
     candidates = { "help", "?", ":h", "status", "agent", "kb", "resource", "project", "config", "panel", "slot", "term", "run", "clear", "quit" }
   elseif #prev_toks == 1 and prev_toks[1] == "run" then
     -- Pull the live registry rather than a hardcoded list — adding
-    -- a new command via `mailbox.commands.register` makes it
+    -- a new command via `auto-core.commands.register` makes it
     -- tab-complete here without touching this module.
-    local core_ok, core = pcall(require, "auto-core")
-    if core_ok then
+    local cmds_ok, commands = pcall(require, "auto-core.commands")
+    if cmds_ok then
       candidates = {}
-      for _, e in ipairs(core.mailbox.commands.list() or {}) do
+      for _, e in ipairs(commands.list() or {}) do
         candidates[#candidates + 1] = e.name
       end
       table.sort(candidates)

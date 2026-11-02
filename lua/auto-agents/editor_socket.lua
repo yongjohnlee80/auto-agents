@@ -16,11 +16,11 @@
 ---  editor.read [from_line, to_line, buf]  {text, revision}                                editor.read
 ---  editor.find term [buf]                 [[l1, c1, l2, c2], …]                           editor.read
 ---  editor.open path                       {opening}                                       commands
----  peek / diff_queue / review.* {args}    the mailbox command's own answer                review (peek: peek)
+---  peek / diff_queue / review.* {args}    the command verb's own answer                   review (peek: peek)
 ---
----Positions are 1-based lines and columns (a column is a character), as AutoDoc's are. The mailbox
----commands that act in Neovim (peek, diff_queue, review.*) are served here unchanged: the same
----registered handler, its argument schema checked, so the file mailbox can be retired without them.
+---Positions are 1-based lines and columns (a column is a character), as AutoDoc's are. The command
+---verbs that act in Neovim (peek, diff_queue, review.*) are served here: the handler registered on
+---auto-core's command registry (auto-core.commands), its argument schema checked.
 local M = {}
 
 -- golib rpc's codes (server/rpc/message.go), and AutoDoc's editor refusal (tui/editorsocket.go).
@@ -148,12 +148,12 @@ verbs["editor.open"] = { grant = "commands", fn = function(_, args)
   return { opening = path }
 end }
 
--- the mailbox commands that act in Neovim, served through their own registered handlers
+-- the command verbs that act in Neovim, served through their own registered handlers (auto-core.commands)
 local bridged = { peek = "peek", diff_queue = "review", ["review.create"] = "review", ["review.list"] = "review",
   ["review.show"] = "review", ["review.validate"] = "review" }
 
 local function bridge(name, agent, args, msgid)
-  local ok, commands = pcall(function() return require("auto-core").mailbox.commands end)
+  local ok, commands = pcall(require, "auto-core.commands")
   local spec = ok and commands and commands.get(name) or nil
   if not spec or type(spec.handler) ~= "function" then
     return nil, rpc_error(M.CODE_METHOD_NOT_FOUND, name .. " is not registered in this Neovim")
