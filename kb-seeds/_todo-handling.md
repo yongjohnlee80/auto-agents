@@ -12,7 +12,7 @@ tags: [todos, convention, todo-handling]
 
 **Tags:** `type:convention` `living-doc` `owner:shared` `repo:shared` `area:todos` `area:workflow`
 
-**Revision**: 6 — compare against your stored value on every spawn; re-ingest on change.
+**Revision**: 7 — compare against your stored value on every spawn; re-ingest on change.
 
 **Abstract:** Per-project policy for how tasks are stored, edited, and moved
 between buckets. Each KB MAY customize this file; agents treat it as

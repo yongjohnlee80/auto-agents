@@ -1106,9 +1106,9 @@ do
   ok("19b: kb-seeds/ holds only the todo-handling seed",
     #seeds == 1 and seeds[1] == "_todo-handling.md", vim.inspect(seeds))
   local seed_text = table.concat(vim.fn.readfile(project_root .. "/kb-seeds/_todo-handling.md"), "\n")
-  ok("19b: the todo-handling seed is the convention, revision 6 (AutoDoc owns the store; no import)",
-    seed_text:find("\nrevision: 6\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil
-      and seed_text:find("**Revision**: 6", 1, true) ~= nil)
+  ok("19b: the todo-handling seed is the convention, revision 7 (AutoDoc owns the store; no import; no mailbox)",
+    seed_text:find("\nrevision: 7\n", 1, true) ~= nil and seed_text:find("# Convention — Todo handling", 1, true) ~= nil
+      and seed_text:find("**Revision**: 7", 1, true) ~= nil and seed_text:find("mailbox", 1, true) == nil)
   ok("19b: …and names no migration command or auto-core.todo Lua API",
     seed_text:find("MigrateKbTodos", 1, true) == nil and seed_text:find('require("auto-core.todo")', 1, true) == nil)
   ok("19b: …no example names a v1 path (shared/adrs, shared/conventions)",
@@ -1375,7 +1375,10 @@ do
   ok("24g: control — todos.list is in SPECS", type(todos_mod._SPECS["todos.list"]) == "table")
   ok("24g: todos.fire is not in SPECS", todos_mod._SPECS["todos.fire"] == nil)
   ok("24g: todos.automation_set is not in SPECS", todos_mod._SPECS["todos.automation_set"] == nil)
+  vim.cmd("runtime! plugin/auto-agents.lua") -- the user commands (no section before this one sources it)
   ok("24g: control — :AutoAgentsTodosDoc exists", vim.fn.exists(":AutoAgentsTodosDoc") == 2)
+  ok("24g: the file mailbox's commands are gone (v0.4.0)", vim.fn.exists(":AutoAgentsAdoptResumedAgent") == 0
+    and vim.fn.exists(":AutoAgentsGatewayRelease") == 0)
   ok("24g: :AutoAgentsTodosAutomationEnable no longer exists",
     vim.fn.exists(":AutoAgentsTodosAutomationEnable") == 0)
   ok("24g: :AutoAgentsMigrateKbTodos no longer exists (import was dropped, D3)",
@@ -1493,7 +1496,7 @@ do
     src = src:sub(1, 1) == "@" and src:sub(2) or nil
   end
   ok("24l: located the module source via a SPECS handler, not a built path",
-    src ~= nil and src:match("todos_commands%.lua$") ~= nil, tostring(src))
+    src ~= nil and src:match("commands/todos%.lua$") ~= nil, tostring(src))
 
   local text = ""
   if src then
@@ -2218,6 +2221,10 @@ do
   local tmp_kb = vim.fn.tempname() .. "_kb29"
   vim.fn.mkdir(tmp_kb, "p")
   aa.state.config.kb = { root = tmp_kb }
+  -- the grant is the primary KB's (v0.4.0: no mailbox dir to grant), so the fixture has one
+  local kb29 = require("auto-core.kb")
+  kb29._reset_for_tests()
+  kb29.set_primary(nil, { root = tmp_kb, workspace = "ws-29" }, { confirmed = true })
 
   local initial_cmd = { "agy", "--verbose" }
   aa.state.config.agents.bootstrap = {
@@ -2230,8 +2237,9 @@ do
 
   local env1 = aa._build_agent_env(spec_resolved, tmp_kb)
   ok("29b: build_agent_env returns env table", type(env1) == "table")
-  ok("29b: spec_resolved.cmd received --add-dir grants",
-    vim.tbl_contains(spec_resolved.cmd, "--add-dir"))
+  ok("29b: spec_resolved.cmd received the primary KB's --add-dir grant",
+    vim.tbl_contains(spec_resolved.cmd, "--add-dir") and vim.tbl_contains(spec_resolved.cmd, tmp_kb),
+    vim.inspect(spec_resolved.cmd))
   ok("29b: initial bootstrap entry cmd was NOT mutated by build_agent_env",
     #initial_cmd == 2 and initial_cmd[3] == nil, vim.inspect(initial_cmd))
   ok("29b: bootstrap[1].cmd in state was NOT mutated",
@@ -2248,6 +2256,7 @@ do
       and not vim.tbl_contains(aa.state.config.agents.bootstrap[1].cmd, "--add-dir"),
     vim.inspect(aa.state.config.agents.bootstrap[1].cmd))
 
+  kb29._reset_for_tests()
   pcall(vim.fn.delete, tmp_kb, "rf")
 
   -- 29c. agent.canonical_cmd, is_mismatched_cmd, and sanitize_cmd
