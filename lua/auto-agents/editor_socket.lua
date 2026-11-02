@@ -337,6 +337,37 @@ function M.agent_env(agent, grants)
   return { AUTODOC_EDITOR = _s.path, AUTODOC_EDITOR_TOKEN = token, AUTODOC_AGENT = agent }
 end
 
+-- CREDENTIAL_ENV names the file holding an agent's editor token, for `autodoc --editor` where
+-- AUTODOC_EDITOR_TOKEN doesn't reach: a Codex agent's tool shells drop every variable named *TOKEN*.
+-- Its name holds none of the words Codex filters (KEY, SECRET, TOKEN).
+M.CREDENTIAL_ENV = "AUTODOC_EDITOR_CREDENTIAL_FILE"
+M.CREDENTIAL_FILE = ".autodoc-editor-credential"
+
+---credential_env is, for a Codex agent (crew kind "codex") with its own folder dir, the variable
+---naming its editor token's file, written there now (0600, through a temporary file renamed over
+---it): the token itself stays out of every variable Codex's tools see. nil for any other kind, with
+---no folder, or when the file can't be written (and why).
+---@param kind string|nil auto-agents' kind
+---@param dir string|nil the agent's own folder
+---@param token string
+---@return table|nil env, string|nil why
+function M.credential_env(kind, dir, token)
+  if kind ~= "codex" or type(dir) ~= "string" or dir == "" or type(token) ~= "string" or token == "" then return nil end
+  local path = vim.fs.joinpath(dir, M.CREDENTIAL_FILE)
+  local tmp = path .. "." .. require("auto-agents.crew").run_token():sub(1, 12)
+  local fd, oerr = vim.uv.fs_open(tmp, "wx", tonumber("600", 8))
+  if not fd then return nil, tostring(oerr) end
+  local _, werr = vim.uv.fs_write(fd, token)
+  vim.uv.fs_close(fd)
+  if not werr then
+    local ok, rerr = vim.uv.fs_rename(tmp, path)
+    if ok then return { [M.CREDENTIAL_ENV] = path }, nil end
+    werr = rerr
+  end
+  vim.uv.fs_unlink(tmp)
+  return nil, tostring(werr)
+end
+
 ---forget drops agent's token: its process ended, so nothing reaches the page in its name. Given
 ---token (the one agent_env minted for that process), it drops that token only, and nothing when
 ---the agent holds another: a restart's new process minted it before the old one's exit was reaped,
