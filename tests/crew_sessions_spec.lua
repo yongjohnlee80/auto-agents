@@ -1033,6 +1033,21 @@ do -- a registration refused while the scope is held: asked again at a renewal, 
   crew.stop()
 end
 
+-- ── [22] a registration that raises is said in one plain line (N7) ──────────
+
+do
+  ok("[22] a raised error's file positions are dropped, its first line kept",
+    crew.plain_reason("/home/u/.local/share/nvim/lazy/auto-agents/lua/auto-agents/crew.lua:914: attempt to index nil\nstack traceback:\n\t[C]: in ?")
+      == "attempt to index nil")
+  ok("[22] nested positions are all dropped",
+    crew.plain_reason("a/b.lua:1: c.lua:22: session.lua:3: busy") == "busy")
+  ok("[22] a reason with no position is kept as it is", crew.plain_reason("codename_busy") == "codename_busy")
+  ok("[22] a non-string error reads as a string", crew.plain_reason({}) ~= "" and crew.plain_reason(nil) == "nil")
+  ok("[22] an empty one is still a reason", crew.plain_reason("x.lua:9: ") == "unknown error")
+  local long = crew.plain_reason(string.rep("x", 500))
+  ok("[22] at most 200 bytes", #long == 200 and long:sub(-3) == "...")
+end
+
 crew.stop()
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
 if fail > 0 then os.exit(1) end

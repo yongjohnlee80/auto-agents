@@ -372,6 +372,20 @@ function M.context_path(cwd, codename)
 end
 
 -- a session id names its context's file: a plain file name, never a dot file
+---plain_reason is err as one line a user reads: its first line, without the Lua file positions
+---a raised error carries ("…/crew.lua:914: "), at most 200 bytes.
+---@param err any
+---@return string
+function M.plain_reason(err)
+  local line = vim.trim((tostring(err):match("^[^\n]*")))
+  repeat
+    local rest = line:match("^[^%s:]+%.lua:%d+:%s*(.*)$")
+    line = rest or line
+  until not rest
+  if line == "" then line = "unknown error" end
+  return #line > 200 and (line:sub(1, 197) .. "...") or line
+end
+
 local function plain_name(session)
   return type(session) == "string" and session ~= "" and session:sub(1, 1) ~= "." and not session:find("[/\\]")
 end
