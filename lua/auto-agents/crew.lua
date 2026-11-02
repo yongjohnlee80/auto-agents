@@ -1004,7 +1004,7 @@ local function run_after(st, h)
   local s = h.session
   if not s or not h.run_env or h.ran[s.id] then return end
   h.ran[s.id] = true
-  for _, argv in ipairs(h.after or {}) do st.run(argv, h) end
+  for _, argv in ipairs(h.after or {}) do st.run_step(argv, h) end
 end
 
 -- agy_bridge_check types an agy slot's launch prompt once for session s when, AGY_PROMPT_WAIT_MS
@@ -1190,7 +1190,7 @@ function M.setup(opts)
     -- it without a live session (rejoin_all)
     handles = {},
     -- a slot's after-step, run detached under its terminal's environment in its folder
-    run = opts.run or function(argv, h)
+    run_step = opts.run_step or function(argv, h)
       local okr, rerr = pcall(vim.system, argv, { env = h.run_env, cwd = h.cwd, detach = true })
       if not okr then pcall(function() require("auto-agents.log").warn("crew", h.codename .. "'s setup step failed to start: " .. tostring(rerr)) end) end
     end,
