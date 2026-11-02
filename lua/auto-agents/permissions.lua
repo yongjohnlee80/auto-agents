@@ -215,7 +215,11 @@ end
 ---@return string|nil why when the kind's grant could not be made
 function M.env_for_kind(kind, dirs, env)
   if kind ~= "opencode" then return {} end
-  local v, why = opencode_content((env or {}).OPENCODE_CONFIG_CONTENT, dirs or {})
+  -- the effective value: the spawn's own, else the one the agent inherits from Neovim, so its
+  -- plugins, MCP servers and permission rules survive next to the grant
+  local current = (env or {}).OPENCODE_CONFIG_CONTENT
+  if current == nil or current == "" then current = vim.env.OPENCODE_CONFIG_CONTENT end
+  local v, why = opencode_content(current, dirs or {})
   return v and { OPENCODE_CONFIG_CONTENT = v } or {}, why
 end
 
