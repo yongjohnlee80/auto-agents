@@ -51,10 +51,17 @@ local function codex(help)
   return script("case \"$1\" in --version) echo 'codex-cli 0.0.0-test';; --help) printf '%s\\n' '" .. help .. "';; esac\n")
 end
 
+-- a folder that exists, as an agent's always does (a spawn in a missing one fails before any probe)
+local function folder()
+  local d = vim.fn.tempname()
+  vim.fn.mkdir(d, "p")
+  return d
+end
+
 local function argv(dir, cwd, extra_env)
   local env = { PATH = dir }
   for k, v in pairs(extra_env or {}) do env[k] = v end
-  return cd.argv({ "codex" }, env, cwd or vim.fn.tempname())
+  return cd.argv({ "codex" }, env, cwd or folder())
 end
 
 do
@@ -88,7 +95,7 @@ do
     local dir = script("[ \"$1\" = --help ] && [ -f \"${0%/*}/broken\" ] && " .. failing .. "\n"
       .. "case \"$1\" in --version) echo codex-cli 0.163.0;; --help) printf '%s\\n' '" .. NEWER .. "';; esac\n")
     local f = assert(io.open(dir .. "/broken", "w")); f:close()
-    local cwd = vim.fn.tempname()
+    local cwd = folder()
     local a = argv(dir, cwd)
     ok("[3] " .. name .. ": refused while its Codex can't be read", a == nil)
     os.remove(dir .. "/broken")
@@ -107,8 +114,8 @@ do
     { "the older folder", older, nil, {} },
     { "the newer folder", newer, nil, { "--no-daemon" } },
     { "the older folder again", older, nil, {} },
-    { "a profile picking the newer", vim.fn.tempname(), { CODEX_PICK = "newer" }, { "--no-daemon" } },
-    { "a folder picking none", vim.fn.tempname(), nil, {} },
+    { "a profile picking the newer", folder(), { CODEX_PICK = "newer" }, { "--no-daemon" } },
+    { "a folder picking none", folder(), nil, {} },
   }) do
     vim.fn.mkdir(c[2], "p")
     local a = argv(shim, c[2], c[3])
@@ -118,9 +125,9 @@ end
 
 do
   local broken = script("exit 1\n")
-  local a = cd.argv({ "codex", "--no-daemon" }, { PATH = broken }, vim.fn.tempname())
+  local a = cd.argv({ "codex", "--no-daemon" }, { PATH = broken }, folder())
   ok("[5] a command with --no-daemon already adds nothing, no probe", vim.deep_equal(a, {}), vim.inspect(a))
-  local b = cd.argv({ "codex", "--remote", "unix:///x.sock" }, { PATH = broken }, vim.fn.tempname())
+  local b = cd.argv({ "codex", "--remote", "unix:///x.sock" }, { PATH = broken }, folder())
   ok("[5] one attached with --remote adds nothing", vim.deep_equal(b, {}), vim.inspect(b))
 end
 
