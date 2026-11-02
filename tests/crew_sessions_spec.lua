@@ -162,7 +162,7 @@ local function new_world(opts)
     session = w.session, events = w.events, env = { AUTOVIM_PROJECT = "alpha" }, project_key = "k1", proc = "",
     notify = function(msg) w.notices[#w.notices + 1] = msg end,
     after = function(_, fn) w.timers[#w.timers + 1] = fn end,
-    run = function(argv, h) w.ran[#w.ran + 1] = { argv = argv, session = h.session and h.session.id } end,
+    run_step = function(argv, h) w.ran[#w.ran + 1] = { argv = argv, session = h.session and h.session.id } end,
     log = function(msg) w.logs[#w.logs + 1] = msg end,
     type_once = function(codename, key, text) w.typed[#w.typed + 1] = { codename = codename, key = key, text = text }; return true end,
     wait = function(_, cond)
