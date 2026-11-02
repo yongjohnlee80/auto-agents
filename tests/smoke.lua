@@ -489,6 +489,28 @@ ok("validate rejects slot_count = 10 (above cap 9)",
   type(err_high) == "string" and err_high:find("slot_count") ~= nil,
   tostring(err_high))
 
+-- Validation: a roster's editor_grants may name the opt-in `run` grant (auto-run's run.*
+-- verbs on the editor socket); a grant that doesn't exist is refused, naming the list.
+local function with_grants(g)
+  return cfg_mod.validate({
+    log_level = "info",
+    panel = { side = "right", min_width = 60, max_width = 130, percentage = 0.35,
+      width_override = nil, slot_count = 5, editor_floor = 40, slot_rail = "winbar",
+      bottom_margin = 1 },
+    agents = { default_kind = "claude", primary_kind = "claude",
+      bootstrap = { { slot = 1, name = "runner", kind = "claude", editor_grants = g } } },
+    kb = { default_scope = "shared" },
+    terminal = { provider = "auto" },
+    term = { enabled = true, fkeys = {} },
+  })
+end
+local err_run = with_grants({ "editor.read", "run" })
+ok("validate accepts editor_grants naming `run`", err_run == nil, tostring(err_run))
+local err_bogus = with_grants({ "runs" })
+ok("validate refuses an unknown grant, listing run among the grants",
+  type(err_bogus) == "string" and err_bogus:find("runs", 1, true) ~= nil and err_bogus:find("todos, run", 1, true) ~= nil,
+  tostring(err_bogus))
+
 -- Dock entries reflect the live slot_count rather than a hardcoded
 -- 0..9. Open the dock once at slot_count=5, count entries; grow to 7
 -- via sync_slot_count, count again; expect entry count to grow by 2.

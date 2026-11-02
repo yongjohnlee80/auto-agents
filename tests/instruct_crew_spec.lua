@@ -118,7 +118,8 @@ do
   editor_path = "/run/user/1000/auto-agents/editor-1.sock"
   local s = block_for("claude")
   ok("[4] the editor section, with the socket's verbs", has(s, "### Neovim's editor")
-    and has(s, "`peek`, `diff_queue`,") and has(s, "the `todos.*` verbs,") and has(s, "`editor_grants`"))
+    and has(s, "`peek`, `diff_queue`,") and has(s, "the `todos.*` verbs and") and has(s, "auto-run's `run.*` verbs") and has(s, "`run` only when it lists it")
+    and has(s, "`editor_grants`"))
   editor_path = nil
   ok("[4] none without the socket", not has(block_for("claude"), "### Neovim's editor"))
 end

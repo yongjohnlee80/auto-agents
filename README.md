@@ -351,7 +351,10 @@ duplicated, and the `[kb].root` comes along.
 The agents this Neovim starts reach its verbs through Neovim's editor socket
 (`autodoc --editor <verb> '[{…}]'`, `auto-agents.editor_socket`), each verb
 behind a grant (`editor_grants` in the roster; the defaults are
-`editor.read`, `review`, `peek` and `todos`). Every message between agents,
+`editor.read`, `review`, `peek` and `todos`; `commands` and `run` are opt-in).
+`run` serves auto-run's `run.*` verbs, whichever it registers; auto-run's
+own trust (`auto-core.trust`) still gates the ones that start a process.
+Every message between agents,
 and from the user, goes through AutoDoc's crew mail; there is no file
 mailbox (auto-agents v0.4.0).
 

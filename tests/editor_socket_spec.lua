@@ -14,6 +14,8 @@
 ---       params, an unregistered one is method-not-found
 ---   [5b] the todos.* verbs: bridged under the default grants (todos), the caller as ctx.from;
 ---       a roster without the todos grant is refused
+---   [5c] auto-run's run.* verbs: served under the opt-in `run` grant; the defaults are refused, naming it,
+---       the handler never run; an unregistered run.* is not-registered; only the run. namespace
 ---   [6] framing: a request split across writes is answered once, two in one write both, and bytes
 ---       that aren't msgpack close the connection
 ---   [7] an unknown verb is method-not-found
@@ -224,6 +226,35 @@ do
     end
     return true
   end)())
+end
+
+-- ── [5c] auto-run's run.* verbs, behind the opt-in `run` grant ─────────────
+
+do
+  local got
+  registry["run.list"] = { schema = {}, handler = function(args, ctx)
+    got = { args = args, ctx = ctx }
+    return { ok = true, value = { { name = "Debug Gold" } } }
+  end }
+  local runner = es.agent_env("runner", { "editor.read", "run" }).AUTODOC_EDITOR_TOKEN
+  local res, err = call(path, "run.list", { runner, {} })
+  ok("[5c] *** run.list is served to an agent granted `run` ***", err == nil and type(res) == "table"
+    and res[1] and res[1].name == "Debug Gold", vim.inspect({ res, err }))
+  ok("[5c] its handler is told the caller", got and got.ctx.from == "agent:runner", vim.inspect(got and got.ctx))
+  got = nil
+  local dflt = es.agent_env("plain").AUTODOC_EDITOR_TOKEN
+  local _, derr = call(path, "run.list", { dflt, {} })
+  ok("[5c] *** the defaults don't grant `run`: refused, naming it, the handler never run ***",
+    derr and derr.code == es.CODE_ACCESS_DENIED and derr.message:find("run", 1, true) ~= nil and got == nil,
+    vim.inspect(derr))
+  local _, uerr = call(path, "run.ghost", { runner, {} })
+  ok("[5c] a run.* verb auto-run hasn't registered is not found, as a bridged verb is",
+    uerr and uerr.code == es.CODE_METHOD_NOT_FOUND and uerr.message:find("not registered", 1, true) ~= nil,
+    vim.inspect(uerr))
+  local _, berr = call(path, "runx.list", { runner, {} })
+  ok("[5c] only the run. namespace is bridged", berr and berr.code == es.CODE_METHOD_NOT_FOUND
+    and berr.message:find("no verb", 1, true) ~= nil, vim.inspect(berr))
+  registry["run.list"] = nil
 end
 
 -- ── [6] framing ─────────────────────────────────────────────────────────────
