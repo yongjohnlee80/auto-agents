@@ -2,6 +2,42 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.4.0] — 2026-11-02 — the file mailbox retired; crew-wired slots join late
+
+ADR 1793271500, phase 5: the joint release with auto-core v0.6.0. **It needs auto-core v0.6.0**
+(the command verbs register on `auto-core.commands`), so autovim moves both carets together. Every
+message between agents, and from the user, goes through AutoDoc's crew mail.
+
+- **The file mailbox is gone:** its verbs, notices, gateway, identity sidecar, settings and spawn
+  wiring. A delivery the crew couldn't get received is typed into its agent's terminal once (the
+  fallback), and a diff verdict goes as crew mail. The bootstrap keymaps (`<leader>am`, `<leader>ai`,
+  `<leader>ap`) went with it.
+- **The command verbs register on `auto-core.commands`**, each module on its own.
+- **Neovim's editor socket** serves the command verbs that act in Neovim: `peek`, `diff_queue`,
+  `review.*`, the `todos.*` verbs and, new, **auto-run's `run.*` verbs under an opt-in grant,
+  `run`**. The defaults don't grant it, and auto-core.trust still gates the verbs that start a
+  process. A Codex slot's editor token is a 0600 file of its own folder
+  (`AUTODOC_EDITOR_CREDENTIAL_FILE`), since Codex's shells drop `*TOKEN*` variables.
+- **Late joins:** a slot started before the crew claim is wired, and joins at the claim or a renewal.
+  Its context stays at one path for its life, and its after-steps run once per session. A
+  registration that raises is said in one plain line, and the slot joins later.
+- **Every crew path is this Neovim's own**, under its scope and its incarnation (pid and run nonce):
+  a slot's context, agent folder, editor credential and Codex server. A Neovim denied the scope makes
+  none of them. Private folders are checked and narrowed to 0700, setup files are written through an
+  exclusive 0600 temporary file, and a crashed run's folders are swept only once their owner is
+  provably gone.
+- **Codex:** a Codex agent with no crew setup starts with `--no-daemon` when its Codex takes it, and
+  is refused when that can't be told. A slot with no private server running is kept off Codex's
+  shared daemon. A file a Codex reads says that CLI mail from its sandbox asks for approval, and to
+  use the MCP tools.
+- **Fallback keys:** every Neovim keeps the keys it typed in a file of its own, so no Neovim erases
+  another's keys, and a restart finds its predecessor's.
+- **OpenCode:** the agent's KB root and template folder are allowed in its OPENCODE_CONFIG_CONTENT,
+  merged into the config it would have had, so its own rules, plugins and MCP servers survive.
+- **Instruction files:** one that several kinds read (AGENTS.md: codex, opencode, agy) is rendered
+  for all of them, with each kind's crew guide under its own heading. The blocks name crew mail and
+  the editor socket, not the file mailbox.
+
 ## [v0.3.22] — 2026-11-02 — an assignment reaches its agent through the crew, stated
 
 - **An assignment is sent through the crew unrung** (#32). The todo notifier's crew hook
