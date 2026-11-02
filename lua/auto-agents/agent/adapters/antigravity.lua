@@ -1,8 +1,5 @@
 ---Antigravity CLI adapter (v0.2.30 — replaces deprecated gemini).
----Antigravity is Google's agentic CLI, invoked as `agy`. v0.2.30
----moves all agent mailboxes to a workspace-scoped root
----(`<workspace>/.auto-agents/mailbox/`), so antigravity no longer
----needs a per-CLI config-dir mailbox path.
+---Antigravity is Google's agentic CLI, invoked as `agy`.
 ---
 ---Instruction file: antigravity auto-loads `AGENTS.md` at its cwd —
 ---no per-kind override needed; falls through to the AGENTS.md default

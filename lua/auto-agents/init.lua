@@ -7,16 +7,6 @@ local M = {}
 
 M.version = "0.3.22"
 
--- Mailbox root resolution lives in
--- `lua/auto-agents/runtime/identity.lua` (ADR 0029 Decision #3) so
--- spawn, refresh_agent_id, and adopt-resumed-agent share one source
--- of truth. v0.1.33 (auto-core) workspace-scoped layout — the
--- resolver consults `auto-core.git.worktree.get_workspace_root()`
--- / `get_active()` per [[auto-family-state-ownership]]; agents
--- land at `<workspace>/.auto-agents/mailbox/<instance>/<name>/`.
--- Tests override the resolved root via the single
--- `AUTO_AGENTS_MAILBOX_ROOT` env.
-
 -- Slot stratification (post-v0.1.24 flat-slot refactor). Slot 0 is
 -- admin; slots 1..MAX_SLOT are main agents in the right panel. There
 -- is no longer a "float" tier — `MAX_SLOT` is derived from
@@ -188,7 +178,7 @@ function M.setup(opts)
   M.state.session_project_key = vim.fn.sha256(root):sub(1, 16)
   -- this project's todo scope (ADR 1791532020 §2.5a): an assignment made here carries it, and
   -- auto-core's notifier delivers a bare assignee only in the project that made it. The key, not
-  -- the mailbox instance id, so a restart keeps it.
+  -- this Neovim's instance id, so a restart keeps it.
   local ok_scope, todo_scope = pcall(require, "auto-core.todo.scope") -- absent before auto-core v0.5.1
   if ok_scope then todo_scope.set("auto-agents:" .. M.state.session_project_key) end
 
@@ -326,20 +316,12 @@ function M.setup(opts)
   M.state.config = config
   M.state.initialized = true
 
-  -- v0.2.30: workspace-scoped mailbox housekeeping. (1) Append
-  -- `.auto-agents/` to the workspace `.gitignore` if missing so the
-  -- mailbox tree never ends up tracked. (2) Surface a one-line
-  -- migration warning if any legacy per-CLI mailbox dirs are
-  -- detected, so the user knows running agents may need re-spawn.
-  -- ADR-0039 C4: capture + log — a silent failure here hides broken
-  -- housekeeping (gitignore, legacy detection, mailbox prune).
+  -- Append `.auto-agents/` to the project's `.gitignore` if missing, so the crew's session contexts
+  -- (`.auto-agents/crew`, auto-agents.crew.context_folder) never end up tracked. ADR-0039 C4: a
+  -- failure is logged, never silent.
   local ok_housekeeping, housekeeping_err = pcall(function()
-    local identity = require("auto-agents.runtime.identity")
     local logger = require("auto-agents.log")
-    local mailbox_root = identity.mailbox_root()
-    -- workspace_root is the parent of `.auto-agents/mailbox`.
-    local workspace_root = mailbox_root:gsub("/%.auto%-agents/mailbox$", "")
-    local gitignore_path = workspace_root .. "/.gitignore"
+    local gitignore_path = require("auto-agents.cwd").project_root() .. "/.gitignore"
     local needs_append = true
     local f = io.open(gitignore_path, "r")
     if f then
@@ -356,88 +338,15 @@ function M.setup(opts)
     if needs_append then
       local append = io.open(gitignore_path, "a")
       if append then
-        append:write("\n# auto-agents workspace mailbox (v0.2.30+)\n.auto-agents/\n")
+        append:write("\n# auto-agents: the crew's session contexts\n.auto-agents/\n")
         append:close()
         logger.info("setup", ("appended `.auto-agents/` to %s"):format(gitignore_path))
-      end
-    end
-    -- Legacy-layout detection. The old per-CLI mailbox roots are
-    -- `~/.claude/mailbox`, `~/.codex/mailbox`, `~/.gemini/mailbox`.
-    -- If any has agent:* subdirs left over from a prior auto-agents
-    -- version, warn once so the user can re-spawn slots (the new
-    -- workspace-scoped routing won't see the old dirs).
-    local legacy = { "~/.claude/mailbox", "~/.codex/mailbox", "~/.gemini/mailbox" }
-    local stale = {}
-    for _, p in ipairs(legacy) do
-      local expanded = vim.fn.expand(p)
-      if vim.fn.isdirectory(expanded) == 1 then
-        local sd = vim.uv.fs_scandir(expanded)
-        if sd then
-          while true do
-            local name, type_ = vim.uv.fs_scandir_next(sd)
-            if not name then break end
-            if type_ == "directory" and name:match("^agent:") then
-              stale[#stale + 1] = expanded .. "/" .. name
-              break  -- one example per root is enough
-            end
-          end
-        end
-      end
-    end
-    if #stale > 0 then
-      logger.warn("setup",
-        ("v0.2.30 layout: %d legacy mailbox dir(s) detected (e.g. %s). "
-         .. "Live slots writing there won't see the new workspace mailbox "
-         .. "at %s — restart affected slots or run mailbox.prune on the legacy roots."):format(
-          #stale, stale[1], mailbox_root))
-    end
-
-    -- v0.2.30 / Phase 6: prune stale per-instance mailbox dirs at
-    -- setup. `auto-core.mailbox.prune` walks <root>/<instance>/<name>/,
-    -- matches against the live registry by `rec.dir`, and removes
-    -- subtrees older than `max_age_seconds` (default 7 days). Live
-    -- registrations are kept regardless of age; nothing in the
-    -- current nvim's working tree is at risk. Default ON to keep
-    -- the per-instance dir count bounded; cfg.mailbox.prune.enabled
-    -- = false opts out, cfg.mailbox.prune.max_age_seconds adjusts.
-    local prune_cfg = (config.mailbox and config.mailbox.prune) or {}
-    local prune_enabled = prune_cfg.enabled
-    if prune_enabled == nil then prune_enabled = true end
-    if prune_enabled then
-      local max_age = tonumber(prune_cfg.max_age_seconds) or (7 * 24 * 60 * 60)
-      local ok_core, core = pcall(require, "auto-core")
-      if ok_core then
-        -- `force = true` because this setup-time prune fires BEFORE
-        -- auto-agents registers the `nvim` host mailbox, so the
-        -- workspace root has zero live registrations at this moment
-        -- — auto-core's safety rail (Phase 8) would otherwise refuse.
-        -- We know we're pruning auto-agents' own workspace tree; the
-        -- rail exists for ad-hoc callers who might typo a path.
-        local res = core.mailbox.prune({
-          root            = mailbox_root,
-          max_age_seconds = max_age,
-          force           = true,
-        })
-        if res and (res.refused or #(res.removed or {}) > 0
-           or #(res.failed or {}) > 0) then
-          if res.refused then
-            logger.warn("setup", string.format(
-              "mailbox.prune refused: %s (root=%s)",
-              tostring(res.reason), mailbox_root))
-          else
-            logger.info("setup", string.format(
-              "mailbox.prune: removed=%d kept_alive=%d kept_recent=%d failed=%d "
-              .. "(root=%s, max_age=%ds)",
-              #res.removed, #res.kept_alive, #res.kept_recent, #(res.failed or {}),
-              mailbox_root, max_age))
-          end
-        end
       end
     end
   end)
   if not ok_housekeeping then
     require("auto-agents.log").warn("setup",
-      "workspace mailbox housekeeping failed: " .. tostring(housekeeping_err))
+      "the .gitignore housekeeping failed: " .. tostring(housekeeping_err))
   end
 
   -- M6 diff-review bridge: agents opted in via `diff_review =
@@ -477,18 +386,6 @@ function M.setup(opts)
   local ok_fb, fb_err = pcall(function() require("auto-agents.fallback").attach() end)
   if not ok_fb then
     require("auto-agents.log").error("init", "the notifier's fallback isn't attached: " .. tostring(fb_err))
-  end
-  -- The file mailbox (auto-core.mailbox): the router and the `nvim` executioner mailbox, and the
-  -- mailbox-only verbs (auto-agents.mailbox.commands). Retired in auto-agents v0.4.0.
-  local ok_mailbox_wire, mailbox_wire_err = pcall(function()
-    local mailbox = require("auto-core").mailbox
-    mailbox.configure({ autostart = true })
-    mailbox.register("nvim", { root = mailbox.host_fallback_root() })
-    require("auto-agents.mailbox.commands").register_all()
-  end)
-  if not ok_mailbox_wire then
-    require("auto-agents.log").error("init",
-      "mailbox wiring failed: " .. tostring(mailbox_wire_err))
   end
 
   -- Editor-window-floor invariant. AutoVim's three-column layout
@@ -609,14 +506,6 @@ function M.setup(opts)
   if not crew_ok then
     require("auto-agents.log").warn("crew", "crew scope setup failed: " .. tostring(crew_err))
   end
-  -- the recipients cut over to crew mail take it through the daemon (phase 4e); none by default
-  local gw_ok, gw_err = pcall(function()
-    local cut = M.state.config.crew and M.state.config.crew.cutover
-    require("auto-agents.crew_gateway").setup({ cutover = cut, cwd = require("auto-agents.cwd").project_root() })
-  end)
-  if not gw_ok then
-    require("auto-agents.log").warn("crew", "crew gateway setup failed: " .. tostring(gw_err))
-  end
 
   require("auto-agents.log").info("init",
     string.format("auto-agents v%s initialized; config_source=%s, agents=%d",
@@ -721,9 +610,8 @@ local function build_agent_env(spec, cwd)
   --
   -- AUTO_AGENTS_TODOS_BOOTSTRAP_DOC — absolute path to the
   -- bundled `bootstrap-todos.md` (operational reference for
-  -- the `todos.*` command surface). Mirrors the existing
-  -- AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC pattern. Soft: skipped
-  -- when the doc can't be located on the runtimepath.
+  -- the `todos.*` command surface). Soft: skipped when the doc
+  -- can't be located on the runtimepath.
   --
   -- AUTO_AGENTS_TODOS_CONVENTION_DOC — absolute path to the
   -- per-KB todo-handling convention (per-project customizable).
@@ -747,8 +635,7 @@ local function build_agent_env(spec, cwd)
 
   -- v0.2.26: per-agent diff_review gate. Direct, unambiguous signal
   -- the agent can self-check via `[ "$AUTO_AGENTS_DIFF_REVIEW" = "true" ]`
-  -- without parsing the AGENTS.md/CLAUDE.md roster or its own mailbox
-  -- ID. Set to "true" when opted-in; omitted entirely when off (absent
+  -- without parsing the AGENTS.md/CLAUDE.md roster. Set to "true" when opted-in; omitted entirely when off (absent
   -- == false, matching the rest of auto-agents' env contract).
   if spec.diff_review then
     env.AUTO_AGENTS_DIFF_REVIEW = "true"
@@ -789,79 +676,18 @@ local function build_agent_env(spec, cwd)
         instr_path and (" instr=" .. instr_path) or ""))
   end
 
-  -- Per-instance mailbox registration. auto-core's `register`
-  -- auto-suffixes the bare `agent:<name>` id with this nvim's
-  -- instance_id (`<unix-seconds>-<pid>`); under the v0.1.33
-  -- workspace layout that instance becomes a directory level so
-  -- two nvims sharing one workspace get non-overlapping subtrees:
-  -- `<workspace>/.auto-agents/mailbox/<instance>/<name>/`. The
-  -- workspace root resolves via auto-core's worktree state per
-  -- the auto-family state-ownership convention. The agent finds
-  -- its mailbox via the four env vars below; the bootstrap doc
-  -- at `<workspace_root>/.auto-agents/mailbox/bootstrap-mailbox.md`
-  -- is upserted on every register (cheap content-hash short-circuit
-  -- when unchanged — see auto-core v0.1.7).
+  -- Spawn-time permission injection: the per-kind CLI flag(s) that pre-authorize the agent to read
+  -- and write the primary KB root, so its first file op there prompts nothing, with no settings
+  -- file touched. --add-dir only removes permission-prompt friction for the surface the agent is
+  -- expected to work in. spec.grant_argv is moved onto an agent's own server, when its crew setup
+  -- gives one (crew_server.move_grants).
   if spec.configured ~= false and spec.name and spec.kind then
     local ok, err = pcall(function()
-      local mailbox = require("auto-core").mailbox
-      local identity = require("auto-agents.runtime.identity")
-      local wake_spec = { command = "wake", args = { slot = spec.name } }
-
-      local rec
-      if spec.slot ~= nil then
-        -- ADR 0023 §3.1 + ADR 0029 Decision #3: reconcile() owns
-        -- per-kind mailbox root resolution, mailbox registration,
-        -- and sidecar identity write. One call replaces the three
-        -- previously duplicated paths (spawn / refresh_agent_id /
-        -- adopt-resumed-agent). `cwd` flows through so the mailbox
-        -- root anchors at the spawn cwd's workspace when auto-core
-        -- worktree state is unset (Lector audit must-fix #1, 2026-05-24).
-        local result = identity.reconcile({
-          slot        = spec.slot,
-          agent_name  = spec.name,
-          kind        = spec.kind,
-          diff_review = spec.diff_review,
-          stamped_by  = "auto-agents.spawn",
-          wake        = wake_spec,
-          cwd         = cwd,
-        })
-        if not result.ok then
-          require("auto-agents.log").warn("spawn",
-            "identity reconcile failed: " .. tostring(result.detail))
-          if not result.mailbox_record then
-            error(result.detail or result.error or "identity reconcile failed")
-          end
-        end
-        rec = result.mailbox_record
-        if result.sidecar_path then
-          env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = result.sidecar_path
-        end
-      else
-        -- Preview / unconfigured spawn — register without a sidecar
-        -- (no slot to key it to). Same cwd-through pattern as the
-        -- reconcile branch above.
-        rec = mailbox.register("agent:" .. spec.name, {
-          root = identity.mailbox_root({ cwd = cwd }),
-          wake = wake_spec,
-        })
-      end
-      for k, v in pairs(mailbox.env_for_agent(rec)) do env[k] = v end
-
-      -- Spawn-time permission injection. Append the per-kind
-      -- CLI flag(s) that pre-authorize the agent to read/write its
-      -- own mailbox dir and the primary KB root. No prompt on
-      -- first file op; no settings-file mutation. Per-instance paths
-      -- (mailbox dir) regenerate on every nvim restart, so the next
-      -- spawn rebuilds the argv from scratch — persistence isn't
-      -- desirable here.
-      local dirs = { rec.dir }
-      -- Grant the primary KB root: one entry covers the whole KB.
-      -- --add-dir is purely about removing permission-prompt friction
-      -- for the surface the agent is expected to operate within.
+      local dirs = {}
       if type(env.AUTO_AGENTS_KB_ROOT) == "string" and env.AUTO_AGENTS_KB_ROOT ~= "" then
         dirs[#dirs + 1] = env.AUTO_AGENTS_KB_ROOT
       end
-
+      if #dirs == 0 then return end
       local perms = require("auto-agents.permissions")
       local extra_argv = perms.argv_for_kind(spec.kind, dirs, spec.cmd)
       if #extra_argv > 0 and type(spec.cmd) == "table" then
@@ -869,7 +695,7 @@ local function build_agent_env(spec, cwd)
         for _, a in ipairs(extra_argv) do
           spec.cmd[#spec.cmd + 1] = a
         end
-        spec.grant_argv = extra_argv -- moved onto an agent's own server, when its setup gives one
+        spec.grant_argv = extra_argv
         require("auto-agents.log").info("spawn",
           string.format("slot %s (%s/%s) grants=%d dirs (%s)",
             tostring(spec.slot or "?"), spec.kind, spec.name,
@@ -878,7 +704,7 @@ local function build_agent_env(spec, cwd)
     end)
     if not ok then
       require("auto-agents.log").warn("spawn",
-        string.format("mailbox register failed for %s/%s: %s",
+        string.format("the KB grant failed for %s/%s: %s",
           spec.kind or "?", spec.name or "?", tostring(err)))
     end
   end
@@ -1648,20 +1474,17 @@ end
 local _bootstrap_entry
 
 ---v0.2.39: enumerate every currently-spawned agent slot. Returns
----a list of `{slot, name, kind, mailbox_id}` entries — one per
+---a list of `{slot, name, kind, agent_id}` entries — one per
 ---configured slot whose terminal is alive. Consumers (e.g.
 ---auto-finder.todos panel's `A` assign keymap) use this to pick a
----live recipient for a `todos.assign` call without having to
----thread through the mailbox `addressbook` indirection.
+---live recipient for a `todos.assign` call.
 ---
 ---Entries:
 ---  • `slot`       — 1-based slot integer
 ---  • `name`       — agent name (`jarvis`, `lector`, etc.)
 ---  • `kind`       — `"claude"` / `"codex"` / etc. (from cfg)
----  • `mailbox_id` — `agent:<name>` (bare form; the resolver
----                    accepts both bare and full instance-scoped
----                    forms)
----@return { slot: integer, name: string, kind: string?, mailbox_id: string }[]
+---  • `agent_id`   — `agent:<name>`, the bare form a todo assignee takes
+---@return { slot: integer, name: string, kind: string?, agent_id: string }[]
 function M.spawned_agents()
   local out = {}
   for _, slot in ipairs(M.configured_slots()) do
@@ -1673,7 +1496,7 @@ function M.spawned_agents()
           slot       = slot,
           name       = entry.name,
           kind       = entry.kind,
-          mailbox_id = "agent:" .. entry.name,
+          agent_id   = "agent:" .. entry.name,
         }
       end
     end
@@ -1696,57 +1519,7 @@ function _bootstrap_entry(slot)
   return nil
 end
 
----Resolve the live mailbox record for a bootstrap entry. Returns nil
----if the agent isn't registered (not yet spawned, or the registry was
----wiped). Used by the bootstrap-refresh pickers to read the live
----authoritative identity env vars via `mailbox.env_for_agent(rec)`.
----@param entry table  -- bootstrap entry (must have .name)
----@return AutoCoreMailboxRecord|nil
-local function _live_mailbox_record(entry)
-  if not (entry and type(entry.name) == "string" and entry.name ~= "") then return nil end
-  local ok, mailbox = pcall(function() return require("auto-core").mailbox end)
-  if not ok or not mailbox or not mailbox.registry or not mailbox.registry.get then
-    return nil
-  end
-  -- Lookup is on `mailbox.registry.get`, NOT `mailbox.get` — the
-  -- top-level mailbox module doesn't expose a `get` shortcut; record
-  -- lookups go through `registry`. ADR 0024 originally called
-  -- `mailbox.get` and every <leader>am / <leader>ai call returned
-  -- "no live mailbox record" regardless of agent. Fixed in v0.2.15.
-  local rec_ok, rec = pcall(mailbox.registry.get, "agent:" .. entry.name)
-  if not rec_ok then return nil end
-  return rec
-end
-
----Compute the live authoritative env surface for a bootstrap entry.
----Mirrors what `build_agent_env` would produce on a fresh spawn —
----the primary KB's env from `kb.agent_env(kb.primary())` plus the
----mailbox identity vars from `mailbox.env_for_agent(rec)`. Used by
----the reassert-identity picker as the authoritative source of truth
----to compare the agent's cached env against.
----@param entry table
----@return table<string,string>|nil
-local function _live_env_for(entry)
-  if not entry then return nil end
-  local env = {}
-  local ok_kb, kb_mod = pcall(require, "auto-agents.kb")
-  if ok_kb then
-    local ok_p, primary = pcall(kb_mod.primary)
-    if ok_p then
-      for k, v in pairs(kb_mod.agent_env(primary)) do env[k] = v end
-    end
-  end
-  local rec = _live_mailbox_record(entry)
-  if rec then
-    local ok_mb, mailbox = pcall(function() return require("auto-core").mailbox end)
-    if ok_mb and mailbox and mailbox.env_for_agent then
-      for k, v in pairs(mailbox.env_for_agent(rec) or {}) do env[k] = v end
-    end
-  end
-  return env
-end
-
----Build the list of picker entries for the bootstrap-refresh keymaps.
+---Build the list of picker entries for the slot pickers (forward, send buffer).
 ---Only includes slots that (a) have a bootstrap entry and (b) have a
 ---live terminal. Empty slots are hidden from the picker (ADR 0024 §2.1).
 ---@return { slot: integer, entry: table, label: string }[]
@@ -1768,199 +1541,6 @@ local function _refresh_picker_items()
     end
   end
   return items
-end
-
----Deterministic re-ingest prompt body. Owned by auto-agents — the
----whole point of the keymap is to eliminate per-invocation prompt
----variation. Resolves the agent's bootstrap doc path from the live
----registry, not from any hardcoded per-CLI path.
----@param entry table
----@return string|nil body, string|nil err
-local function _build_reingest_body(entry)
-  local rec = _live_mailbox_record(entry)
-  if not rec then
-    return nil, "no live mailbox record for agent:" .. tostring(entry.name)
-  end
-  local ok_mb, mailbox = pcall(function() return require("auto-core").mailbox end)
-  if not ok_mb or not mailbox or not mailbox.env_for_agent then
-    return nil, "auto-core.mailbox.env_for_agent unavailable"
-  end
-  local env = mailbox.env_for_agent(rec) or {}
-  local doc = env.AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC
-  if not doc or doc == "" then
-    return nil, "no AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC in live env"
-  end
-  -- Resolve the seen-revision path HOST-SIDE so the agent receives a
-  -- literal absolute path. Previously the body embedded a
-  -- `$(dirname "$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC")/...` shell
-  -- expression, which agents copied verbatim into `cat`/`stat`
-  -- commands — command substitution trips Claude Code's permission
-  -- gate ("Contains simple_expansion") and stalls the re-ingest.
-  local seen_dir = doc:match("^(.*)/[^/]+$") or "."
-  local seen = seen_dir .. "/.agent-state/seen-revision"
-  return table.concat({
-    "Re-ingest your bootstrap-mailbox protocol doc.",
-    "",
-    "Bootstrap doc:  " .. doc,
-    "Seen-revision:  " .. seen,
-    "",
-    "Use the **Read tool** on each of those two literal paths — do NOT",
-    "build a shell command (`cat`, `$(dirname …)`, `;`-chains, pipes,",
-    "redirects all trip the permission gate). Compare the doc's",
-    "`revision:` frontmatter against the seen-revision file. If they",
-    "differ, adopt the protocol changes the doc describes, then **Write**",
-    "the new revision to the seen-revision path (Write tool, not",
-    "`echo >`). Acknowledge here with the revision you adopted.",
-  }, "\n")
-end
-
----Deterministic re-assert-identity prompt body. Enumerates the live
----authoritative identity surface from the host registry — what the
----agent SHOULD see if it were freshly spawned right now. The agent
----compares against its own cached env / sidecar; on drift it calls
----`refresh_agent_id` (ADR 0023 §3.2) and adopts the sidecar.
----@param entry table
----@return string|nil body, string|nil err
-local function _build_reassert_body(entry)
-  local env = _live_env_for(entry)
-  if not env or not env.AUTO_AGENTS_MAILBOX_ID then
-    return nil, "no live identity surface for agent:" .. tostring(entry.name)
-  end
-  local keys = {
-    "AUTO_AGENTS_INSTANCE_ID",
-    "AUTO_AGENTS_MAILBOX_ID",
-    "AUTO_AGENTS_MAILBOX_DIR",
-    "AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC",
-    "AUTO_AGENTS_KB_ROOT",
-    "AUTODOC_WORKSPACE",
-  }
-  local lines = {
-    "Re-assert your runtime identity.",
-    "",
-    "Your live authoritative env (per the host registry — this is what",
-    "a fresh spawn would receive right now):",
-    "",
-  }
-  for _, k in ipairs(keys) do
-    lines[#lines + 1] = "  " .. k .. "=" .. tostring(env[k] or "")
-  end
-  vim.list_extend(lines, {
-    "",
-    "Compare each value to your cached env (and sidecar at",
-    "$AUTO_AGENTS_RUNTIME_IDENTITY_PATH if set). If ANY value differs,",
-    "call the `refresh_agent_id` mailbox command (ADR 0023 §3.2) with",
-    "your current process PID as `actor_pid`. Adopt the returned",
-    "sidecar identity as authoritative, then acknowledge here.",
-    "",
-    "If your kind is NOT `claude` AND your roster row in your per-kind",
-    "instruction file (AGENTS.md / GEMINI.md / .junie/guidelines.md /",
-    ".goosehints) shows `diff_review = ✓`, also re-read the",
-    "**Interactive diff review** section in that file before proposing",
-    "any further edits — the host re-renders the file on every",
-    "refresh_agent_id call, so the protocol you load now is the current",
-    "one.",
-  })
-  return table.concat(lines, "\n")
-end
-
----Deterministic permission-bootstrap prompt body (ADR-0036). Injects
----the prompt-avoidance directive + a directive to read & follow the
----agent's `PERMISSION.md` guideline. The agent VERIFIES its mailbox/KB
----grants and REQUESTS any missing ones from the user — it does not
----self-provision. Goes through `send_slot` (Esc+CR for codex), so the
----PERMISSION.md path token is safe here (unlike the bare-`<CR>` wake
----nudge, which must stay path-token-free).
----@param entry table
----@return string|nil body, string|nil err
-local function _build_permission_body(entry)
-  local env = _live_env_for(entry)
-  local doc = env and env.AUTO_AGENTS_PERMISSION_DOC
-  local lines = {
-    "Permission bootstrap (ADR-0036).",
-    "",
-    "The user has their own work to complete, and your mailbox",
-    "permission prompts disrupt the user's workflow greatly. Make the",
-    "best effort to avoid requesting permission prompts on mailbox",
-    "operations to the best of your ability, and instead tell the user",
-    "which grants you require to perform read/write and other available",
-    "mailbox operations at your hand.",
-    "",
-  }
-  if doc and doc ~= "" then
-    lines[#lines + 1] = "Read and follow your PERMISSION.md guideline at: " .. doc
-  else
-    lines[#lines + 1] = "Read and follow your PERMISSION.md guideline (a peer of"
-    lines[#lines + 1] = "your bootstrap-mailbox.md, in the same workspace mailbox root)."
-  end
-  vim.list_extend(lines, {
-    "",
-    "Use the **Read tool** to read it. Then VERIFY the permission grants",
-    "it lists for your capability bucket are present, and REQUEST any",
-    "missing ones from the user (state the exact rule + what it unlocks)",
-    "— do NOT write your own permission settings. Do mailbox/KB work via",
-    "the Read/Write tools, never shell that expands `$VAR`. Acknowledge",
-    "here with what you verified and what (if anything) you are",
-    "requesting.",
-  })
-  return table.concat(lines, "\n")
-end
-
----Bootstrap-refresh picker shared between §2.1 and §2.2. Opens
----`vim.ui.select` over the live (configured + alive) slots, then
----feeds the selected slot through `build_body` to produce the prompt
----and submits it via `M.send_slot(slot, body, { submit = true })`.
----@param banner string
----@param build_body fun(entry: table): string|nil, string|nil
-local function _bootstrap_refresh_picker(banner, build_body)
-  local items = _refresh_picker_items()
-  if #items == 0 then
-    require("auto-agents.log").notify("no live agent slots to target",
-      { level = "warn", component = "send_slot" })
-    return
-  end
-  vim.ui.select(items, {
-    prompt = banner,
-    format_item = function(item) return item.label end,
-  }, function(choice)
-    if not choice then return end
-    local body, err = build_body(choice.entry)
-    if not body then
-      require("auto-agents.log").notify(err or "failed to build prompt",
-        { level = "error", component = "send_slot" })
-      return
-    end
-    local ok = M.send_slot(choice.slot, body, { submit = true })
-    if not ok then
-      require("auto-agents.log").notify("send_slot failed for slot " .. choice.slot,
-        { level = "error", component = "send_slot" })
-    end
-  end)
-end
-
----ADR 0024 §2.1 — re-ingest bootstrap doc into a live agent slot.
----Slot picker → deterministic prompt → paste-safe submit. Bound to
----`<leader>am` by the autovim consumer config.
-function M.reingest_bootstrap_picker()
-  _bootstrap_refresh_picker("Re-ingest bootstrap doc into slot:", _build_reingest_body)
-end
-
----ADR 0024 §2.2 — re-assert runtime identity for a resumed agent.
----Slot picker → deterministic prompt naming the live env values from
----`mailbox.env_for_agent(rec)` → paste-safe submit. The agent
----reconciles via `refresh_agent_id` if its cached env has drifted.
----Bound to `<leader>ai` by the autovim consumer config.
-function M.reassert_identity_picker()
-  _bootstrap_refresh_picker("Re-assert identity for slot:", _build_reassert_body)
-end
-
----ADR-0036 — bootstrap mailbox permissions into a live agent slot.
----Slot picker → deterministic prompt (the prompt-avoidance directive +
----"read & follow PERMISSION.md") → paste-safe submit. The agent
----verifies its capability-bucket grants and requests any missing ones
----from the user. Bound to `<leader>ap` by the autovim consumer config
----(replacing the prior help-tip binding).
-function M.permission_bootstrap_picker()
-  _bootstrap_refresh_picker("Bootstrap permissions for slot:", _build_permission_body)
 end
 
 ---Line cap for the inline-contents fallback (ADR-0045 r2 / Lector
@@ -2171,7 +1751,7 @@ end
 ---to a live agent slot with an optional instruction. Mirrors the
 ---auto-finder `todos.assign` (`A`) two-step UX (pick agent → instruct),
 ---but delivers via `send_slot` (immediate TUI push) like the other
----operator pickers rather than a mailbox message.
+---operator pickers.
 ---
 ---The target buffer is captured at invocation (before `vim.ui.select`
 ---steals focus). Non-file buffers (terminals / agent panels / prompts)
@@ -2415,7 +1995,7 @@ end
 ---Forward selected text (visual mode) or clipboard (normal mode) to a live agent
 ---slot with an optional instruction. Displays prompt with a 15-20 char preview,
 ---toggles the agent panel into view if not already open, focuses the agent,
----and sends the structured payload to the agent via mailbox.
+---and types the structured payload into the agent's terminal (send_slot).
 ---@param opts table?  -- optional overrides for testing/programmatic use
 function M.forward_text_picker(opts)
   -- Copied, not mutated: callers (the smoke driver among them) reuse their
@@ -2469,18 +2049,10 @@ function M.forward_text_picker(opts)
       end
 
       -- INJECT DIRECTLY into the agent's terminal, exactly as
-      -- `send_buffer_picker` (<leader>ab) does. This used to go through
-      -- `auto-core.mailbox.send` with send_slot only as a fallback, which made
-      -- the two forwarding keys behave differently for no reason the user
-      -- could see: `<leader>ab` put the text in front of the agent, while
-      -- `<leader>af` put it in the agent's inbox and left the agent to notice
-      -- it, read it, and archive it (Johno, 2026-09-07).
-      --
-      -- The mailbox is the right transport for agent-to-agent traffic, where
-      -- the recipient may be busy and the message has to wait. It is the wrong
-      -- one for a human handing a selection to an agent they are looking at:
-      -- the whole point of the gesture is "deal with this now", and three
-      -- extra housekeeping steps are pure cost.
+      -- `send_buffer_picker` (<leader>ab) does: a human handing a selection
+      -- to an agent they are looking at means "deal with this now", so the
+      -- text goes in front of the agent, never into mail it would have to
+      -- notice, read and answer (Johno, 2026-09-07).
       local sent = M.send_slot(choice.slot, body, { submit = true })
       if not sent then
         require("auto-agents.log").notify("forward_text delivery failed for slot " .. tostring(choice.slot),
@@ -2782,16 +2354,6 @@ function M.remove_slot(slot)
   if type(slot) ~= "number" or slot < 1 or slot > M.MAX_SLOT then
     return false, "slot must be 1.." .. tostring(M.MAX_SLOT)
   end
-  local removed_names = {}
-  do
-    local cfg = M.state.config
-    local bs = cfg and cfg.agents and cfg.agents.bootstrap or {}
-    for _, entry in ipairs(bs) do
-      if entry.slot == slot and type(entry.name) == "string" and entry.name ~= "" then
-        removed_names[#removed_names + 1] = entry.name
-      end
-    end
-  end
   -- Kill any running terminal first (idempotent — kill_slot returns
   -- false if there's nothing running, which is fine).
   pcall(M.kill_slot, slot)
@@ -2810,12 +2372,6 @@ function M.remove_slot(slot)
   end
 
   if removed then
-    pcall(function()
-      local mailbox = require("auto-core").mailbox
-      for _, name in ipairs(removed_names) do
-        mailbox.unregister("agent:" .. name)
-      end
-    end)
     if slot >= 0 and slot <= M.MAX_SLOT then
       M.refresh_winbar()
     end
@@ -3088,27 +2644,15 @@ end
 
 ---Release auto-agents-owned runtime resources. Intended for plugin
 ---teardown/hot-reload and VimLeavePre; normal slot restart should use
----restart_slot so the mailbox registration remains live.
+---restart_slot.
 function M.teardown()
   for slot in pairs(M.state.slot_terminals or {}) do
     pcall(M.kill_slot, slot)
   end
   pcall(function() require("auto-agents.mcp.server").stop() end)
-  pcall(function() require("auto-agents.mailbox.commands").unregister_all() end)
   local ok_cmds, cmds = pcall(require, "auto-agents.commands")
   if ok_cmds then pcall(cmds.unregister_all) end
   pcall(function() require("auto-agents.fallback").detach() end)
-  pcall(function()
-    local mailbox = require("auto-core").mailbox
-    local cfg = M.state.config
-    local bs = cfg and cfg.agents and cfg.agents.bootstrap or {}
-    for _, entry in ipairs(bs) do
-      if type(entry.name) == "string" and entry.name ~= "" then
-        mailbox.unregister("agent:" .. entry.name)
-      end
-    end
-    mailbox.unregister("nvim")
-  end)
   M.state.initialized = false
 end
 

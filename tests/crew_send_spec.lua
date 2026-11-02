@@ -14,7 +14,6 @@
 ---   [6] an unscoped assignment goes only to the one live profile of its name, by name@scope; none,
 ---       or two projects' live agents, is false and sends nothing; an offline profile doesn't count;
 ---       a crew.list with no outcome is "retry"
----   [7] the gateway's codename is never sent to
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -188,12 +187,6 @@ do
   w.rpc_answer["crew.list"] = function() return nil, { code = crew.CODE_METHOD_NOT_FOUND, message = "unknown method" } end
   got = crew.crew_send("vision", MID, MSG, U)
   ok("[6] a crew.list refused for certain is not sent", got == false and #w.of("inbox.send") == 0, vim.inspect(got))
-end
-
-do
-  local w = new_world()
-  ok("[7] the gateway's codename is never sent to", crew.crew_send(crew.GATEWAY_CODENAME, MID, MSG) == nil
-    and #w.rpcs == 0)
 end
 
 crew.stop()

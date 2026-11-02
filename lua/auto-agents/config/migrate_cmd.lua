@@ -1,9 +1,5 @@
----Explicit migration helper for cleaning up legacy accumulated runtime flags
----and stale command overrides in agent TOML configuration files.
----
----In older auto-agents builds, runtime permission flags (such as `--add-dir <instance-mailbox>`)
----could inadvertently be accumulated into an agent's persisted `cmd` on spawn and written to TOML.
----Additionally, an agent kind change (e.g. from copilot or junie to claude) may leave behind stale commands.
+---Explicit migration helper for cleaning up stale command overrides in agent TOML configuration
+---files: an agent kind change (e.g. from copilot or junie to claude) may leave behind stale commands.
 ---
 ---This migration scans TOML configuration files, previews proposed changes in dry-run mode,
 ---and applies them when requested.
@@ -21,50 +17,9 @@ local store = require("auto-agents.config.store")
 local agent = require("auto-agents.agent")
 local toml = require("auto-agents.vendor.toml")
 
----Check if a path matches an auto-agents generated per-instance mailbox path
----(e.g. `<path>/.auto-agents/mailbox/<timestamp>-<instance>/<agent>`).
----User-authored custom mailbox paths (such as `.../mailbox/custom-box`) or active KB paths return false.
----@param path string|nil
----@return boolean
-function M.is_generated_instance_mailbox_path(path)
-  if type(path) ~= "string" or path == "" then return false end
-  local seg = path:match("%.auto%-agents/mailbox/([^/]+)")
-    or path:match("%.auto%-agents%-config/mailbox/([^/]+)")
-  if seg and seg:match("^%d+%-%d+$") then
-    return true
-  end
-  return false
-end
-
----Strip generated runtime flags (such as `--add-dir <generated-instance-mailbox>`)
----from a command table. Preserves all other user flags and paths.
----@param cmd string[]|nil
----@return string[]|nil cleaned
----@return boolean changed
-function M.strip_generated_runtime_flags(cmd)
-  if type(cmd) ~= "table" or #cmd == 0 then return nil, false end
-  local out = {}
-  local i = 1
-  local changed = false
-  while i <= #cmd do
-    local arg = cmd[i]
-    if arg == "--add-dir" and i < #cmd and M.is_generated_instance_mailbox_path(cmd[i + 1]) then
-      changed = true
-      i = i + 2
-    else
-      out[#out + 1] = arg
-      i = i + 1
-    end
-  end
-  if not changed then return vim.list_slice(cmd), false end
-  if #out == 0 then return nil, true end
-  return out, true
-end
-
 ---Compute the migrated cmd for an agent entry:
----1. Strips generated runtime instance mailbox flags.
----2. If mismatched cross-kind, clears to nil.
----3. If resulting cmd equals bare adapter default, clears to nil.
+---1. If mismatched cross-kind, clears to nil.
+---2. If resulting cmd equals bare adapter default, clears to nil.
 ---@param kind string|nil
 ---@param cmd string[]|nil
 ---@param agent_name string|nil
@@ -75,10 +30,9 @@ function M.migrate_agent_cmd(kind, cmd, agent_name)
     return nil, false
   end
 
-  local stripped, was_stripped = M.strip_generated_runtime_flags(cmd)
-  local sanitized = agent.sanitize_cmd(kind, stripped, agent_name)
+  local sanitized = agent.sanitize_cmd(kind, cmd, agent_name)
 
-  local changed = was_stripped or not vim.deep_equal(cmd, sanitized)
+  local changed = not vim.deep_equal(cmd, sanitized)
   return sanitized, changed
 end
 

@@ -106,7 +106,7 @@ function M.project_root()
 end
 
 ---Resolve the effective working directory: an explicit `cwd_provider` or `cwd`, else the
----project auto-core serves, so an agent, its mailbox, its crew context and the todo store
+---project auto-core serves, so an agent, its crew context and the todo store
 ---agree on one folder whichever window has focus. `git_repo_cwd` is no longer read: it took
 ---the focused buffer's folder, a terminal's `term://` name included.
 ---@param term_cfg AutoAgentsTerminalConfig

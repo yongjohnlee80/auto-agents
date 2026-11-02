@@ -125,7 +125,7 @@ function M.agent(mode, slot)
     },
     {
       field = "name",
-      prompt = "name (handle, used for the mailbox id + grants)",
+      prompt = "name (handle, used for the crew codename + grants)",
       default = default("name", ""),
       placeholder = (existing and existing.name) or "(blank to auto-generate)",
       parse = blank_to_nil,
@@ -238,7 +238,7 @@ function M.agent(mode, slot)
       --               so the native `openDiff` tool routes here.
       --               Only claude has native MCP `openDiff` support.
       --   * other   → (codex / antigravity / junie / goose /
-      --               opencode / generic) — inject the mailbox
+      --               opencode / generic) — inject the
       --               `diff_queue` protocol into the per-kind
       --               instruction file via kb/instruct.lua, so the
       --               agent enqueues a unified diff and waits for the
@@ -256,7 +256,7 @@ function M.agent(mode, slot)
         end
         -- Default y only for the original native-bridge consumers
         -- (claude, codex). Non-claude kinds also support diff_review
-        -- now via the mailbox `diff_queue` protocol (kb/instruct.lua
+        -- now via the `diff_queue` verb (kb/instruct.lua
         -- injection), but we keep the default conservative — opt in
         -- per-slot via the wizard rather than silently broadening.
         local coding_kinds = { claude = true, codex = true }

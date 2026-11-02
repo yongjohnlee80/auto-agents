@@ -617,7 +617,7 @@ local function settle(st)
 end
 
 -- drop_sessions forgets the sessions of an epoch no longer held: the claim that changed it ended
--- them, so their contexts go too. The gateway's goes with them, to be registered again.
+-- them, so their contexts go too.
 local function drop_sessions(st)
   for id, s in pairs(st.sessions) do
     if s.epoch ~= st.epoch then
@@ -625,173 +625,12 @@ local function drop_sessions(st)
       st.sessions[id] = nil
     end
   end
-  local g = st.gateway
-  if g and g.r and (g.r.scope ~= st.scope or g.r.epoch ~= st.epoch) then
-    g.r, g.s, g.credential = nil, nil, nil
-  end
 end
-
--- ── the gateway session (phase 4e): this Neovim's own sender ─────────────────
---
--- The legacy mailbox's sender for cut-over recipients (auto-agents.crew_gateway) sends as one
--- session of the scope, codename `gateway`, kind `host`. Its credential lives in memory only: no
--- process but this one sends with it, so no context is written. It is registered once the scope is
--- held and asked for, kept across renewals, registered again after an epoch change, and replayed
--- as it was when its registration's answer was lost.
-M.GATEWAY_CODENAME = "gateway"
-M.GATEWAY_KIND = "host"
 
 ---NO_WORKSPACE is the workspace a session is registered with when no AutoDoc workspace serves its
 ---folder (nor the project's primary KB): the daemon keeps a session's workspace as metadata, so an
 ---agent anywhere gets its crew session and its mail.
 M.NO_WORKSPACE = ""
-
--- ensure_gateway registers the gateway session when it is wanted and not held or in flight.
--- store_of is the store the session's connection serves (sys.hello's store_id), or nil.
-local function store_of(sess)
-  local c = sess and sess.client and sess.client()
-  local h = c and c.hello and c:hello() or nil
-  local id = h and h.store_id or nil
-  return type(id) == "string" and id ~= "" and id or nil
-end
-
-local function ensure_gateway(st)
-  local g = st.gateway
-  if not g or not live(st) or st.status ~= "held" then return end
-  local sess = st.session
-  local store = store_of(sess)
-  if not store then return end
-  -- registered on another store (the daemon swapped stores, at the same epoch or not): that
-  -- credential names nothing here, so it is dropped and the gateway registered again (Lector #5 F2)
-  if g.r and g.r.store ~= store and not g.r.inflight then g.r, g.s, g.credential = nil, nil, nil end
-  -- the addressbook is the current store's and claim's only (Lector #5 r1 F2): another's says
-  -- nothing about who holds the codename here
-  if g.book and (g.book_store ~= store or g.book_epoch ~= st.epoch) then g.book = nil end
-  if g.s or (g.r and g.r.inflight) then return end
-  -- the codename is this Neovim's own: an agent's profile of that name (an older registration, not
-  -- a host) is never taken over, nor its mail (Lector #5 F3); the addressbook says, so it comes first
-  if not g.book then return end
-  local held = g.book[M.GATEWAY_CODENAME]
-  if held and held ~= M.GATEWAY_KIND then
-    if not g.said_taken then
-      g.said_taken = true
-      st.notify(("The crew gateway is off: this scope already has an agent profile named %q (kind %s). Rename that agent to cut mail over.")
-        :format(M.GATEWAY_CODENAME, tostring(held)), vim.log.levels.WARN)
-    end
-    return
-  end
-  if not g.r then
-    local name = (sess.workspace_of and sess.workspace_of(g.cwd)) or (sess.primary_workspace and sess.primary_workspace())
-    local w = name and sess.workspace and sess.workspace(name) or nil
-    local id = w and tonumber(w.id) or nil
-    if (not id or id <= 0) and sess.workspaces and not g.listed then
-      if not g.listing then
-        g.listing = true
-        sess.workspaces(function()
-          g.listing = false
-          if g.listed then return end
-          g.listed = true -- one listing per claim: a store with no workspace for it never loops
-          ensure_gateway(st)
-        end)
-      end
-      return
-    end
-    _instances = _instances + 1
-    g.r = { codename = M.GATEWAY_CODENAME, kind = M.GATEWAY_KIND,
-      workspace = (id and id > 0) and tostring(id) or M.NO_WORKSPACE,
-      instance = ("nvim-gateway-%d-%d"):format(vim.uv.os_getpid(), _instances), secret = M.run_token(),
-      scope = st.scope, epoch = st.epoch, store = store, folder = nil }
-  end
-  local r = g.r
-  r.inflight = true
-  st.session.call("crew.register", { r.scope, st.run, r.epoch, r.codename, r.kind, r.workspace, r.instance, r.secret },
-    function(res, err)
-      r.inflight = false
-      if _s ~= st or st.gateway ~= g or g.r ~= r then return end
-      if store_of(st.session) ~= r.store then -- answered by the store it was sent to, now replaced
-        g.r = nil
-        return
-      end
-      local sid = not err and type(res) == "table" and res.session or nil
-      if not sid then
-        if refused(err) then g.r = nil end -- a lost answer keeps r, replayed as it was at the next renewal
-        st.notify("The crew gateway session could not be registered: " .. message(err), vim.log.levels.WARN)
-        return
-      end
-      if not live(st) or st.status ~= "held" or st.epoch ~= r.epoch then return end
-      g.s = { id = sid, profile = res.profile, scope = r.scope, epoch = r.epoch }
-      g.credential = sid .. "." .. r.secret
-    end)
-end
-
--- refresh_addressbook keeps the codenames crew.list answers, for the gateway's sender to check a
--- recipient against before it takes a message (an unknown one stays on the file route).
-local refresh_addressbook
-refresh_addressbook = function(st)
-  local g = st.gateway
-  if not g or not live(st) or g.listing_book then return end
-  local store, epoch = store_of(st.session), st.epoch
-  if not store then return end
-  g.listing_book = true
-  st.session.call("crew.list", {}, function(res, err)
-    g.listing_book = false
-    if _s ~= st or st.gateway ~= g or err or type(res) ~= "table" then return end
-    -- answered for a store or claim no longer current: dropped, and asked again for this one
-    if store_of(st.session) ~= store or st.epoch ~= epoch then
-      g.book = nil
-      return refresh_addressbook(st)
-    end
-    local book = {}
-    for _, e in ipairs(res) do
-      if type(e) == "table" and e.scope == st.scope and type(e.codename) == "string" then
-        book[e.codename] = type(e.kind) == "string" and e.kind or "?"
-      end
-    end
-    g.book, g.book_store, g.book_epoch = book, store, epoch
-    ensure_gateway(st) -- the gateway registers once the addressbook says its codename is free
-  end)
-end
-
----enable_gateway asks for the gateway session (phase 4e), registered under the workspace holding
----cwd (else the project's primary KB, else M.NO_WORKSPACE once the workspaces are listed) once the
----scope is held, and kept from then on.
----@param cwd string
-function M.enable_gateway(cwd)
-  local st = _s
-  if not st or st.gateway then return end
-  st.gateway = { cwd = cwd }
-  ensure_gateway(st)
-  if st.status == "held" then refresh_addressbook(st) end
-end
-
----gateway_credential is the gateway session's "<session>.<secret>" while it is held under the
----scope's current epoch, else nil.
----@return string|nil
-function M.gateway_credential()
-  local st = _s
-  local g = st and st.gateway
-  if not g or not g.s or st.status ~= "held" or g.s.epoch ~= st.epoch then return nil end
-  if store_of(st.session) ~= g.r.store then return nil end -- a credential of another store names nothing here
-  return g.credential
-end
-
----gateway_identity is the authority the gateway sends under, while it is held: the store, the
----scope and the gateway's profile. A send's idempotency key dedups only under the same one.
----@return { store: string, scope: string, profile: string }|nil
-function M.gateway_identity()
-  local st = _s
-  if not M.gateway_credential() then return nil end
-  local g = st.gateway
-  return { store = g.r.store, scope = g.r.scope, profile = g.s.profile }
-end
-
----in_addressbook is whether codename is a profile in this scope, as crew.list last said.
----@param codename string
----@return boolean
-function M.in_addressbook(codename)
-  local g = _s and _s.gateway
-  return g ~= nil and g.book ~= nil and codename ~= M.GATEWAY_CODENAME and g.book[codename] ~= nil
-end
 
 ---deliver_job types a fallback job into its recipient's terminal, once (auto-agents.fallback, keyed
 ---by the job's id: a job offered again, by this run or after a restart, is never typed twice). The
@@ -866,8 +705,6 @@ local function renew_later(st, a)
         return
       end
       settle(st)
-      ensure_gateway(st)
-      refresh_addressbook(st)
       renew_later(st, a)
     end)
   end)
@@ -928,9 +765,6 @@ claim = function(st, lost)
     drop_sessions(st)
     st.publish(M.TOPIC_CLAIMED, { scope = st.scope, epoch = epoch, reattached = before == epoch })
     settle(st)
-    if st.gateway then st.gateway.listed = false end
-    ensure_gateway(st)
-    refresh_addressbook(st)
     renew_later(st, a)
     poll_fallbacks(st, a)
   end)
@@ -951,7 +785,6 @@ function M.release()
   -- the agents stop with this Neovim: their contexts go now, and the release ends their sessions
   for id, s in pairs(st.sessions) do M.remove_context(s.folder, id) end
   st.sessions, st.pending, st.owed = {}, {}, {}
-  if st.gateway then st.gateway.r, st.gateway.s, st.gateway.credential = nil, nil, nil end -- ended with the scope
   if not epoch then return end
   local done = false
   st.session.call("crew.release", { st.scope, st.run, epoch }, function() done = true end)
@@ -1002,16 +835,12 @@ function M.begin(opts)
   if type(store) ~= "string" or store == "" or type(socket) ~= "string" or socket == "" then return nil, nil end
   local deadline = vim.uv.now() + M.REGISTER_WAIT_MS
   -- the workspace is the session's metadata, not its address: an agent in a folder no AutoDoc
-  -- workspace serves is registered with none, so its mail still reaches it once the file mailbox
-  -- is retired
+  -- workspace serves is registered with none, so its mail still reaches it
   local ws = workspace_id(st, sess, opts.cwd, deadline) or M.NO_WORKSPACE
   -- the wait may have outlived the scope, the epoch or the connection: start nothing under them
   if _s ~= st or st.status ~= "held" or sess.client() ~= c then return nil, nil end
 
   local codename, kind, folder = opts.codename, M.crew_kind(opts.kind), M.context_folder(opts.cwd)
-  if codename == M.GATEWAY_CODENAME then
-    return nil, ("the codename %q is this Neovim's mail gateway's: rename the agent to give it a crew session"):format(codename)
-  end
   -- the codename's previous session is over first, or this one is refused as busy: one still
   -- counted live (its process killed, its exit not yet reaped) is ended now, and its exit, with
   -- any other still owed for the codename, is waited for within the spawn's wait
@@ -1164,8 +993,7 @@ function M.setup(opts)
     rpc = opts.rpc or function(method, params) return require("auto-core.todo.daemon").rpc(method, params) end,
   }
   _s = st
-  -- the todo notifier sends crew agents' assignments through crew_send: an auto-core without the
-  -- hook keeps filing every assignment as a file notice
+  -- the todo notifier sends crew agents' assignments through crew_send
   local notifier = opts.notifier
   if notifier == nil then
     local ok, n = pcall(require, "auto-core.todo.notifier")
@@ -1202,7 +1030,7 @@ function M.setup(opts)
   return true
 end
 
--- certain is an inbox.send refusal that stored nothing: the notifier files its own notice instead.
+-- certain is an inbox.send refusal that stored nothing: the notifier hands it to its fallback instead.
 local function certain(c)
   return c == M.CODE_UNREACHABLE or c == M.CODE_INBOX_TOO_LARGE or c == M.CODE_INBOX_KEY_REUSED
     or c == M.CODE_NO_RECIPIENT or c == M.CODE_KEY_REUSED or c == M.CODE_TOO_LARGE or c == M.CODE_AMBIGUOUS
@@ -1214,8 +1042,7 @@ end
 ---§4.7): it sends an assignment to name through AutoDoc's crew, as the user, under this Neovim's
 ---claim (inbox.send, never rung), keyed by the notifier's message id mid, so a repeat is the same send.
 ---Unrung, the daemon queues it and wakes the agent as for any mail (a stopped one gets its host's
----fallback); rung, a send no wake reaches right then was refused for certain, and the notifier filed
----it in the file inbox instead.
+---fallback); one refused for certain goes to the notifier's own fallback (auto-agents.fallback).
 ---It is the one sender of an assignment Neovim sees: this Neovim's todos.assign, and one no surface
 ---sends (a bare `autodoc --call todos.add`). The notifier asks it only for an assignment of this
 ---scope, of no scope, or of this instance. A scoped one is sent by the bare name, which the daemon
@@ -1225,7 +1052,7 @@ end
 ---is otherwise not sent (false). Runs inside the notifier's daemon.run. Answers:
 ---  - true: sent (queued for the recipient, woken as any mail), or handed over;
 ---  - false: refused for certain (no such agent, ambiguous, unreachable, a reused key, a stale
----    epoch, an older daemon): the notifier files its file notice;
+---    epoch, an older daemon): the notifier hands it to its fallback (auto-agents.fallback);
 ---  - "retry": any other answer, its outcome unknown: the notifier asks again with the same mid;
 ---  - nil: no scope held here, so nothing was asked.
 ---@param name string the assignee's name
@@ -1236,7 +1063,7 @@ end
 function M.crew_send(name, mid, msg, how)
   local st = _s
   local scope, epoch = M.held()
-  if not st or not scope or type(name) ~= "string" or name == "" or name == M.GATEWAY_CODENAME then return nil end
+  if not st or not scope or type(name) ~= "string" or name == "" then return nil end
   if type(mid) ~= "string" or mid == "" or type(msg) ~= "table" then return nil end
   local to = name
   if type(how) == "table" and how.unscoped then

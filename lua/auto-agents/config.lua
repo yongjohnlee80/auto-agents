@@ -40,11 +40,6 @@ M.defaults = {
     primary_kind = "claude",
     bootstrap = {},
   },
-  -- The crew (ADR 1793271500 phase 4e): the recipients whose legacy mailbox mail goes through the
-  -- AutoDoc daemon instead of the file move, by codename, or "*" for all. Empty: none, as before.
-  crew = {
-    cutover = {},
-  },
   -- `kb.root_override` / `kb.path` feed only the legacy resolution
   -- (`auto-agents.kb.legacy_root`), which auto-core.kb imports once as
   -- the project's primary KB (ADR 1791209946 §7).
@@ -96,24 +91,6 @@ M.defaults = {
     editor_floor_strategy = "warn",
   },
 
-  -- v0.2.30 / Phase 6: workspace mailbox-dir lifecycle.
-  --
-  -- `prune.enabled = true` (default) runs `auto-core.mailbox.prune`
-  --   against the workspace mailbox root at setup time, removing
-  --   stale `<instance>/<name>/` subtrees that aren't in this
-  --   nvim's live registry and whose mtime is older than
-  --   `max_age_seconds`. Live registrations are kept regardless of
-  --   age.
-  -- `prune.max_age_seconds` defaults to 7 days. Lower it to be more
-  --   aggressive (1 day for dev machines that churn through many
-  --   sessions); raise it for shared workspaces where one user's
-  --   long-running session shouldn't be pruned by another's setup.
-  mailbox = {
-    prune = {
-      enabled         = true,
-      max_age_seconds = 7 * 24 * 60 * 60,  -- 7 days
-    },
-  },
 }
 
 local LOG_LEVELS = { error = true, warn = true, info = true, debug = true, trace = true }
@@ -191,10 +168,6 @@ function M.validate(cfg)
   if type(p.bottom_margin) ~= "number" or p.bottom_margin < 0 then
     return "panel.bottom_margin must be a non-negative integer"
   end
-  local cut = cfg.crew and cfg.crew.cutover
-  if cut ~= nil and cut ~= "*" and not vim.islist(cut) then
-    return "crew.cutover must be a list of codenames or \"*\""
-  end
   local a = cfg.agents
   local GRANTS = { ["editor.read"] = true, review = true, peek = true, commands = true }
   for _, entry in ipairs((a and a.bootstrap) or {}) do
@@ -219,18 +192,11 @@ function M.validate(cfg)
   if type(a.bootstrap) ~= "table" then
     return "agents.bootstrap must be a list of slot specs"
   end
-  -- v0.2.30 / auto-core v0.1.33 workspace-mailbox layout: agent
-  -- names `nvim` and `user` collide on disk with the host/user
-  -- mailbox after the type prefix is stripped. Reject at config
-  -- boundary so the conflict surfaces at setup, not silently in
-  -- the filesystem. Mirrors the auto-core path.validate_id
-  -- enforcement (lector audit must-fix #2, 2026-05-24).
+  -- `user` is AutoDoc's crew name for the human: no agent may take it (crew.register refuses it).
+  -- Rejected here so the conflict surfaces at setup, not as an agent with no crew session.
   for _, entry in ipairs(a.bootstrap) do
-    if type(entry) == "table" and type(entry.name) == "string" then
-      if entry.name == "nvim" or entry.name == "user" then
-        return "agents.bootstrap entry name '" .. entry.name
-          .. "' is reserved (collides with host/user mailbox)"
-      end
+    if type(entry) == "table" and entry.name == "user" then
+      return "agents.bootstrap entry name 'user' is reserved (AutoDoc's crew name for the human)"
     end
   end
   if not PROVIDERS[cfg.terminal.provider] then
@@ -255,7 +221,19 @@ end
 ---@param user_opts table?
 ---@return AutoAgentsConfig
 function M.apply(user_opts)
+  -- the file mailbox's settings went with it (auto-agents v0.4.0): ignored, said once
+  local retired = {}
+  if type(user_opts) == "table" then
+    if type(user_opts.crew) == "table" and user_opts.crew.cutover ~= nil then retired[#retired + 1] = "crew.cutover" end
+    if user_opts.mailbox ~= nil then retired[#retired + 1] = "mailbox" end
+  end
+  if #retired > 0 then
+    vim.notify(("auto-agents: %s is gone with the file mailbox (v0.4.0): every message goes through AutoDoc's crew. Remove it from your config.")
+      :format(table.concat(retired, " and ")), vim.log.levels.WARN, { title = "auto-agents" })
+  end
   local merged = vim.tbl_deep_extend("force", {}, M.defaults, user_opts or {})
+  if type(merged.crew) == "table" then merged.crew.cutover = nil end
+  merged.mailbox = nil
   local err = M.validate(merged)
   if err then
     error("auto-agents.config: " .. err)

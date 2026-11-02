@@ -196,9 +196,6 @@ end
 ---tests. Per-verb positional shortcuts:
 ---  * `peek <slot> [lines]`   → { slot, lines? }
 ---  * `say  <slot> <text...>` → { slot, text }
----  * `wake <slot-num-or-name> [text...]` → { slot=name, text? }
----      (resolves a numeric slot to the bootstrap entry's name)
----  * `send_user <body...>`   → { body }
 ---  * any other verb          → generic `k=v` parsing with
 ---      auto-coercion (number / true / false / string)
 ---@param cmd_name string
@@ -215,38 +212,6 @@ local function _parse_run_args(cmd_name, toks)
       local rest = {}
       for i = 4, #toks do rest[#rest + 1] = toks[i] end
       args.text = table.concat(rest, " ")
-    end
-  elseif cmd_name == "wake" then
-    -- wake's `slot` arg is the agent NAME (string). Admin UX
-    -- accepts either a slot NUMBER (resolved to the bootstrap
-    -- entry's name) or a literal agent name string. Trailing
-    -- tokens become the optional `text`.
-    local first = toks[3]
-    if first then
-      local as_num = tonumber(first)
-      if as_num then
-        local cfg = (require("auto-agents").state or {}).config or {}
-        local bs = (cfg.agents and cfg.agents.bootstrap) or {}
-        for _, e in ipairs(bs) do
-          if tonumber(e.slot) == as_num then
-            args.slot = e.name; break
-          end
-        end
-        if not args.slot then args.slot = tostring(first) end
-      else
-        args.slot = first
-      end
-    end
-    if #toks >= 4 then
-      local rest = {}
-      for i = 4, #toks do rest[#rest + 1] = toks[i] end
-      args.text = table.concat(rest, " ")
-    end
-  elseif cmd_name == "send_user" then
-    if #toks >= 3 then
-      local rest = {}
-      for i = 3, #toks do rest[#rest + 1] = toks[i] end
-      args.body = table.concat(rest, " ")
     end
   else
     for i = 3, #toks do
@@ -960,8 +925,7 @@ local function complete_at(prompt, cursor_col)
       candidates = {}
     end
   elseif #prev_toks == 2 and prev_toks[1] == "run"
-    and (prev_toks[2] == "peek" or prev_toks[2] == "say"
-         or prev_toks[2] == "wake") then
+    and (prev_toks[2] == "peek" or prev_toks[2] == "say") then
     -- Offer live slot numbers for peek/say.
     local aa_ok, aa = pcall(require, "auto-agents")
     candidates = {}
