@@ -88,16 +88,19 @@ end
 io.stdout:write("\n[2] one module that can't load takes only its own verbs\n")
 do
   unregister_every()
-  local log = require("auto-agents.log")
-  local real_error, errors = log.error, {}
-  log.error = function(scope, msg) errors[#errors + 1] = { scope = scope, msg = msg } end
+  -- a stand-in log: the real one loads auto-core whole, which this cell doesn't need
+  local real_log, errors = package.loaded["auto-agents.log"], {}
+  package.loaded["auto-agents.log"] = {
+    error = function(scope, msg) errors[#errors + 1] = { scope = scope, msg = msg } end,
+    warn = function() end, info = function() end, debug = function() end,
+  }
   local real_todos = package.loaded["auto-agents.commands.todos"]
   package.loaded["auto-agents.commands.todos"] = nil
   package.preload["auto-agents.commands.todos"] = function() error("todos verbs broken for this cell") end
   local failed = cmds.register_every()
   package.preload["auto-agents.commands.todos"] = nil
   package.loaded["auto-agents.commands.todos"] = real_todos
-  log.error = real_error
+  package.loaded["auto-agents.log"] = real_log
   local by = listed()
   ok("[2] only the todos module failed", failed["auto-agents.commands.todos"] ~= nil
     and failed["auto-agents.commands"] == nil and failed["auto-agents.commands.review"] == nil, vim.inspect(failed))
