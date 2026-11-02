@@ -1,16 +1,18 @@
 --- Tests for auto-agents.crew's part in AutoDoc's fallback (r15 P4): mail the crew couldn't get
 --- received in time comes back to this Neovim, the recipient's host, as jobs (mail.fallbacks),
---- each filed once in the recipient's file mailbox and reported (mail.fallback_done). Run with:
+--- each typed once into the recipient's terminal (auto-agents.fallback) and reported
+--- (mail.fallback_done). Run with:
 ---   nvim --headless -u NONE -l tests/crew_fallback_spec.lua
 ---
---- A fake autodoc.session answers as the test says; the file mailbox is a fake transport.
+--- A fake autodoc.session answers as the test says; the typing is a fake type_once that, as the real
+--- one, types a key once and answers true for a key typed before.
 ---   [1] a daemon before protocol 42 is never asked for jobs
 ---   [2] a daemon of 42 is asked once the scope is held: scope, run token, epoch, the wait
----   [3] a job is filed as inbox/<job id>.json in its codename's mailbox, from the host, the text
----       as its body; reported delivered under its lease; the user told; the next ask re-armed
----   [4] a job whose file is already there (offered again, an earlier run filed it) is reported
----       delivered, never filed twice
----   [5] a job that can't be filed is reported unknown, and the user is given its text
+---   [3] a job is typed into its codename's terminal, keyed by its id, the daemon's text as it is;
+---       reported delivered under its lease; the user told; the next ask re-armed
+---   [4] a job typed before (offered again: an earlier run typed it, its report lost) is reported
+---       delivered, never typed twice
+---   [5] a job that can't be typed is reported unknown, and the user is given its text
 ---   [6] a daemon without the verb, or a lost epoch, ends the asking; any other failure asks again
 
 local script_path = debug.getinfo(1).source:sub(2)
@@ -35,7 +37,7 @@ local crew = require("auto-agents.crew")
 
 local function new_world(opts)
   opts = opts or {}
-  local w = { calls = {}, notices = {}, timers = {}, subs = {}, answer = {}, files = {}, sends = {} }
+  local w = { calls = {}, notices = {}, timers = {}, subs = {}, answer = {}, typed = {}, types = {} }
   w.client = {
     can = function() return true end,
     hello = function() return { store_id = "store-1", protocol = opts.protocol or 42 } end,
@@ -62,18 +64,14 @@ local function new_world(opts)
     subscribe = function(topic, fn) w.subs[topic] = fn; return topic end,
     unsubscribe = function(topic) w.subs[topic] = nil end,
   }
-  -- the file mailbox: files[mailbox][id] is a filed message; send_err fails the next send
-  w.transport = {
-    message_state = function(to, id) return (w.files[to] or {})[id] and "queued" or nil end,
-    send = function(m)
-      w.sends[#w.sends + 1] = vim.deepcopy(m)
-      if w.send_err then return nil, w.send_err end
-      local id = m.id or ("generated-" .. #w.sends) -- as the real transport does without one
-      w.files[m.to] = w.files[m.to] or {}
-      w.files[m.to][id] = m
-      return { id = id }
-    end,
-  }
+  -- the typing: typed[key] is a key typed before; type_err refuses the next one
+  w.type_once = function(codename, key, text)
+    if w.typed[key] then return true end
+    if w.type_err then return false, w.type_err end
+    w.types[#w.types + 1] = { codename = codename, key = key, text = text }
+    w.typed[key] = true
+    return true
+  end
   w.tick = function()
     local due = w.timers
     w.timers = {}
@@ -98,8 +96,7 @@ local function new_world(opts)
     notify = function(msg) w.notices[#w.notices + 1] = msg end,
     after = function(_, fn) w.timers[#w.timers + 1] = fn end,
     wait = function(_, cond) return cond() end,
-    transport = w.transport,
-    mailbox_of = function(codename) return "agent:" .. codename .. ":inst" end,
+    type_once = w.type_once,
   }))
   return w
 end
@@ -137,15 +134,16 @@ do
   local w = new_world()
   w.jobs = { job("j1") }
   w.tick() -- the next ask brings the job
-  local f = (w.files["agent:gold:inst"] or {}).j1
-  ok("[3] filed as its own id in the codename's mailbox, from the host, the text its body",
-    f ~= nil and f.from == crew.FALLBACK_FROM and f.kind == "message" and f.subject == "a subject" and f.body == job("j1").text,
-    vim.inspect(w.files))
+  local t = w.types[1]
+  ok("[3] typed once into the codename's terminal, keyed by its id, the daemon's text as it is",
+    #w.types == 1 and t.codename == "gold" and t.key == "j1" and t.text == job("j1").text, vim.inspect(w.types))
   local d = done_of(w, "j1")
   ok("[3] reported delivered under its lease, scope, run and epoch",
     d ~= nil and d[1] == "autovim:alpha" and d[3] == 5 and d[5] == "lease-j1" and d[6] == "delivered", vim.inspect(d))
   local told = false
-  for _, n in ipairs(w.notices) do if n:find("gold", 1, true) and n:find("jarvis's message", 1, true) then told = true end end
+  for _, n in ipairs(w.notices) do
+    if n:find("gold", 1, true) and n:find("jarvis was typed", 1, true) then told = true end
+  end
   ok("[3] the user is told", told, vim.inspect(w.notices))
   local before = #w.of("mail.fallbacks")
   w.tick()
@@ -154,23 +152,25 @@ end
 
 do
   local w = new_world()
-  w.files["agent:gold:inst"] = { j2 = { id = "j2" } } -- an earlier run filed it, and its report was lost
+  w.typed.j2 = true -- an earlier run typed it, and its report was lost
   w.jobs = { job("j2", 1) }
   w.tick()
   local d = done_of(w, "j2")
-  ok("[4] a job already filed is reported delivered, never filed twice",
-    #w.sends == 0 and d ~= nil and d[6] == "delivered", vim.inspect({ w.sends, d }))
+  ok("[4] a job typed before is reported delivered, never typed twice",
+    #w.types == 0 and d ~= nil and d[6] == "delivered", vim.inspect({ w.types, d }))
 end
 
 do
   local w = new_world()
-  w.send_err = "disk full"
+  w.type_err = "no slot runs gold"
   w.jobs = { job("j3") }
   w.tick()
   local d = done_of(w, "j3")
   local given = false
-  for _, n in ipairs(w.notices) do if n:find("hello gold", 1, true) and n:find("disk full", 1, true) then given = true end end
-  ok("[5] a job that can't be filed is reported unknown, the user given its text",
+  for _, n in ipairs(w.notices) do
+    if n:find("hello gold", 1, true) and n:find("no slot runs gold", 1, true) then given = true end
+  end
+  ok("[5] a job that can't be typed is reported unknown, the user given its text",
     d ~= nil and d[6] == "unknown" and given, vim.inspect({ d, w.notices }))
 end
 

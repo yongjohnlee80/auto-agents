@@ -60,9 +60,6 @@ M.FALLBACK_WAIT_MS = 25000 -- one mail.fallbacks' longest wait (the daemon's own
 -- NOTE: can't announce: a failed poll (a lost connection, a store failure) says nothing about when
 -- the daemon answers again, so it is asked again after a fixed gap.
 M.FALLBACK_RETRY_MS = 5000
--- The file mailbox's sender for a fallback: the host. The crew sender is named in the text, with
--- how to answer it, since a withdrawn delivery takes no reply.
-M.FALLBACK_FROM = "nvim"
 
 -- inbox.send's answers (core/inbox, core/mail errors.go) that the todo notifier's crew send reads:
 -- handed over is accepted (the recipient's host carries it); the others are refused for certain.
@@ -796,38 +793,31 @@ function M.in_addressbook(codename)
   return g ~= nil and g.book ~= nil and codename ~= M.GATEWAY_CODENAME and g.book[codename] ~= nil
 end
 
----deliver_job files a fallback job in its recipient's file mailbox, once: as
----`inbox/<job id>.json` (written whole, by transport.send's temp-and-rename), from the host, its
----router waking the agent. The file is the job's record: a job whose file is already there, in
----any state (queued, claimed, done), was filed before, by this run or an earlier one, and is
----reported delivered, never filed twice. Returns the outcome mail.fallback_done takes, and why
----when it is "unknown" (nothing filed).
+---deliver_job types a fallback job into its recipient's terminal, once (auto-agents.fallback, keyed
+---by the job's id: a job offered again, by this run or after a restart, is never typed twice). The
+---text is the daemon's, which names the sender and how to answer it, since a withdrawn delivery
+---takes no reply. Returns the outcome mail.fallback_done takes, and why when it is "unknown"
+---(nothing typed).
 ---@param job table mail.fallbacks' job: id, codename, from, text, message
----@param transport table auto-core.mailbox.transport (send, message_state)
----@param mailbox_of fun(codename: string): string the codename's file mailbox id
+---@param type_once fun(codename: string, key: string, text: string): boolean, string|nil
 ---@return string outcome, string|nil why
-function M.deliver_job(job, transport, mailbox_of)
-  local to = mailbox_of(job.codename)
-  if transport.message_state(to, job.id) then return "delivered" end
-  local msg = type(job.message) == "table" and job.message or {}
-  local subject = type(msg.subject) == "string" and msg.subject ~= "" and msg.subject or ("mail from " .. tostring(job.from))
-  local _, err = transport.send({ id = job.id, from = M.FALLBACK_FROM, to = to, kind = "message",
-    subject = subject, body = job.text })
-  if err then return "unknown", tostring(err) end
+function M.deliver_job(job, type_once)
+  local ok, why = type_once(job.codename, job.id, job.text)
+  if not ok then return "unknown", why end
   return "delivered"
 end
 
 ---take_job delivers one job and reports it; the user is told of every outcome.
 local function take_job(st, job)
-  local outcome, why = M.deliver_job(job, st.transport(), st.mailbox_of)
+  local outcome, why = M.deliver_job(job, st.type_once)
   if outcome == "delivered" then
-    st.notify(("%s couldn't be woken: AutoDoc put %s's message in its mailbox"):format(job.codename, tostring(job.from)),
-      vim.log.levels.INFO)
+    st.notify(("%s couldn't be woken: AutoDoc's message from %s was typed into its terminal"):format(job.codename,
+      tostring(job.from)), vim.log.levels.INFO)
   else
     st.notify(("AutoDoc couldn't give %s the message from %s (%s), so send it there yourself:\n%s")
       :format(job.codename, tostring(job.from), why or "?", tostring(job.text)), vim.log.levels.WARN)
   end
-  -- a report the daemon doesn't take is answered again from the file when the job comes back
+  -- a report the daemon doesn't take is answered again from the kept key when the job comes back
   st.session.call("mail.fallback_done", { st.scope, st.run, st.epoch, job.id, job.lease, outcome }, function() end)
 end
 
@@ -1166,11 +1156,9 @@ function M.setup(opts)
     sessions = {},
     pending = {},
     owed = {},
-    -- the file mailbox, for the fallback's jobs: auto-core's transport, and a codename's mailbox id
-    transport = opts.transport and function() return opts.transport end
-      or function() return require("auto-core.mailbox.transport") end,
-    mailbox_of = opts.mailbox_of or function(codename)
-      return require("auto-core.mailbox.path").full_id("agent:" .. codename)
+    -- the fallback's jobs, typed into their agents' terminals once each (auto-agents.fallback)
+    type_once = opts.type_once or function(codename, key, text)
+      return require("auto-agents.fallback").type_once(codename, key, text)
     end,
     -- the crew send's verb call, from inside the todo notifier's daemon.run (crew_send)
     rpc = opts.rpc or function(method, params) return require("auto-core.todo.daemon").rpc(method, params) end,

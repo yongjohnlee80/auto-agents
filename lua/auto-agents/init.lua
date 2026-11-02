@@ -472,6 +472,12 @@ function M.setup(opts)
   if not ok_cmds then
     require("auto-agents.log").error("init", "the command verbs are DOWN: " .. tostring(cmds_err))
   end
+  -- An assignment notice no crew wake could land is typed into its agent's terminal, once
+  -- (auto-agents.fallback, auto-core's notifier.set_fallback).
+  local ok_fb, fb_err = pcall(function() require("auto-agents.fallback").attach() end)
+  if not ok_fb then
+    require("auto-agents.log").error("init", "the notifier's fallback isn't attached: " .. tostring(fb_err))
+  end
   -- The file mailbox (auto-core.mailbox): the router and the `nvim` executioner mailbox, and the
   -- mailbox-only verbs (auto-agents.mailbox.commands). Retired in auto-agents v0.4.0.
   local ok_mailbox_wire, mailbox_wire_err = pcall(function()
@@ -3091,6 +3097,7 @@ function M.teardown()
   pcall(function() require("auto-agents.mailbox.commands").unregister_all() end)
   local ok_cmds, cmds = pcall(require, "auto-agents.commands")
   if ok_cmds then pcall(cmds.unregister_all) end
+  pcall(function() require("auto-agents.fallback").detach() end)
   pcall(function()
     local mailbox = require("auto-core").mailbox
     local cfg = M.state.config
