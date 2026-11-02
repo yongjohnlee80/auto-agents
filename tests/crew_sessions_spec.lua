@@ -1035,6 +1035,8 @@ do -- a registration refused while the scope is held: asked again at a renewal, 
   ok("[21] it joins at a later renewal, its failure logged once",
     h.session and h.session.id == "late-1" and #vim.tbl_filter(function(l) return l:find("couldn't join", 1, true) end, w.logs) == 1,
     vim.inspect({ h.session, w.logs }))
+  ok("[21] the waiting slot's registration is its own: never replayed by a renewal and ended",
+    #w.of("crew.exit") == 0, vim.inspect(w.of("crew.exit")))
   crew.stop()
 end
 
