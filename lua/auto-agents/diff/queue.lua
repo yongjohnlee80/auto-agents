@@ -213,7 +213,7 @@ function M.resolve(id, final_contents)
 
   -- Resume the blocked coroutine
   req.callback(result)
-  -- Mailbox-routed entries also get a verdict message via the router.
+  -- A `diff_queue` entry's agent also gets the verdict as crew mail.
   -- No-op for MCP openDiff entries (no originator).
   emit_verdict(req, "accepted", nil)
   M.remove(id)
@@ -247,7 +247,7 @@ function M.reject(id, reason)
 
   -- Resume the blocked coroutine
   req.callback(result)
-  -- Mailbox-routed entries also get a verdict message via the router.
+  -- A `diff_queue` entry's agent also gets the verdict as crew mail.
   -- The user comment (M) or the rejection placeholder (D, no input)
   -- is forwarded so the agent can iterate.
   emit_verdict(req, "rejected", reason)

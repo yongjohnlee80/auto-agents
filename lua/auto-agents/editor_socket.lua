@@ -30,8 +30,7 @@ M.CODE_INVALID_PARAMS = -32602
 M.CODE_INTERNAL = -32603
 M.CODE_REFUSED = -32097
 
--- An agent's grants unless its roster entry says otherwise: what any agent could do through the
--- mailbox before (read the page, review, peek a slot), so the move loses nothing.
+-- An agent's grants unless its roster entry says otherwise: read the page, review, peek a slot.
 M.DEFAULT_GRANTS = { "editor.read", "review", "peek" }
 
 -- The longest request a client may send, as a guard against a runaway peer.

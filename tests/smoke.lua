@@ -403,58 +403,39 @@ aa.sync_slot_count()
 ok("sync_slot_count moves MAX_SLOT back to 5",
   aa.MAX_SLOT == 5)
 
--- v0.2.30 / auto-core v0.1.33 — Lector audit must-fix #1: spawn cwd
--- flows through identity.reconcile / mailbox_root so the agent's
--- mailbox anchors at the spawn-cwd's workspace, not the host's.
-do
-  local identity = require("auto-agents.runtime.identity")
-  -- Clear any auto-core worktree state for a deterministic resolver
-  -- behavior. With state unset and no AUTO_AGENTS_MAILBOX_ROOT env,
-  -- the resolver falls through to opts.cwd → exactly the path we
-  -- want to anchor the mailbox under.
-  local worktree_ok, worktree_mod = pcall(require, "auto-core.git.worktree")
-  if worktree_ok then
-    pcall(worktree_mod.set_active, nil)
-    pcall(worktree_mod.set_workspace_root, nil)
-  end
-  local saved_env = vim.env.AUTO_AGENTS_MAILBOX_ROOT
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = nil
-
-  local spawn_cwd = vim.fn.tempname() .. "_spawn-cwd-fixture"
-  vim.fn.mkdir(spawn_cwd, "p")
-  -- Defensive: clear any leftover _override_root from earlier
-  -- sections that may have called mailbox.configure({ root = X }).
-  require("auto-core.mailbox.path").configure(nil)
-  local resolved = identity.mailbox_root({ cwd = spawn_cwd })
-  ok("Lector audit must-fix #1: mailbox_root({cwd}) anchors under the spawn cwd",
-    resolved:sub(1, #spawn_cwd) == spawn_cwd
-      and resolved:find("%.auto%-agents/mailbox$") ~= nil,
-    "got: " .. resolved .. " (expected under " .. spawn_cwd .. ")")
-
-  -- Restore env + cleanup.
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = saved_env
-  pcall(vim.fn.delete, spawn_cwd, "rf")
-end
-
--- v0.2.30 / auto-core v0.1.33 — Lector audit must-fix #2: reserved
--- agent names rejected at the auto-agents config boundary too
--- (mirrors the path.validate_id check).
+-- Reserved agent names at the config boundary: `user` is AutoDoc's crew name for the human, so no
+-- agent may take it; `nvim` was the file mailbox's host address and is an ordinary name now
+-- (auto-agents v0.4.0).
 do
   local cfg_mod = require("auto-agents.config")
-  local _, err_nvim = pcall(cfg_mod.apply, {
+  local ok_nvim, err_nvim = pcall(cfg_mod.apply, {
     agents = { bootstrap = { { slot = 1, name = "nvim", kind = "claude" } } },
   })
-  ok("Lector audit must-fix #2: config rejects bootstrap name 'nvim'",
-    type(err_nvim) == "string"
-      and err_nvim:find("reserved", 1, true) ~= nil,
-    "got: " .. tostring(err_nvim))
+  ok("config takes the bootstrap name 'nvim' (no mailbox host to collide with)", ok_nvim, tostring(err_nvim))
   local _, err_user = pcall(cfg_mod.apply, {
     agents = { bootstrap = { { slot = 1, name = "user", kind = "claude" } } },
   })
-  ok("Lector audit must-fix #2: config rejects bootstrap name 'user'",
+  ok("config rejects bootstrap name 'user' (AutoDoc's crew name for the human)",
     type(err_user) == "string"
       and err_user:find("reserved", 1, true) ~= nil,
     "got: " .. tostring(err_user))
+end
+
+-- The file mailbox's settings (crew.cutover, mailbox) are gone in v0.4.0: a config that still has
+-- them is applied without them, and told so once per apply, never an error.
+do
+  local cfg_mod = require("auto-agents.config")
+  local real_notify, told = vim.notify, {}
+  vim.notify = function(msg, level) told[#told + 1] = { msg = msg, level = level } end
+  local ok_apply, merged = pcall(cfg_mod.apply, { crew = { cutover = "*" }, mailbox = { prune = { enabled = false } } })
+  local _, quiet = pcall(cfg_mod.apply, {})
+  vim.notify = real_notify
+  ok("a leftover crew.cutover / mailbox applies, never an error", ok_apply, tostring(merged))
+  ok("and is dropped from the config", ok_apply and merged.mailbox == nil
+    and (merged.crew == nil or merged.crew.cutover == nil), vim.inspect(ok_apply and { merged.crew, merged.mailbox }))
+  ok("told once, naming both, as a warning", #told == 1 and told[1].level == vim.log.levels.WARN
+    and told[1].msg:find("crew.cutover", 1, true) and told[1].msg:find("mailbox", 1, true), vim.inspect(told))
+  ok("a config without them says nothing", quiet ~= nil and #told == 1)
 end
 
 -- Admin REPL tab-complete: `slot` registers + `slot add` offers integers.
@@ -899,7 +880,7 @@ ok("send_slot without submit fires exactly one chan_send",
 -- (Esc closing an open picker) but mid-generation that Esc CANCELS
 -- the agent's work — the reported interrupt. The leading-`[` codex
 -- bracketed-entry hazard that originally motivated Esc is handled
--- upstream by payload prefixing (e.g. wake's `ATTENTION:`). A
+-- upstream by payload prefixing (e.g. auto-agents.fallback's prefix). A
 -- caller that truly needs Esc+CR can still pass it via
 -- `opts.submit_keys`.
 aa.state.config.agents.bootstrap = {
@@ -960,9 +941,9 @@ aa.state.slot_terminals[2] = nil  -- not spawned → excluded
 local sp_ok, spawned = pcall(aa.spawned_agents)
 ok("v0.2.46: spawned_agents() runs without error", sp_ok,
   not sp_ok and tostring(spawned) or nil)
-ok("v0.2.46: spawned_agents() returns only the alive slot with mailbox_id",
+ok("v0.2.46: spawned_agents() returns only the alive slot with agent_id",
   sp_ok and #spawned == 1 and spawned[1].name == "jarvis"
-    and spawned[1].mailbox_id == "agent:jarvis",
+    and spawned[1].agent_id == "agent:jarvis",
   "got: " .. vim.inspect(spawned))
 
 -- v0.2.34: send_keypress symbolic helper + override hook.
@@ -1021,328 +1002,6 @@ ok("slot_for_name returns nil for empty input", aa.slot_for_name("") == nil)
 ok("slot_for_name returns nil for nil input", aa.slot_for_name(nil) == nil)
 
 aa.state.config.agents.bootstrap = {}
-
--- ────────── 16. ADR 0023 — runtime identity sidecar + refresh_agent_id ──────────
-print("\n[16] ADR 0023 — runtime_identity sidecar + refresh_agent_id")
-do
-  local ri = require("auto-agents.runtime_identity")
-  local cmds = require("auto-agents.mailbox.commands")
-
-  -- Isolate the sidecar path to a temp file so we don't pollute
-  -- the user's real `~/.local/share/nvim/auto-agents/`.
-  local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-1.json"
-  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
-
-  -- v0.2.30 / auto-core v0.1.33: mailboxes live under the workspace
-  -- mailbox root resolved by `auto-core.mailbox.path.workspace_mailbox_root`.
-  -- Override via the single AUTO_AGENTS_MAILBOX_ROOT env var so the
-  -- test doesn't write into the live workspace mailbox tree.
-  local tmp_mb_root = vim.fn.tempname() .. "_workspace-mailbox"
-  vim.fn.mkdir(tmp_mb_root, "p")
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = tmp_mb_root
-
-  ok("ADR 0023 §3.1: path_for honors AUTO_AGENTS_RUNTIME_IDENTITY_PATH env",
-    ri.path_for(1) == tmp_sidecar)
-
-  -- Plant a fake slot + register the refresh handler. Clear
-  -- slot_terminals first so leftovers from earlier sections (section
-  -- 5 plants a slot 3 with no pid() method) don't pollute the
-  -- live_slots enumeration.
-  aa.state.slot_terminals = {}
-  aa.state.config.agents = aa.state.config.agents or {}
-  aa.state.config.agents.bootstrap = {
-    { slot = 1, name = "jarvis", kind = "claude" },
-  }
-  local fake_pid = 1234567
-  aa.state.slot_terminals[1] = {
-    get_bufnr = function() return -1 end,
-    is_alive  = function() return true end,
-    resize_to = function() end,
-    pid       = function() return fake_pid end,
-  }
-  cmds.register_all()
-
-  -- Direct handler invocation via the mailbox command dispatch.
-  local core = require("auto-core")
-  local result = core.mailbox.commands.handle_message({
-    kind    = "command",
-    from    = "agent:jarvis:STALE-INSTANCE-ID",
-    to      = "nvim",
-    command = "refresh_agent_id",
-    args    = {
-      claimed_instance_id = "STALE-INSTANCE-ID",
-      claimed_mailbox_id  = "agent:jarvis:STALE-INSTANCE-ID",
-      actor_pid           = fake_pid,
-    },
-  }, { mailbox = "nvim" })
-
-  ok("ADR 0023 §3.2: refresh_agent_id returns ok = true on matched actor_pid",
-    type(result) == "table" and result.ok == true,
-    vim.inspect(result))
-  ok("ADR 0023 §3.2: response.value carries preamble + runtime_identity_path",
-    result.value
-      and type(result.value.preamble) == "string"
-      and result.value.preamble:find("`/resume`") ~= nil
-      and result.value.runtime_identity_path == tmp_sidecar)
-  ok("ADR 0023 §3.2: response.value carries canonical mailbox_id + bare_id + instance_id",
-    result.value
-      and type(result.value.instance_id) == "string"
-      and type(result.value.mailbox_id) == "string"
-      and result.value.bare_id == "agent:jarvis"
-      and result.value.agent_name == "jarvis"
-      and result.value.slot == 1)
-  ok("ADR 0023 §3.2: response.value.stamped_by reflects the refresh path",
-    result.value and result.value.stamped_by == "auto-agents.refresh_agent_id")
-
-  -- Sidecar file actually lands on disk + decodes.
-  local record, rerr = ri.read(tmp_sidecar)
-  ok("ADR 0023 §3.1: sidecar identity file written + readable",
-    type(record) == "table" and rerr == nil, tostring(rerr))
-  ok("ADR 0023 §3.1: sidecar record matches the response value",
-    record
-      and record.slot       == 1
-      and record.agent_name == "jarvis"
-      and record.bare_id    == "agent:jarvis"
-      and record.mailbox_id == result.value.mailbox_id)
-
-  -- Mismatched PID → unknown_actor_pid + live_slots enumeration.
-  local miss = core.mailbox.commands.handle_message({
-    kind = "command", from = "agent:jarvis:STALE", to = "nvim",
-    command = "refresh_agent_id",
-    args    = { actor_pid = 9999999 },
-  }, { mailbox = "nvim" })
-  ok("ADR 0023 §3.2: unknown PID returns ok=false with code='unknown_actor_pid'",
-    type(miss) == "table" and miss.ok == false
-      and miss.code == "unknown_actor_pid")
-  ok("ADR 0023 §3.2: unknown PID response carries live_slots enumeration",
-    type(miss.live_slots) == "table" and #miss.live_slots == 1
-      and miss.live_slots[1].slot == 1
-      and miss.live_slots[1].pid == fake_pid,
-    vim.inspect(miss))
-
-  -- addressbook now carries the runtime_identity field. mailbox_full
-  -- must follow the v0.1.8 instance-id shape `<unix>-<pid>` (e.g.
-  -- `1234567890-12345`) for `mb_path.bare_id` to strip the suffix
-  -- correctly. Non-conforming suffixes pass through unchanged
-  -- (deliberate — see auto-core/mailbox/path.lua).
-  local fake_full = "agent:jarvis:1234567890-12345"
-  local ab = core.mailbox.commands.handle_message({
-    kind = "command", from = "agent:jarvis:1111111111-11111", to = "nvim",
-    command = "addressbook",
-    args    = {},
-  }, { mailbox = "nvim", mailbox_full = fake_full })
-  ok("ADR 0023 §3.4: addressbook value carries runtime_identity field",
-    ab.ok == true and type(ab.value.runtime_identity) == "table",
-    vim.inspect(ab.value and ab.value.runtime_identity))
-  ok("ADR 0023 §3.4: addressbook runtime_identity.expected_mailbox_id mirrors ctx.mailbox_full",
-    ab.value.runtime_identity.expected_mailbox_id == fake_full
-      and ab.value.runtime_identity.expected_bare_id == "agent:jarvis",
-    vim.inspect(ab.value.runtime_identity))
-
-  -- Teardown.
-  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = nil
-  pcall(vim.fn.delete, tmp_sidecar)
-  pcall(vim.fn.delete, tmp_mb_root, "rf")
-  aa.state.config.agents.bootstrap = {}
-  aa.state.slot_terminals[1] = nil
-end
-
--- ────────── 17. ADR 0023 Phase 3 — :AutoAgentsAdoptResumedAgent ──────────
-print("\n[17] ADR 0023 Phase 3 — :AutoAgentsAdoptResumedAgent + resume round-trip")
-do
-  vim.cmd("runtime! plugin/auto-agents.lua")
-  local ri = require("auto-agents.runtime_identity")
-
-  -- Isolate sidecar to a temp file.
-  local tmp_sidecar = vim.fn.tempname() .. "_runtime-identity-5.json"
-  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = tmp_sidecar
-
-  -- v0.2.30 / auto-core v0.1.33: adopt writes the wake message under
-  -- the workspace mailbox root resolved by auto-core. Override via
-  -- the single AUTO_AGENTS_MAILBOX_ROOT env var.
-  local tmp_mb_root = vim.fn.tempname() .. "_workspace-mailbox-adopt"
-  vim.fn.mkdir(tmp_mb_root, "p")
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = tmp_mb_root
-
-  -- Plant a fake slot 5 (ultron-prime, kind=claude, diff_review=true).
-  -- diff_review=true exercises lector's "adopt loses diff_review" bug
-  -- below: pre-fix the sidecar would record diff_review=false because
-  -- the adopt path called build_record without the flag.
-  aa.state.slot_terminals = {}
-  aa.state.config.agents = aa.state.config.agents or {}
-  aa.state.config.agents.bootstrap = {
-    { slot = 5, name = "ultron-prime", kind = "claude", diff_review = true },
-  }
-  local fake_pid = 7654321
-  aa.state.slot_terminals[5] = {
-    get_bufnr = function() return -1 end,
-    is_alive  = function() return true end,
-    resize_to = function() end,
-    pid       = function() return fake_pid end,
-  }
-
-  -- Command should be registered after `runtime! plugin/`.
-  local cmds = vim.api.nvim_get_commands({})
-  ok("ADR 0023 §3.3: :AutoAgentsAdoptResumedAgent registered",
-    cmds.AutoAgentsAdoptResumedAgent ~= nil)
-
-  -- Run the command for slot 5.
-  local ok_cmd, cmd_err = pcall(vim.cmd, "AutoAgentsAdoptResumedAgent 5")
-  ok("ADR 0023 §3.3: command runs without error", ok_cmd, tostring(cmd_err))
-
-  -- Sidecar file written.
-  local record, rerr = ri.read(tmp_sidecar)
-  ok("ADR 0023 §3.3: sidecar identity file landed on disk",
-    type(record) == "table" and rerr == nil, tostring(rerr))
-  ok("ADR 0023 §3.3: sidecar record carries slot + agent_name + agent_pid",
-    record
-      and record.slot       == 5
-      and record.agent_name == "ultron-prime"
-      and record.bare_id    == "agent:ultron-prime"
-      and record.agent_pid  == fake_pid)
-  ok("ADR 0023 §3.3: sidecar record.stamped_by reflects the adopt path",
-    record and record.stamped_by == "auto-agents:AutoAgentsAdoptResumedAgent")
-  ok("ADR 0029 #3 (lector audit must-fix): adopt sidecar carries the "
-     .. "bootstrap spec's diff_review flag (pre-fix: dropped, sidecar "
-     .. "always recorded false even when bootstrap had diff_review=true)",
-    record and record.diff_review == true,
-    record and ("diff_review=" .. tostring(record.diff_review)) or "(no record)")
-  ok("ADR 0029 #3 (lector audit must-fix): adopt sidecar's tool_root + "
-     .. "mailbox_dir resolve under the workspace mailbox root, not "
-     .. "host_fallback_root (pre-fix: adopt called host_fallback_root)",
-    record and type(record.tool_root) == "string"
-      and record.tool_root == tmp_mb_root
-      and type(record.mailbox_dir) == "string"
-      and record.mailbox_dir:sub(1, #tmp_mb_root) == tmp_mb_root,
-    record and ("tool_root=" .. tostring(record.tool_root)) or "(no record)")
-
-  -- Wake message injected into the live inbox. The inbox path is
-  -- composed by the auto-core path resolver (v0.1.33 new layout:
-  -- <root>/<instance>/<name>/inbox/) so we use the same helper here.
-  local mb_path = require("auto-core.mailbox.path")
-  local tool_root = record and record.tool_root
-                       or require("auto-core").mailbox.host_fallback_root()
-  local full = mb_path.full_id("agent:ultron-prime")
-  local inbox = mb_path.subdir(full, "inbox", tool_root)
-  local listing = vim.fn.readdir(inbox)
-  ok("ADR 0023 §3.3: wake message landed in the live inbox",
-    type(listing) == "table" and #listing >= 1,
-    vim.inspect(listing))
-
-  -- The wake message contains the canonical fields.
-  local last = listing and listing[#listing]
-  local content
-  if last then
-    local f = io.open(inbox .. "/" .. last, "r")
-    if f then
-      content = vim.fn.json_decode(f:read("*a")); f:close()
-    end
-  end
-  ok("ADR 0023 §3.3: wake message carries runtime_identity_path",
-    type(content) == "table"
-      and content.runtime_identity_path == tmp_sidecar
-      and type(content.runtime_identity) == "table"
-      and content.runtime_identity.bare_id == "agent:ultron-prime")
-  ok("ADR 0023 §3.3: wake message body explains the reconciliation",
-    type(content) == "table"
-      and type(content.body) == "string"
-      and content.body:find("AutoAgentsAdoptResumedAgent", 1, true) ~= nil
-      and content.body:find(tmp_sidecar, 1, true) ~= nil,
-    type(content) == "table" and type(content.body) == "string"
-      and content.body or "(no body)")
-
-  -- Reject path: unknown slot. In headless nvim, an ERROR-level
-  -- vim.notify is converted into a Vim error, which pcall catches.
-  -- In an interactive session it's just a notification. Both
-  -- surfaces are acceptable behavior — what matters is that the
-  -- right diagnostic reaches the user.
-  local bad_ok, bad_err = pcall(vim.cmd, "AutoAgentsAdoptResumedAgent 999")
-  ok("ADR 0023 §3.3: unknown slot surfaces 'no live terminal' diagnostic",
-    (not bad_ok and tostring(bad_err):find("no live terminal", 1, true) ~= nil)
-      or bad_ok,
-    tostring(bad_err))
-
-  -- Missing arg: same headless / interactive duality. Assert the
-  -- diagnostic message reaches the surface.
-  local na_ok, na_err = pcall(vim.cmd, "AutoAgentsAdoptResumedAgent")
-  ok("ADR 0023 §3.3: missing arg surfaces '<slot> required' diagnostic",
-    (not na_ok and tostring(na_err):find("<slot> required", 1, true) ~= nil)
-      or na_ok,
-    tostring(na_err))
-
-  -- ── Acceptance criterion §5.3 — resume round-trip via standard router.
-  -- Simulate: agent's runtime_identity is stale (old instance);
-  -- user invokes adopt; agent next sends a mailbox message
-  -- addressed via its bare id; the live router delivers it to a
-  -- peer's inbox (NOT direct-write, NOT silently dropped).
-  --
-  -- We can't spawn a real claude process headless, so the
-  -- "agent's message" is a synthetic write to the live mailbox's
-  -- outbox after adopt. Acceptance is that the router picks it up
-  -- and renames into the peer's inbox.
-  do
-    local core = require("auto-core")
-    -- Plant a peer mailbox to deliver to under the same tool root
-    -- used by the adopted Claude-backed agent.
-    pcall(function() core.mailbox.register("agent:test-peer", { root = tool_root }) end)
-
-    -- Wait for router to recognize the freshly-registered mailbox
-    -- (collect_dirs runs at start; for a mid-test register the
-    -- registry update is what makes classify accept the path).
-    vim.wait(50)
-
-    -- The adopt above registered agent:ultron-prime; now write a
-    -- message in its outbox addressed to test-peer. Path composed via
-    -- the auto-core path resolver so the new v0.1.33 layout
-    -- (<root>/<instance>/<name>/) is honored without hardcoding it.
-    local from_full = mb_path.full_id("agent:ultron-prime")
-    local from_outbox = mb_path.subdir(from_full, "outbox", tool_root)
-    vim.fn.mkdir(from_outbox, "p")
-    local mid = "adopt-rt-trip-" .. tostring(os.time())
-    local payload = {
-      id = mid, kind = "message",
-      from = from_full,
-      to   = "agent:test-peer",
-      subject = "round-trip after adopt",
-      body = "If you read this, the live router delivered me.",
-    }
-    local tmp = from_outbox .. "/" .. mid .. ".tmp"
-    local final = from_outbox .. "/" .. mid .. ".json"
-    local f = io.open(tmp, "w")
-    f:write(vim.fn.json_encode(payload)); f:close()
-    os.rename(tmp, final)
-
-    core.mailbox.scan_now()
-    vim.wait(200, function()
-      local peer_full = mb_path.full_id("agent:test-peer")
-      local peer_inbox = mb_path.subdir(peer_full, "inbox", tool_root)
-      local entries = vim.fn.readdir(peer_inbox) or {}
-      for _, e in ipairs(entries) do
-        if e:find(mid, 1, true) then return true end
-      end
-      return false
-    end, 20)
-
-    local peer_full = mb_path.full_id("agent:test-peer")
-    local peer_inbox = mb_path.subdir(peer_full, "inbox", tool_root)
-    local entries = vim.fn.readdir(peer_inbox) or {}
-    local delivered = false
-    for _, e in ipairs(entries) do
-      if e:find(mid, 1, true) then delivered = true; break end
-    end
-    ok("ADR 0023 §5.3: post-adopt outbox message reaches peer via standard router",
-      delivered, "looked under " .. peer_inbox)
-  end
-
-  -- Teardown.
-  vim.env.AUTO_AGENTS_RUNTIME_IDENTITY_PATH = nil
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = nil
-  pcall(vim.fn.delete, tmp_sidecar)
-  pcall(vim.fn.delete, tmp_mb_root, "rf")
-  aa.state.config.agents.bootstrap = {}
-  aa.state.slot_terminals[5] = nil
-end
 
 -- ─────────── 18. KB v2 — no KB questions; retired TOML keys (ADR 1791209946 §7) ──────────
 -- v0.2.22's KB-type conflict ACK, the KB type/seed questions and the
@@ -1613,7 +1272,7 @@ do
   ok("admin completion: `run ` offers the live registry verbs",
     vim.tbl_contains(run_cands, "peek")
       and vim.tbl_contains(run_cands, "say")
-      and vim.tbl_contains(run_cands, "wake"))
+      and not vim.tbl_contains(run_cands, "wake"))
   local _, peek_slot_cands = admin._complete_at("run peek ", 9)
   ok("admin completion: `run peek ` offers live slot numbers",
     vim.tbl_contains(peek_slot_cands, "2"))
@@ -1622,125 +1281,6 @@ do
   vim.api.nvim_buf_delete(fake_bufnr, { force = true })
   aa.state.config.agents.bootstrap = {}
   aa.state.slot_terminals[2] = nil
-end
-
--- ────────── 21. Phase 6: workspace mailbox-dir prune at setup ──────────
-print("\n[21] Phase 6: workspace mailbox-dir prune")
-do
-  local core = require("auto-core")
-  local mb_path = require("auto-core.mailbox.path")
-
-  -- Isolate the workspace mailbox root so prune doesn't touch the
-  -- user's real workspace tree.
-  local tmp_mb_root = vim.fn.tempname() .. "_phase6-prune-root"
-  vim.fn.mkdir(tmp_mb_root, "p")
-  local saved_env = vim.env.AUTO_AGENTS_MAILBOX_ROOT
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = tmp_mb_root
-
-  -- Plant three subtrees: one stale (older than threshold), one
-  -- fresh (younger), one corresponding to a live registration.
-  local stale_dir = mb_path.mailbox_dir("agent:zombie:1111111111-1111", tmp_mb_root)
-  local fresh_dir = mb_path.mailbox_dir("agent:newborn:2222222222-2222", tmp_mb_root)
-  vim.fn.mkdir(stale_dir .. "/inbox", "p")
-  vim.fn.mkdir(fresh_dir .. "/inbox", "p")
-  os.execute("touch -d '8 days ago' " .. vim.fn.shellescape(stale_dir))
-
-  -- Register a live mailbox so its dir is in the registry; prune
-  -- should keep it regardless of mtime.
-  pcall(core.mailbox.register, "agent:phase6-live", { root = tmp_mb_root })
-  local live_rec = core.mailbox.registry.get("agent:phase6-live")
-  ok("Phase 6: live mailbox registered for prune test",
-    live_rec ~= nil and type(live_rec.dir) == "string")
-
-  -- Drive auto-agents setup with prune ENABLED (default) and a
-  -- 1-HOUR max_age. Any threshold between a few seconds and 8 days
-  -- separates these two fixtures; 1 second did not, because the window
-  -- was narrower than the register+setup work running inside it. mtime
-  -- is second-granular and prune tests `(now - mtime) >= max_age`, so a
-  -- single second-boundary crossing was enough to age the "fresh" dir
-  -- out and delete it — flaky everywhere, reliably red under CI load.
-  -- 1 hour puts both fixtures unambiguously on their own side of it.
-  -- Disable diff_review_enabled side effects by clearing bootstrap.
-  aa.state.config.agents.bootstrap = {}
-  pcall(aa.setup, {
-    panel    = { side = "right", min_width = 50, max_width = 120, editor_floor = 30, percentage = 0.30 },
-    agents   = { bootstrap = {} },
-    kb       = {},
-    term     = { enabled = false },
-    mailbox  = { prune = { enabled = true, max_age_seconds = 3600 } },
-  })
-
-  ok("Phase 6: prune removed the stale instance dir",
-    vim.fn.isdirectory(stale_dir) == 0,
-    "stale_dir still present: " .. stale_dir)
-  ok("Phase 6: prune kept the fresh instance dir",
-    vim.fn.isdirectory(fresh_dir) == 1,
-    "fresh_dir missing: " .. fresh_dir)
-  ok("Phase 6: prune kept the live-registered dir",
-    vim.fn.isdirectory(live_rec.dir) == 1,
-    "live_rec.dir missing: " .. live_rec.dir)
-
-  -- Opt-out path: cfg.mailbox.prune.enabled = false skips the call.
-  local opt_out_stale = mb_path.mailbox_dir("agent:opt-out:3333333333-3333", tmp_mb_root)
-  vim.fn.mkdir(opt_out_stale .. "/inbox", "p")
-  os.execute("touch -d '8 days ago' " .. vim.fn.shellescape(opt_out_stale))
-  pcall(aa.setup, {
-    panel    = { side = "right", min_width = 50, max_width = 120, editor_floor = 30, percentage = 0.30 },
-    agents   = { bootstrap = {} },
-    kb       = {},
-    term     = { enabled = false },
-    mailbox  = { prune = { enabled = false } },
-  })
-  ok("Phase 6: cfg.mailbox.prune.enabled=false opts out (stale dir retained)",
-    vim.fn.isdirectory(opt_out_stale) == 1,
-    "opt_out_stale missing: " .. opt_out_stale)
-
-  -- ── the >= boundary, deterministically ──────────────────────────
-  -- Widening max_age above from 1 s to 1 h fixed a flake and lost
-  -- something with it: at 1 s the cell was incidentally probing
-  -- `(now - mtime) >= max_age`, badly, which is exactly why it flaked.
-  -- At an hour nothing exercises that edge, so it gets its own cell that
-  -- does not race (gold-man, r0 O2).
-  --
-  -- mtimes are SET, not waited for, via fs_utime, so no wall-clock time
-  -- passes inside the window. The 2-second inset on the "inside" fixture
-  -- is margin against the clock ticking between the os.time() here and
-  -- the one prune takes: a 1-second drift must not be able to flip
-  -- either fixture across the line.
-  do
-    local bnd_root = vim.fn.tempname() .. "_phase6-boundary-root"
-    local max_age  = 3600
-    local now      = os.time()
-    local function plant(id, age)
-      local d = mb_path.mailbox_dir(id, bnd_root)
-      vim.fn.mkdir(d .. "/inbox", "p")
-      vim.uv.fs_utime(d, now - age, now - age)
-      return d
-    end
-    -- EXACTLY at the threshold: `>=` deletes this, `>` would keep it.
-    local at_boundary = plant("agent:at-boundary:4444444444-4444", max_age)
-    -- Two seconds inside it: kept under either operator, which is what
-    -- makes the pair specific to the boundary rather than to pruning.
-    local inside      = plant("agent:inside:5555555555-5555", max_age - 2)
-
-    -- force=true: an explicit root with no live registration is refused
-    -- by design (the safety rail that stops a stray root being wiped).
-    local res = core.mailbox.prune({
-      root = bnd_root, max_age_seconds = max_age, force = true,
-    })
-    ok("Phase 6: prune is >= — a dir exactly max_age old is removed",
-      vim.fn.isdirectory(at_boundary) == 0,
-      "still present: " .. at_boundary .. " / " .. vim.inspect(res))
-    ok("Phase 6: a dir just inside max_age is kept",
-      vim.fn.isdirectory(inside) == 1,
-      "missing: " .. inside .. " / " .. vim.inspect(res))
-    pcall(vim.fn.delete, bnd_root, "rf")
-  end
-
-  -- Teardown.
-  vim.env.AUTO_AGENTS_MAILBOX_ROOT = saved_env
-  pcall(vim.fn.delete, tmp_mb_root, "rf")
-  pcall(core.mailbox.unregister, "agent:phase6-live")
 end
 
 -- ────────── 22. v0.2.32: antigravity adapter + permissions ──────────
@@ -1795,46 +1335,28 @@ do
   ok("parse_run_args: say slot + text-concat",
     p.slot == 2 and p.text == "hello world", vim.inspect(p))
 
-  -- 23b. v0.2.33 wake shortcut: numeric slot resolves to agent name.
-  aa.state.config.agents.bootstrap = {
-    { slot = 1, name = "jarvis", kind = "claude" },
-    { slot = 2, name = "rosie",  kind = "codex"  },
-  }
+  -- 23b. the file mailbox's verbs are gone (v0.4.0): `wake` and `send_user` have no
+  -- shortcut, and parse as any other verb would (k=v).
   p = parse("wake", { "run", "wake", "2" })
-  ok("parse_run_args: wake `<number>` resolves to bootstrap agent name",
-    type(p.slot) == "string" and p.slot == "rosie", vim.inspect(p))
-  p = parse("wake", { "run", "wake", "jarvis", "check", "in" })
-  ok("parse_run_args: wake `<name>` passes through, trailing text concat",
-    p.slot == "jarvis" and p.text == "check in", vim.inspect(p))
-  p = parse("wake", { "run", "wake", "9" })
-  ok("parse_run_args: wake `<unknown-number>` falls through to literal string",
-    p.slot == "9", vim.inspect(p))
+  ok("parse_run_args: no wake shortcut (a bare token is no k=v)", next(p) == nil, vim.inspect(p))
 
-  -- 23c. v0.2.33 send_user shortcut: all positional tokens → body.
-  p = parse("send_user", { "run", "send_user", "build", "done" })
-  ok("parse_run_args: send_user concatenates positional into body",
-    p.body == "build done", vim.inspect(p))
-  p = parse("send_user", { "run", "send_user" })
-  ok("parse_run_args: send_user with no args returns empty table",
-    next(p) == nil, vim.inspect(p))
-
-  -- 23d. generic k=v fallback for non-shortcut verbs (e.g. addressbook).
-  p = parse("addressbook", { "run", "addressbook", "include_self=false" })
+  -- 23d. generic k=v fallback for non-shortcut verbs (e.g. todos.list).
+  p = parse("todos.list", { "run", "todos.list", "include_self=false" })
   ok("parse_run_args: generic k=v with `false` coerced to boolean",
     p.include_self == false, vim.inspect(p))
-  p = parse("addressbook", { "run", "addressbook", "limit=10" })
+  p = parse("todos.list", { "run", "todos.list", "limit=10" })
   ok("parse_run_args: generic k=v with numeric coerced to number",
     p.limit == 10, vim.inspect(p))
 end
 
--- ──────────────── 24. todos.* mailbox surface ────────────────────
+-- ──────────────── 24. todos.* command verbs ────────────────────
 -- ADR-0035's automation (todo_automation.lua, todos.fire,
 -- todos.automation_set, :AutoAgentsTodosAutomationEnable) was removed by
 -- ADR 1791532020 §3 step 3; todos.import, migrate_kb and the
 -- assignee-routing subscriber by step 4 (D3; the notifier is auto-core's).
 -- What stays: the twelve todos.* verbs, which call AutoDoc's daemon
 -- (tests/todos_daemon_spec.lua runs them against a real one).
-print("\n[24] todos.* mailbox surface (automation and import removed, ADR 1791532020)")
+print("\n[24] todos.* command verbs (automation and import removed, ADR 1791532020)")
 do
   local todos_mod = require("auto-agents.commands.todos")
 
@@ -1914,9 +1436,9 @@ do
     "review=" .. tostring(add_spec.schema.review))
 
   -- Drift-policy guard: every auto-core string_list field
-  -- (tags/adr/review/blocked) must be "any?" in this mailbox mirror.
+  -- (tags/adr/review/blocked) must be "any?" in this verb's schema.
   for _, f in ipairs({ "tags", "adr", "review", "blocked" }) do
-    ok("24k: list-type field '" .. f .. "' is 'any?' in the mailbox schema",
+    ok("24k: list-type field '" .. f .. "' is 'any?' in the verb's schema",
       add_spec.schema[f] == "any?",
       f .. "=" .. tostring(add_spec.schema[f]))
   end
@@ -1935,7 +1457,7 @@ do
   local ok_str = commands.validate_args(
     { title = "repro: review as string", review = "/abs/foo.md" },
     add_spec.schema)
-  ok("24k: validator no longer hard-types review at the mailbox gate",
+  ok("24k: validator no longer hard-types review at the verb's gate",
     ok_str == true)
 end
 
@@ -2058,12 +1580,12 @@ do
     #phantom == 0, "phantom: " .. table.concat(phantom, ", "))
 
   -- (c) every COUNT the header states equals the table size. The header
-  --     claims it twice ("register the N mailbox verbs" and "Verb roster (N
+  --     claims it twice ("register the N command verbs" and "Verb roster (N
   --     total)"), and both were wrong, so both are checked — and the cell
   --     fails if it finds NO count to check, because a header that stopped
   --     stating one would otherwise pass this silently.
   local counts = {}
-  for n in head:gmatch("register the (%d+) mailbox") do counts[#counts + 1] = tonumber(n) end
+  for n in head:gmatch("register the (%d+) command") do counts[#counts + 1] = tonumber(n) end
   for n in head:gmatch("Verb roster %((%d+) total%)") do counts[#counts + 1] = tonumber(n) end
   ok("24l: the header states at least two verb counts",
     #counts >= 2, "found " .. #counts)
@@ -2170,22 +1692,6 @@ do
     and ct_res.content and ct_res.content[1]
     and ct_res.content[1].text == "TAB_CLOSED",
     ct_ok and vim.inspect(ct_res) or tostring(ct_res))
-
-  -- 25d. Batch C: runtime_identity.write delegates to the atomic
-  -- primitive — content lands complete, no temp strays remain.
-  local rid = require("auto-agents.runtime_identity")
-  local id_dir = vim.fn.tempname() .. "_aa-identity"
-  local id_path = id_dir .. "/nested/agent.json"
-  local w_ok, w_err = rid.write(id_path, { mailbox_id = "agent:smoke:1", slot = 1 })
-  ok("25d: identity write succeeds (mkdir included)", w_ok == true, tostring(w_err))
-  local fh = io.open(id_path, "r")
-  local raw = fh and fh:read("*a") or ""
-  if fh then fh:close() end
-  local dec_ok, dec = pcall(vim.fn.json_decode, raw)
-  ok("25d: identity roundtrip intact",
-    dec_ok and type(dec) == "table" and dec.mailbox_id == "agent:smoke:1", raw)
-  local strays = vim.fn.glob(id_dir .. "/**/.tmp-*", false, true)
-  ok("25d: no atomic-write temp strays", #strays == 0, vim.inspect(strays))
 
   -- The managed block is the one KB-adjacent file auto-agents still
   -- writes (the KB scaffold and manifest writers went with ADR 1791209946
@@ -2461,7 +1967,6 @@ do
   local last_select_opts = nil
   local last_input_opts = nil
   local captured_send_slot = nil
-  local captured_mailbox_send = nil
   local opened_panel = false
   local focused_slot = nil
 
@@ -2472,20 +1977,10 @@ do
     return true
   end
 
-  local ok_core, ac = pcall(require, "auto-core")
-  local orig_mb_send = ok_core and ac and ac.mailbox and ac.mailbox.send
-  if ok_core and ac and ac.mailbox then
-    ac.mailbox.send = function(opts)
-      captured_mailbox_send = opts
-      return { ok = true }
-    end
-  end
-
   local function reset_captures()
     last_select_opts = nil
     last_input_opts = nil
     captured_send_slot = nil
-    captured_mailbox_send = nil
     opened_panel = false
     focused_slot = nil
   end
@@ -2519,16 +2014,12 @@ do
   ok("28a: select prompt title contains 'Forward to an agent [' and snippet",
     last_select_opts ~= nil and last_select_opts.prompt:find("Forward to an agent [function add(a, b)", 1, true) ~= nil,
     last_select_opts and last_select_opts.prompt or "nil")
-  -- Delivery is DIRECT INJECTION now, matching <leader>ab. The mailbox put the
--- text in the agent's inbox and left it to notice, read and archive it; the
--- gesture means "deal with this now", so it goes to the terminal instead.
+  -- Delivery is DIRECT INJECTION, matching <leader>ab: the gesture means
+  -- "deal with this now", so it goes to the terminal.
   ok("28a: injected into slot 1 via send_slot, submitted",
     captured_send_slot ~= nil and captured_send_slot.slot == 1
       and captured_send_slot.opts and captured_send_slot.opts.submit == true,
     captured_send_slot and vim.inspect(captured_send_slot.opts) or "nil")
-  ok("28a: it does NOT go through the mailbox any more",
-    captured_mailbox_send == nil,
-    captured_mailbox_send and vim.inspect(captured_mailbox_send) or "nil")
   ok("28a: injected body carries the snippet",
     captured_send_slot ~= nil and captured_send_slot.body:find("function add(a, b)", 1, true) ~= nil)
   ok("28a: body contains source file path and line numbers",
@@ -2630,14 +2121,14 @@ do
   vim.fn.setreg('"', "")
   drive({ mode = "n" }, "directive")
   ok("28d: empty clipboard does not prompt or send",
-    last_select_opts == nil and captured_mailbox_send == nil and captured_send_slot == nil)
+    last_select_opts == nil and captured_send_slot == nil)
 
   -- E) No live slots → no send
   vim.fn.setreg("+", "some code")
   aa.state.slot_terminals[1] = nil
   drive({ mode = "n" }, "directive")
   ok("28e: no live slots bails before prompt or send",
-    captured_mailbox_send == nil and captured_send_slot == nil)
+    captured_send_slot == nil)
   aa.state.slot_terminals[1] = live_t1
 
   -- A2) Real visual mode selection without opts.text (ADR-0082)
@@ -2683,9 +2174,6 @@ do
     captured_send_slot ~= nil and captured_send_slot.body:find("from unnamed register", 1, true) ~= nil)
 
   -- restore
-  if ok_core and ac and ac.mailbox then
-    ac.mailbox.send = orig_mb_send
-  end
   aa.open = saved_open
   aa.focus_slot = saved_foc
   vim.ui.select = saved_sel
@@ -2807,30 +2295,6 @@ do
   local copilot_mis_claude, mis_claude_kind = agent.is_mismatched_cmd("copilot", { "claude" })
   ok("29c: is_mismatched_cmd detects copilot with claude",
     copilot_mis_claude == true and mis_claude_kind == "claude")
-
-  -- Provenance check: distinguish generated auto-agents instance mailbox paths from user paths
-  ok("29c: is_leaked_runtime_grant_path detects auto-agents generated instance mailbox path",
-    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456/wanda") == true)
-  ok("29c: is_leaked_runtime_grant_path detects auto-agents config generated mailbox path",
-    agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/mailbox/123-456/juliet") == true)
-  ok("29c: is_leaked_runtime_grant_path preserves user mailbox-shaped path",
-    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/custom-box") == false)
-  ok("29c: is_leaked_runtime_grant_path preserves user directory with instance prefix mailbox/123-456-notes",
-    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456-notes") == false)
-  ok("29c: is_leaked_runtime_grant_path preserves files inside mailbox/123-456-notes",
-    agent.is_leaked_runtime_grant_path("/home/johno/proj/.auto-agents/mailbox/123-456-notes/notes.txt") == false)
-  ok("29c: is_leaked_runtime_grant_path preserves active KB root path",
-    agent.is_leaked_runtime_grant_path("/home/johno/.config/nvim/.auto-agents-config/kb") == false)
-  ok("29c: is_leaked_runtime_grant_path preserves user directory /opt/shared-tools",
-    agent.is_leaked_runtime_grant_path("/opt/shared-tools") == false)
-  ok("29c: is_leaked_runtime_grant_path preserves user directory /home/johno/custom-libs",
-    agent.is_leaked_runtime_grant_path("/home/johno/custom-libs") == false)
-
-  -- strip_permission_flags helper preserves user paths, strips only generated instance mailboxes
-  local leaked_instance_mb = "/home/johno/proj/.auto-agents/mailbox/1788481884-642128/james-cook"
-  local stripped = agent.strip_permission_flags({ "claude", "--add-dir", leaked_instance_mb })
-  ok("29c: strip_permission_flags strips leaked generated instance mailbox",
-    vim.deep_equal(stripped, { "claude" }), vim.inspect(stripped))
 
   -- Must-Fix 1 positive controls: sanitize_cmd preserves user-authored active-KB, mailbox-shaped, and custom paths
   local active_kb_path = "/home/johno/.config/nvim/.auto-agents-config/kb"
@@ -3040,31 +2504,8 @@ cmd = ["agy", "--add-dir", "/opt/shared-tools"]
   -- 29f. Explicit previewable migration (:AutoAgentsMigrateCmd / migrate_cmd.lua)
   local migrate_cmd = require("auto-agents.config.migrate_cmd")
 
-  ok("29f: migrate_cmd.is_generated_instance_mailbox_path identifies generated instance mailbox",
-    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/1788481884-642128/wanda") == true)
-  ok("29f: migrate_cmd.is_generated_instance_mailbox_path identifies config generated mailbox",
-    migrate_cmd.is_generated_instance_mailbox_path("/root/.auto-agents-config/mailbox/999-888/juliet") == true)
-  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves user mailbox directory",
-    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/custom-box") == false)
-  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves active KB directory",
-    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents-config/kb") == false)
-  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves mailbox/123-456-notes with instance prefix",
-    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/123-456-notes") == false)
-  ok("29f: migrate_cmd.is_generated_instance_mailbox_path preserves file inside mailbox/123-456-notes",
-    migrate_cmd.is_generated_instance_mailbox_path("/proj/.auto-agents/mailbox/123-456-notes/notes.txt") == false)
-
-  local notes_res, notes_ch = migrate_cmd.strip_generated_runtime_flags({
-    "agy", "--add-dir", "/proj/.auto-agents/mailbox/123-456-notes"
-  })
-  ok("29f: strip_generated_runtime_flags PRESERVES mailbox/123-456-notes",
-    notes_ch == false and vim.deep_equal(notes_res, { "agy", "--add-dir", "/proj/.auto-agents/mailbox/123-456-notes" }))
-
-  local generated_mb = "/proj/.auto-agents/mailbox/1788481884-642128/wanda"
-  local stripped_res, stripped_ch = migrate_cmd.strip_generated_runtime_flags({
-    "agy", "--verbose", "--add-dir", generated_mb, "--add-dir", "/opt/shared-tools"
-  })
-  ok("29f: strip_generated_runtime_flags strips generated instance while keeping user path",
-    stripped_ch == true and vim.deep_equal(stripped_res, { "agy", "--verbose", "--add-dir", "/opt/shared-tools" }))
+  -- v0.4.0: nothing is stripped for the file mailbox any more (its paths are left as written, and the
+  -- folders they name stay on disk); the migration clears cross-kind and default commands alone.
 
   -- Dry-run vs apply migration on a temp TOML file
   local mig_tmp = vim.fn.tempname() .. "_mig29.toml"
@@ -3103,31 +2544,29 @@ cmd = ["agy", "--add-dir", "/home/johno/proj/.auto-agents/mailbox/custom-box"]
 
   -- Dry run
   local dry_summary = migrate_cmd.migrate({ apply = false, config_path = mig_tmp })
-  ok("29f: migrate dry-run identifies 2 legacy changes", #dry_summary.changes == 2)
-  ok("29f: migrate dry-run does NOT flag authored active-KB or mailbox-shaped paths",
-    #dry_summary.changes == 2
-      and dry_summary.changes[1].slot == 1
-      and dry_summary.changes[2].slot == 2)
+  ok("29f: migrate dry-run identifies the 1 cross-kind change", #dry_summary.changes == 1)
+  ok("29f: migrate dry-run flags no --add-dir path, an old mailbox one included",
+    #dry_summary.changes == 1 and dry_summary.changes[1].slot == 1)
 
   local dry_read = io.open(mig_tmp, "r")
   local dry_content = dry_read and dry_read:read("*a") or ""
   if dry_read then dry_read:close() end
   ok("29f: migrate dry-run does NOT modify file on disk",
-    dry_content:find("123-456", 1, true) ~= nil)
+    dry_content:find('"junie"', 1, true) ~= nil)
 
   local lines_formatted = migrate_cmd.format_summary(dry_summary, function(_) end)
   ok("29f: format_summary generates report lines", #lines_formatted > 0)
 
   -- Apply
   local apply_summary = migrate_cmd.migrate({ apply = true, config_path = mig_tmp })
-  ok("29f: migrate apply succeeds", #apply_summary.changes == 2 and #apply_summary.errors == 0)
+  ok("29f: migrate apply succeeds", #apply_summary.changes == 1 and #apply_summary.errors == 0)
 
   local applied_read = io.open(mig_tmp, "r")
   local applied_content = applied_read and applied_read:read("*a") or ""
   if applied_read then applied_read:close() end
 
-  ok("29f: migrate apply stripped leaked instance mailbox from disk",
-    applied_content:find("123-456", 1, true) == nil)
+  ok("29f: migrate apply leaves an old mailbox --add-dir as written",
+    applied_content:find('"--add-dir", "/proj/.auto-agents/mailbox/123-456/jarvis"', 1, true) ~= nil)
   ok("29f: migrate apply cleared mismatched junie cmd on wanda-legacy",
     applied_content:find('"junie"', 1, true) == nil)
   ok("29f: migrate apply PRESERVED user-authored active-KB --add-dir",

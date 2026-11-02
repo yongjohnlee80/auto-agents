@@ -1,7 +1,7 @@
----auto-agents.todos.store — the `todos.*` mailbox verbs' door to AutoDoc's daemon.
+---auto-agents.todos.store — the `todos.*` verbs' door to AutoDoc's daemon.
 ---
 ---AutoDoc owns the todo store: its format, its rules and every write (ADR
----1791532020). The mailbox verbs call the daemon's `todos.*` verbs themselves,
+---1791532020). The verbs (auto-agents.commands.todos) call the daemon's `todos.*` verbs themselves,
 ---through autodoc.nvim's client (`autodoc.todos`), rather than through
 ---auto-core.todo, which auto-core v0.4.1 removes (§3 steps 4 and 5).
 ---
@@ -10,14 +10,14 @@
 ---`{root}`) and claims the store once per root, with the rollback guard. That
 ---is the one copy of the rule (ADR r12); this module does not repeat it.
 ---
----A mailbox handler answers synchronously (auto-core's command registry), so
+---A verb's handler answers synchronously (auto-core's command registry), so
 ---each call here waits for the daemon, bounded, as autodoc's own registry
 ---verbs do (autodoc/verbs.lua). There is no Lua fallback (ADR §4).
 ---@module 'auto-agents.todos.store'
 
 local M = {}
 
--- NOTE: deadline. The daemon is another process; a mailbox handler waits for
+-- NOTE: deadline. The daemon is another process; a verb's handler waits for
 -- its answer, bounded, so a daemon that does not answer is an error and never
 -- a hang. It covers a whole call: connecting (which may start the daemon), the
 -- store's first resolution and claim, and the verb itself.
@@ -29,8 +29,8 @@ M.REQUIRED = "AutoDoc required: the todos.* verbs call AutoDoc's daemon (ADR 179
 M.NEEDS_AUTOCORE = "the todos.* verbs need auto-core v0.4.0 or later (its store resolution, "
   .. "auto-core.todo.where): update auto-core"
 
--- The daemon's codes (autodoc core/todo/module.go) and the mailbox code each
--- becomes in a verb's error envelope.
+-- The daemon's codes (autodoc core/todo/module.go) and the code each becomes
+-- in a verb's error envelope ({ ok = false, code }).
 M.STALE, M.NOT_FOUND, M.INVALID, M.NOT_A_STORE, M.UNCLAIMED = -32071, -32072, -32073, -32074, -32077
 local ENVELOPE_CODES = {
   [-32071] = "stale",
@@ -62,7 +62,7 @@ end
 ---@class AutoAgentsTodosError
 ---@field code integer|nil  the daemon's code, when the daemon answered
 ---@field message string    "<code name>: <message>"
----@field envelope string   the mailbox envelope's code
+---@field envelope string   the code of the verb's error envelope
 
 ---fail builds an error from a daemon error ({code, message}) or a string.
 ---@param err any

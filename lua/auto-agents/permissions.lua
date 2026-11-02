@@ -7,9 +7,9 @@
 ---nvim instances, can leak state on crash, and pollutes user
 ---config — we just append the right CLI flag(s) at spawn time.
 ---
----Per-instance paths (mailbox dir, KB dirs) regenerate every nvim
----restart, so persistence isn't desirable: the next spawn rebuilds
----the argv from scratch.
+---The paths (the KB dirs) are read again on every spawn, so
+---persistence isn't desirable: the next spawn rebuilds the argv
+---from scratch.
 ---
 ---Supported kinds (v0.2.32):
 ---
@@ -28,7 +28,7 @@
 ---        the effective permissions do not allow additional writable
 ---        roots. Switch to workspace-write or danger-full-access …
 ---
----    and the agent runs with no mailbox write access at all. So the
+---    and the agent runs with no write access to the KB at all. So the
 ---    grant ships with the policy that enables it, unless the user's
 ---    `cmd` override already picks a sandbox (`-s` / `--sandbox` /
 ---    `--dangerously-bypass-approvals-and-sandbox` / `-c
