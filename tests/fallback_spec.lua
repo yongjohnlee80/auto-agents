@@ -167,6 +167,32 @@ do
   fb.MAX_KEYS = max
 end
 
+-- ── [9] two Neovims, then a restart: no Neovim erases another's keys ─────────
+
+do
+  local crew = require("auto-agents.crew")
+  local real = crew.incarnation
+  local function as_host(id) crew.incarnation = function() return id end; restart() end
+  as_host("1001-aaaaaaaaaaaa")
+  fb.type_once("gold-man", "job-host-a", "a")
+  as_host("1002-bbbbbbbbbbbb")
+  fb.type_once("gold-man", "job-host-b", "b")
+  ok("[9] each Neovim keeps its keys in a file of its own",
+    vim.tbl_contains(vim.fn.readfile(fb.state_file()), "job-host-b")
+      and not vim.tbl_contains(vim.fn.readfile(fb.state_file()), "job-host-a"))
+  local a_file = vim.fs.joinpath(fb.state_dir(), "1001-aaaaaaaaaaaa")
+  ok("[9] the other Neovim's key is still kept", vim.tbl_contains(vim.fn.readfile(a_file), "job-host-a"))
+  local n = #sends
+  fb.type_once("gold-man", "job-host-a", "a")
+  ok("[9] a key another Neovim typed isn't typed again here", #sends == n)
+  as_host("1003-cccccccccccc") -- host A crashed; its successor is offered A's job again
+  fb.type_once("gold-man", "job-host-a", "a")
+  fb.type_once("gold-man", "job-host-b", "b")
+  ok("[9] after a restart, neither Neovim's key is typed again", #sends == n)
+  crew.incarnation = real
+  restart()
+end
+
 vim.fn.delete(sb, "rf")
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
 if fail > 0 then os.exit(1) end
