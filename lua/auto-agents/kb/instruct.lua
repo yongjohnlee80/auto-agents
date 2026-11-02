@@ -110,42 +110,54 @@ local INTERACTIVE_KINDS = {
 ---Interactive kinds that nonetheless have no model to configure here.
 local NO_MODEL_OPTION = { codex = true }
 
----Render the auto-agents block content for a kind. The block is
----agent-neutral: it lists every configured peer of the same kind in a
----roster table and tells each reader to resolve its own identity with
----`autodoc crew whoami`. This keeps the rendered content stable
----across same-kind spawns (otherwise every spawn would clobber the
----previous one's personalized text).
----@param spec table  -- { kind, name, slot, model }
----@param kb { root: string, workspace: string|nil }|nil  -- the primary KB
----@param crew { guide: string|nil, editor: boolean }|nil  -- the daemon's crew guide for the kind,
----  and whether Neovim's editor socket serves
----@return string
-local function render_block(spec, kb, crew)
+---The agents that share spec's instruction file: every configured agent, of any kind, whose CLI
+---reads the same file (codex, opencode, agy and the rest all read AGENTS.md), by slot; and their
+---kinds, sorted, spec's own always among them. A file shared by several kinds is rendered for all
+---of them, the same whichever of them spawned last.
+---@param spec table
+---@return table[] peers, string[] kinds, string filename
+local function sharing(spec)
   local aa_state  = (require("auto-agents").state or {}).config or {}
   local bootstrap = (aa_state.agents or {}).bootstrap or {}
   local kind      = spec.kind or "?"
   local filename  = M.filename_for(kind)
-
-  -- Collect every agent of this kind that shares this instruction file.
-  -- claude/junie each own a distinct
-  -- per-cwd filename (see filename_for); codex/copilot/generic share
-  -- AGENTS.md. The roster makes the multi-tenant nature of the file
-  -- explicit so each agent knows which row applies to it.
   local peers = {}
   for _, e in ipairs(bootstrap) do
-    if (e.kind or "?") == kind and e.name and e.name ~= ""
+    if M.filename_for(e.kind or "?") == filename and e.name and e.name ~= ""
        and e.configured ~= false then
       peers[#peers + 1] = e
     end
   end
   -- Defensive fallback: if the spawning agent isn't yet in bootstrap
   -- for any reason, render its row alone rather than emit an empty
-  -- roster. Same-kind peers will be picked up on the next spawn.
+  -- roster. Same-file peers will be picked up on the next spawn.
   if #peers == 0 and spec.name and spec.name ~= "" then
     peers[#peers + 1] = spec
   end
   table.sort(peers, function(a, b) return (a.slot or 0) < (b.slot or 0) end)
+  local seen, kinds = { [kind] = true }, { kind }
+  for _, p in ipairs(peers) do
+    local k = p.kind or "?"
+    if not seen[k] then seen[k], kinds[#kinds + 1] = true, k end
+  end
+  table.sort(kinds)
+  return peers, kinds, filename
+end
+M._sharing = sharing
+
+---Render the auto-agents block content for a spec's instruction file. The block is agent-neutral:
+---it lists every configured agent that shares the file (sharing) in a roster table and tells each
+---reader to resolve its own identity with `autodoc crew whoami`. This keeps the rendered content
+---stable across spawns (otherwise every spawn would clobber the previous one's personalized text).
+---@param spec table  -- { kind, name, slot, model }
+---@param kb { root: string, workspace: string|nil }|nil  -- the primary KB
+---@param crew { guides: table<string, string>|nil, editor: boolean }|nil  -- the daemon's crew
+---  guide for each kind sharing the file, and whether Neovim's editor socket serves
+---@return string
+local function render_block(spec, kb, crew)
+  local peers, kinds, filename = sharing(spec)
+  local kind  = spec.kind or "?"
+  local mixed = #kinds > 1
 
   local lines = {
     BEGIN,
@@ -154,78 +166,85 @@ local function render_block(spec, kb, crew)
     "This project uses [auto-agents.nvim](https://github.com/yongjohnlee80/auto-agents)",
     "for multi-agent orchestration.",
     "",
-    "**This `" .. filename .. "` is shared by every `" .. kind .. "`-backed agent",
-    "in this project.** All agents of this kind auto-load the same file on",
-    "spawn, so the block below is rendered agent-neutrally. Resolve your",
-    "own identity at runtime with `autodoc crew whoami` (its `codename`;",
-    "the `crew_whoami` tool on MCP mail) and look your row up in the roster.",
-    "",
   }
+  if mixed then
+    local names = {}
+    for _, k in ipairs(kinds) do names[#names + 1] = "`" .. k .. "`" end
+    vim.list_extend(lines, {
+      "**This `" .. filename .. "` is shared by every agent in this project whose",
+      "CLI reads it: " .. table.concat(names, ", ") .. ".** All of them auto-load the",
+      "same file on spawn, so the block below is rendered agent-neutrally.",
+      "Resolve your own identity at runtime with `autodoc crew whoami` (its",
+      "`codename`; the `crew_whoami` tool on MCP mail) and look your row up in",
+      "the roster: its Kind says which of the parts below for one kind are",
+      "yours.",
+      "",
+    })
+  else
+    vim.list_extend(lines, {
+      "**This `" .. filename .. "` is shared by every `" .. kind .. "`-backed agent",
+      "in this project.** All agents of this kind auto-load the same file on",
+      "spawn, so the block below is rendered agent-neutrally. Resolve your",
+      "own identity at runtime with `autodoc crew whoami` (its `codename`;",
+      "the `crew_whoami` tool on MCP mail) and look your row up in the roster.",
+      "",
+    })
+  end
 
-  -- Compute interactive-diff state across the same-kind roster:
+  -- Interactive-diff state across the roster:
   --   * any_diff_review → at least one peer has `diff_review = true`
   --       (adds the diff_review column to the roster table for clarity)
-  --   * inject_diff_protocol → kind is non-claude AND any peer is opted-in
+  --   * inject_diff_protocol → a non-claude peer is opted in
   --       (claude uses native ws-mcp openDiff; only non-claude kinds need
   --       the `diff_queue` protocol inlined)
-  local any_diff_review = false
+  local any_diff_review, inject_diff_protocol = false, false
   for _, p in ipairs(peers) do
-    if p.diff_review == true then any_diff_review = true; break end
+    if p.diff_review == true then
+      any_diff_review = true
+      if (p.kind or kind) ~= "claude" then inject_diff_protocol = true end
+    end
   end
-  local inject_diff_protocol = any_diff_review and kind ~= "claude"
 
   -- codex is the one interactive kind with NO model option: the adapter passes
   -- no --model, config.store drops the key and :AutoAgentsModel refuses it. So
-  -- neither the roster's Model column nor the shared "Model preference"
-  -- section applies to it; a short note takes their place below, so an agent
-  -- asked to switch models knows where its model actually comes from.
-  local show_model = INTERACTIVE_KINDS[kind] and not NO_MODEL_OPTION[kind] and true or false
+  -- neither its Model cell nor the shared "Model preference" section applies to
+  -- it; a short note takes their place below, so an agent asked to switch models
+  -- knows where its model actually comes from.
+  local model_kinds, no_model_kinds = false, false
+  for _, k in ipairs(kinds) do
+    if INTERACTIVE_KINDS[k] and not NO_MODEL_OPTION[k] then model_kinds = true end
+    if INTERACTIVE_KINDS[k] and NO_MODEL_OPTION[k] then no_model_kinds = true end
+  end
+  local show_model = model_kinds
   if #peers > 0 then
     vim.list_extend(lines, {
       "### Roster (agents sharing this file)",
       "",
     })
-    local function dr_cell(p)
-      return p.diff_review == true and "✓" or "–"
+    local cols = { { "Slot", function(p) return tostring(p.slot or "?") end },
+      { "Name", function(p) return "`" .. (p.name or "?") .. "`" end } }
+    if mixed then
+      cols[#cols + 1] = { "Kind", function(p) return "`" .. (p.kind or "?") .. "`" end }
     end
-    if show_model and any_diff_review then
-      vim.list_extend(lines, {
-        "| Slot | Name | Model | diff_review |",
-        "|------|------|-------|-------------|",
-      })
-      for _, p in ipairs(peers) do
-        local m = (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
-        lines[#lines + 1] = string.format("| %s | `%s` | %s | %s |",
-          tostring(p.slot or "?"), p.name or "?", m, dr_cell(p))
-      end
-    elseif show_model then
-      vim.list_extend(lines, {
-        "| Slot | Name | Model |",
-        "|------|------|-------|",
-      })
-      for _, p in ipairs(peers) do
-        local m = (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
-        lines[#lines + 1] = string.format("| %s | `%s` | %s |",
-          tostring(p.slot or "?"), p.name or "?", m)
-      end
-    elseif any_diff_review then
-      vim.list_extend(lines, {
-        "| Slot | Name | diff_review |",
-        "|------|------|-------------|",
-      })
-      for _, p in ipairs(peers) do
-        lines[#lines + 1] = string.format("| %s | `%s` | %s |",
-          tostring(p.slot or "?"), p.name or "?", dr_cell(p))
-      end
-    else
-      vim.list_extend(lines, {
-        "| Slot | Name |",
-        "|------|------|",
-      })
-      for _, p in ipairs(peers) do
-        lines[#lines + 1] = string.format("| %s | `%s` |",
-          tostring(p.slot or "?"), p.name or "?")
-      end
+    if show_model then
+      cols[#cols + 1] = { "Model", function(p)
+        if NO_MODEL_OPTION[p.kind or kind] then return "(codex's own config)" end
+        return (p.model and p.model ~= "") and ("`" .. p.model .. "`") or "(CLI default)"
+      end }
+    end
+    if any_diff_review then
+      cols[#cols + 1] = { "diff_review", function(p) return p.diff_review == true and "✓" or "–" end }
+    end
+    local head, rule = {}, {}
+    for _, c in ipairs(cols) do
+      head[#head + 1], rule[#rule + 1] = c[1], string.rep("-", #c[1])
+    end
+    lines[#lines + 1] = "| " .. table.concat(head, " | ") .. " |"
+    lines[#lines + 1] = "|" .. table.concat(rule, "|"):gsub("[^|]+", function(r) return "-" .. r .. "-" end) .. "|"
+    for _, p in ipairs(peers) do
+      local cells = {}
+      for _, c in ipairs(cols) do cells[#cells + 1] = c[2](p) end
+      lines[#lines + 1] = "| " .. table.concat(cells, " | ") .. " |"
     end
     lines[#lines + 1] = ""
   end
@@ -265,12 +284,34 @@ local function render_block(spec, kb, crew)
     "still fails, or says the context doesn't match, tell the user.",
     "",
   })
-  if crew.guide then
-    vim.list_extend(lines, { "The daemon's guide for your CLI:", "" })
-    for line in (crew.guide:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
+  local guides = crew.guides or {}
+  local function guide_lines(g)
+    for line in (g:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
       lines[#lines + 1] = line
     end
     lines[#lines + 1] = ""
+  end
+  if not mixed then
+    if guides[kind] then
+      vim.list_extend(lines, { "The daemon's guide for your CLI:", "" })
+      guide_lines(guides[kind])
+    end
+  else
+    local any = false
+    for _, k in ipairs(kinds) do any = any or guides[k] ~= nil end
+    if any then
+      vim.list_extend(lines, {
+        "The daemon's guide for each CLI that reads this file. Follow the one",
+        "for your own kind (your roster row's Kind) and none of the others:",
+        "",
+      })
+      for _, k in ipairs(kinds) do
+        if guides[k] then
+          vim.list_extend(lines, { "#### For `" .. k .. "` agents", "" })
+          guide_lines(guides[k])
+        end
+      end
+    end
   end
 
   if crew.editor then
@@ -403,9 +444,9 @@ local function render_block(spec, kb, crew)
     end
   end
 
-  if INTERACTIVE_KINDS[kind] and NO_MODEL_OPTION[kind] then
+  if no_model_kinds then
     vim.list_extend(lines, {
-      "### Model",
+      mixed and "### Model (`codex` agents)" or "### Model",
       "",
       "There is no model setting for you here: auto-agents passes codex no",
       "`--model`, and a `model` in its TOML is ignored and dropped.",
@@ -418,7 +459,8 @@ local function render_block(spec, kb, crew)
       "Either way, don't reach for `:AutoAgentsModel`: it refuses a codex slot.",
       "",
     })
-  elseif show_model then
+  end
+  if show_model then
     vim.list_extend(lines, {
       "### Model preference",
       "",
@@ -508,8 +550,13 @@ function M.ensure(spec, kb, cwd)
 
   local filename = M.filename_for(spec.kind or "generic")
   local path = cwd .. "/" .. filename
+  local guides = {}
+  local _, kinds = sharing(spec)
+  for _, k in ipairs(kinds) do
+    guides[k] = require("auto-agents.crew").guide(k)
+  end
   local crew = {
-    guide = require("auto-agents.crew").guide(spec.kind or "generic"),
+    guides = guides,
     editor = require("auto-agents.editor_socket").path() ~= nil,
   }
   local block = render_block(spec, kb, crew)
