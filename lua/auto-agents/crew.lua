@@ -657,6 +657,15 @@ local function resolve(st, r)
   end)
 end
 
+-- awaited reports whether a running slot of codename still waits to join (a handle with no live
+-- session): its lost registration is its own to send again at the join, never replayed and ended.
+local function awaited(st, codename)
+  for h in pairs(st.handles) do
+    if h.codename == codename and not h.ended and not (h.session and st.sessions[h.session.id] == h.session) then return true end
+  end
+  return false
+end
+
 -- settle asks the daemon again for what this Neovim owes it, each time a renewal or a claim answers:
 -- every exit not yet confirmed, and every lost registration nobody is starting. One under a scope
 -- or epoch no longer held was ended by the claim that changed it.
@@ -671,7 +680,7 @@ local function settle(st)
   for codename, r in pairs(st.pending) do
     if r.scope ~= st.scope or r.epoch ~= st.epoch then
       if not r.inflight then st.pending[codename] = nil end
-    else
+    elseif not awaited(st, codename) then
       resolve(st, r)
     end
   end

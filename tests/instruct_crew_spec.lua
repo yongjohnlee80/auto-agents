@@ -163,7 +163,7 @@ do
   ok("[8] the file is AGENTS.md", vim.fs.basename(path) == "AGENTS.md")
   ok("[8] the same block whichever kind spawned last", by_codex == by_opencode and by_opencode == by_agy)
   ok("[8] it names every kind that reads it",
-    has(by_codex, "CLI reads it: `antigravity`, `codex`, `opencode`.") and not has(by_codex, "-backed agent"))
+    has(by_codex, "CLI reads it: `antigravity`, `codex`, `opencode`.") and not has(by_codex, "shared by every `"))
   ok("[8] every sharing agent in the roster, with its Kind; claude's (CLAUDE.md) not",
     has(by_codex, "| 2 | `lector` | `codex` |") and has(by_codex, "| 3 | `juliet` | `antigravity` | `gemini-3` |")
       and has(by_codex, "| 4 | `zen` | `opencode` |") and not has(by_codex, "`jarvis`"), by_codex)
