@@ -330,9 +330,10 @@ local function render_block(spec, kb, crew)
       "When `$AUTODOC_EDITOR` is set, Neovim answers `autodoc --editor <verb>",
       "'[…]'` directly, with no mail: `editor.workspace`, `editor.buffers`,",
       "`editor.read`, `editor.find`, `editor.open`, `peek`, `diff_queue`,",
-      "`review.create` / `list` / `show` / `validate` and the `todos.*` verbs,",
-      "as far as your grants allow (the roster entry's `editor_grants`; a",
-      "verb outside them is refused, naming the grant).",
+      "`review.create` / `list` / `show` / `validate`, the `todos.*` verbs and",
+      "auto-run's `run.*` verbs, as far as your grants allow (the roster entry's",
+      "`editor_grants`; `run` only when it lists it; a verb outside them is",
+      "refused, naming the grant).",
       "",
     })
   end

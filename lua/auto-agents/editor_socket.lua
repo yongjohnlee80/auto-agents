@@ -18,10 +18,13 @@
 ---  editor.open path                       {opening}                                       commands
 ---  peek / diff_queue / review.* {args}    the command verb's own answer                   review (peek: peek)
 ---  todos.* {args}                         the command verb's own answer                   todos
+---  run.* {args}                           the command verb's own answer                   run
 ---
 ---Positions are 1-based lines and columns (a column is a character), as AutoDoc's are. The command
----verbs that act in Neovim (peek, diff_queue, review.*, todos.*) are served here: the handler registered on
----auto-core's command registry (auto-core.commands), its argument schema checked.
+---verbs that act in Neovim (peek, diff_queue, review.*, todos.*, run.*) are served here: the handler registered on
+---auto-core's command registry (auto-core.commands), its argument schema checked. run.* is auto-run's: every
+---`run.<verb>` it registers, behind the `run` grant, which no agent has unless its roster entry lists it
+---(auto-run's own trust, auto-core.trust, still gates the verbs that start a process).
 local M = {}
 
 -- golib rpc's codes (server/rpc/message.go), and AutoDoc's editor refusal (tui/editorsocket.go).
@@ -32,7 +35,8 @@ M.CODE_INTERNAL = -32603
 M.CODE_REFUSED = -32097
 
 -- An agent's grants unless its roster entry says otherwise: read the page, review, peek a slot, and
--- the todos.* verbs (what any agent could do through the file mailbox before it went).
+-- the todos.* verbs (what any agent could do through the file mailbox before it went). `run` (auto-run's
+-- run.* verbs) and `commands` are opt-in.
 M.DEFAULT_GRANTS = { "editor.read", "review", "peek", "todos" }
 
 -- The longest request a client may send, as a guard against a runaway peer.
@@ -197,6 +201,11 @@ end
 function M.handle(method, params, msgid)
   if not _s then return nil, rpc_error(M.CODE_INTERNAL, "the editor socket is not serving") end
   local v = verbs[method]
+  -- auto-run's run.* verbs, whichever it registers, behind the `run` grant: one auto-run hasn't
+  -- registered answers "not registered", as a bridged verb does
+  if not v and type(method) == "string" and method:match("^run%.[%w_]+$") then
+    v = { grant = "run", bridged = method }
+  end
   if not v then return nil, rpc_error(M.CODE_METHOD_NOT_FOUND, ("no verb %s on Neovim's editor socket"):format(tostring(method))) end
   local token = type(params) == "table" and params[1] or nil
   local agent = type(token) == "string" and _s.tokens[token] or nil
