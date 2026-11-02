@@ -2,6 +2,17 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [v0.3.22] — 2026-11-02 — an assignment reaches its agent through the crew, stated
+
+- **An assignment is sent through the crew unrung** (#32). The todo notifier's crew hook
+  (`crew.crew_send`) sends `inbox.send` with fire false: the daemon queues the message and wakes the
+  agent as for any mail, and a stopped agent gets its host's fallback. It rang before: a send no
+  wake reached right then was refused for certain, and the notifier filed the assignment in the file
+  mailbox instead (an assignment made in Neovim's todo panel reached a cut-over agent that way).
+- **The todos guide states the new notice** (`templates/bootstrap-todos.md`, revision 8): "You've
+  been assigned a new task.", the task, the reason quoted as the note, one crew message (auto-core
+  v0.5.8's text). It names no assigner, and doesn't say it is forwarded.
+
 ## [v0.3.21] — 2026-11-02 — the user's crew inbox in Neovim
 
 - **The crew inbox** (#30, ADR 1793271500 §4.8): the decision requests, reports and permission prompts
