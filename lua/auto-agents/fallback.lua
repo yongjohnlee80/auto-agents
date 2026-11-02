@@ -7,10 +7,17 @@
 ---  * auto-core's todo notifier (set_fallback): an assignment notice no crew wake could land.
 ---
 ---Each delivery has a key (the job's id, the notice's message id) and is typed at most once per key,
----across a Neovim restart too: the key is written to a file in Neovim's state folder BEFORE the text
----is typed, so a restart (or a crash after the write) finds it and types nothing. A crash between
----the write and the typing loses that one delivery's typing rather than typing it twice: at most
----once. A key whose typing was refused (no terminal) is taken back, since nothing was typed.
+---across a Neovim restart too: the key is written BEFORE the text is typed, so a restart (or a crash
+---after the write) finds it and types nothing. A crash between the write and the typing loses that
+---one delivery's typing rather than typing it twice: at most once. A key whose typing was refused
+---(no terminal) is taken back, since nothing was typed.
+---
+---Every Neovim writes its keys to a file of its own (its crew incarnation's) in one folder, through a
+---temporary file of its own, and never another's; whether a key was typed is read from every file
+---there, fresh each time. So no Neovim erases another's keys, and a restart finds its predecessor's.
+---No lock is shared: a key is offered to one host at a time (a fallback job is leased to the host
+---running its agent; a notice names its Neovim's instance). The guarantee holds while a key is
+---kept: the newest MAX_KEYS of each Neovim's, and files of other runs untouched for KEEP_DAYS.
 ---
 ---The text is one line: auto-agents.sanitize strips every control (line breaks included) and caps
 ---it, and a line starting with `[`, `/` or `$` is prefixed, since Codex takes a leading `[` as a
@@ -23,46 +30,82 @@
 local M = {}
 
 M.MAX_TEXT = 4000 -- characters typed for one delivery
-M.MAX_KEYS = 2000 -- keys kept in the state file; older ones are dropped
+M.MAX_KEYS = 2000 -- keys kept in a Neovim's own file; older ones are dropped
+M.KEEP_DAYS = 7 -- another run's file untouched this long is removed
 M.PREFIX = "AutoDoc: " -- before a line that would start with a hazard
 
----@type table<string, boolean>|nil
-local _seen -- the keys typed, loaded from the state file on first use
----@type string[]
-local _order = {} -- the same keys, oldest first, as the file keeps them
+---@type string[]|nil
+local _mine -- this Neovim's own keys, oldest first, as its file keeps them
 
----The state file holding the typed keys, one per line.
+---The folder holding every Neovim's typed keys, a file each.
 ---@return string
-function M.state_file()
-  return vim.fs.joinpath(vim.fn.stdpath("state"), "auto-agents", "fallback-typed")
+function M.state_dir()
+  return vim.fs.joinpath(vim.fn.stdpath("state"), "auto-agents", "fallback-typed.d")
 end
 
-local function load()
-  if _seen then return _seen end
-  _seen, _order = {}, {}
+---This Neovim's own file of typed keys, one per line.
+---@return string
+function M.state_file()
+  return vim.fs.joinpath(M.state_dir(), require("auto-agents.crew").incarnation())
+end
+
+local function read_keys(path, into)
+  local f = io.open(path, "r")
+  if not f then return end
+  for line in f:lines() do
+    if line ~= "" then into[line] = true end
+  end
+  f:close()
+end
+
+-- typed reports whether key was typed by this Neovim or any other, read from every file now; the
+-- one-file store of auto-agents before v0.4.0 counts too. Another run's file untouched for
+-- KEEP_DAYS goes.
+local function typed(key)
+  local seen = {}
+  for _, k in ipairs(_mine or {}) do seen[k] = true end
+  local dir, own = M.state_dir(), M.state_file()
+  local old = os.time() - M.KEEP_DAYS * 86400
+  for name, kind in vim.fs.dir(dir) do
+    local path = vim.fs.joinpath(dir, name)
+    if kind == "file" and name:sub(1, 1) ~= "." and path ~= own then
+      local st = vim.uv.fs_stat(path)
+      if st and st.mtime.sec < old then
+        vim.uv.fs_unlink(path)
+      else
+        read_keys(path, seen)
+      end
+    end
+  end
+  read_keys(vim.fs.joinpath(vim.fs.dirname(dir), "fallback-typed"), seen)
+  return seen[key] == true
+end
+
+local function load_mine()
+  if _mine then return _mine end
+  _mine = {}
+  local seen = {}
   local f = io.open(M.state_file(), "r")
   if f then
     for line in f:lines() do
-      if line ~= "" and not _seen[line] then
-        _seen[line] = true
-        _order[#_order + 1] = line
+      if line ~= "" and not seen[line] then
+        seen[line] = true
+        _mine[#_mine + 1] = line
       end
     end
     f:close()
   end
-  return _seen
+  return _mine
 end
 
+-- save writes this Neovim's keys to its own file through its own temporary file.
 local function save()
-  local keys = vim.tbl_filter(function(k) return _seen[k] end, _order)
-  if #keys > M.MAX_KEYS then
-    for i = 1, #keys - M.MAX_KEYS do _seen[keys[i]] = nil end
-    keys = vim.list_slice(keys, #keys - M.MAX_KEYS + 1)
-  end
-  _order = keys
+  local keys = _mine
+  if #keys > M.MAX_KEYS then keys = vim.list_slice(keys, #keys - M.MAX_KEYS + 1) end
+  _mine = keys
   local path = M.state_file()
-  vim.fn.mkdir(vim.fs.dirname(path), "p")
-  local tmp = path .. ".tmp"
+  vim.fn.mkdir(vim.fs.dirname(path), "p", tonumber("700", 8))
+  local tmp = vim.fs.joinpath(vim.fs.dirname(path), "." .. vim.fs.basename(path) .. ".tmp")
   if vim.fn.writefile(keys, tmp) ~= 0 then return false end
   return vim.uv.fs_rename(tmp, path) == true
 end
@@ -88,19 +131,18 @@ function M.type_once(codename, key, text)
   if type(key) ~= "string" or key == "" or key:find("[\r\n]") then return false, "no key" end
   local line = M.line(text)
   if not line then return false, "nothing to type" end
-  local seen = load()
-  if seen[key] then return true end
+  local mine = load_mine()
+  if typed(key) then return true end
   local aa = require("auto-agents")
   local slot = aa.slot_for_name(codename)
   if not slot then return false, ("no slot runs %s"):format(tostring(codename)) end
-  seen[key] = true
-  _order[#_order + 1] = key
+  mine[#mine + 1] = key
   if not save() then
-    seen[key] = nil
+    table.remove(_mine)
     return false, "can't keep the key in " .. M.state_file()
   end
   if not aa.send_slot(slot, line, { submit = true, submit_keys = { "<CR>" } }) then
-    seen[key] = nil -- nothing was typed: it may be typed later
+    _mine = vim.tbl_filter(function(k) return k ~= key end, _mine) -- nothing was typed: it may be typed later
     save()
     return false, ("slot %d's terminal didn't take it"):format(slot)
   end
@@ -139,6 +181,6 @@ function M.detach()
 end
 
 ---Test seam: forget the loaded keys (the next use reads the state file again).
-function M._reset_for_tests() _seen, _order = nil, {} end
+function M._reset_for_tests() _mine = nil end
 
 return M
