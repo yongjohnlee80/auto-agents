@@ -892,7 +892,13 @@ local function ensure_main_slot_terminal(slot, winid)
       mail_via = setup ~= nil and setup.mail_via or nil, path = ctx_path }
     local ok, handle, why = pcall(function() return crew.begin(reg) end)
     M.state.slot_spawning[slot] = nil
-    if ok and not handle then
+    if not ok then
+      -- a registration that raised: logged whole, said in one plain line, and the slot joins later
+      -- as one with no answer does, never left unreachable with nothing said
+      logger.warn("crew", "crew session for " .. spec.name .. " failed: " .. tostring(handle))
+      handle, why = nil, crew.plain_reason(handle)
+    end
+    if not handle then
       -- no session now: the slot starts wired all the same, and joins at the next claim; one
       -- notice names it, and its join is logged
       handle = crew.defer(reg)
@@ -902,9 +908,7 @@ local function ensure_main_slot_terminal(slot, winid)
         why = nil
       end
     end
-    if not ok then
-      logger.warn("crew", "crew session for " .. spec.name .. " failed: " .. tostring(handle))
-    elseif handle then
+    if handle then
       crew_session = handle
       env = env or {}
       for k, v in pairs(handle.env) do env[k] = v end
