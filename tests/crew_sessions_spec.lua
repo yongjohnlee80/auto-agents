@@ -944,6 +944,8 @@ do
       and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("600", 8)
       and dst and bit.band(dst.mode, tonumber("777", 8)) == tonumber("700", 8), vim.inspect({ c, st and st.mode, dst and dst.mode }))
   ok("[21] its after-steps run once it joined", #w.ran == 1 and w.ran[1].session == h.session.id, vim.inspect(w.ran))
+  crew.started(h, { AUTODOC_CREW_CONTEXT = path }) -- the host says it started again: the same session
+  ok("[21] a session's after-steps run once, whoever asks again", #w.ran == 1, vim.inspect(w.ran))
   ok("[21] the join is logged, with no second notice", #w.notices == notices and #w.logs == 1 and w.logs[1]:find("cx joined", 1, true),
     vim.inspect({ w.notices, w.logs }))
   local first = h.session.id
@@ -974,7 +976,9 @@ do -- a slot that stopped before the claim never joins; a Claude slot is never t
   local w = new_world({ claim = false })
   local cwd = tmpcwd()
   local gone = crew.defer({ codename = "gone", kind = "codex", cwd = cwd, path = crew.context_path(cwd, "gone") })
+  local held = crew._handles()
   crew.finish(gone, "exit")
+  ok("[21] a slot that stopped is no longer held", crew._handles() == held - 1, tostring(crew._handles()))
   local cl = crew.defer({ codename = "cl", kind = "claude", cwd = cwd, path = crew.context_path(cwd, "cl") })
   cl.agy_prompt = "never typed into Claude"
   crew.started(cl, {})
@@ -1017,7 +1021,7 @@ do -- a registration refused while the scope is held: asked again at a renewal, 
   local refusals = 0
   w.answer["crew.register"] = function()
     refusals = refusals + 1
-    if refusals <= 2 then return nil, { code = -32000, message = "the store is busy" } end
+    if refusals <= 3 then return nil, { code = -32000, message = "the store is busy" } end
     return { session = "late-1", profile = "p1" }
   end
   local reg = { codename = "rx", kind = "codex", cwd = cwd, path = crew.context_path(cwd, "rx") }
@@ -1025,7 +1029,8 @@ do -- a registration refused while the scope is held: asked again at a renewal, 
   ok("[21] a failed registration while held answers why", h == nil and why ~= nil)
   h = crew.defer(reg)
   crew.started(h, {})
-  w.tick() -- a renewal: refused again, logged once
+  w.tick() -- a renewal: refused again, logged
+  w.tick() -- the next: refused for the same reason, not logged again
   w.tick() -- the next: registered
   ok("[21] it joins at a later renewal, its failure logged once",
     h.session and h.session.id == "late-1" and #vim.tbl_filter(function(l) return l:find("couldn't join", 1, true) end, w.logs) == 1,
