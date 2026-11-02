@@ -95,7 +95,9 @@ do
     local pid = h.pid
     ok("[1] in a process group of its own, never Neovim's", pgid_of(pid) == pid and pgid_of(pid) ~= pgid_of(vim.uv.os_getpid()),
       ("pgid %s, pid %d, Neovim's %s"):format(tostring(pgid_of(pid)), pid, tostring(pgid_of(vim.uv.os_getpid()))))
-    ok("[1] its pid in the folder's pid file", vim.trim(read(vim.fs.joinpath(dir, server.PID_FILE)) or "") == tostring(pid))
+    local recorded = vim.trim(read(vim.fs.joinpath(dir, server.PID_FILE)) or "")
+    ok("[1] its pid and its process reference in the folder's pid file",
+      recorded == ("%d %s"):format(pid, require("auto-agents.crew").proc_ref(nil, pid)) and recorded:match("^%d+ %S+$") ~= nil, recorded)
     server.stop(h)
     ok("[1] stopped: it ends", eventually(function() return not alive(pid) end))
     ok("[1] stopped: its pid file is gone", vim.uv.fs_stat(vim.fs.joinpath(dir, server.PID_FILE)) == nil)

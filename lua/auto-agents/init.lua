@@ -891,14 +891,23 @@ local function ensure_main_slot_terminal(slot, winid)
     -- answered joins at the claim (crew.defer) with nothing to restart
     local setup, setup_why, older
     local ctx_path = crew.context_path(cwd, spec.name)
-    -- another live Neovim holding the scope: nothing crew-side here (no folder, setup file,
-    -- credential or server); the slot's context stays this host's own, absent until it joins
-    if crew.scope() and not crew.scope_denied() then
+    if crew.scope() then
       local dir_why
       agent_dir, dir_why = crew.agent_folder(spec.name)
       if not agent_dir then logger.warn("crew", spec.name .. " has no folder of its own: " .. tostring(dir_why)) end
       setup, setup_why, older = crew.agent_setup(kind, bin, type(spec.cmd) == "table" and spec.cmd[1] or nil, env, nil,
         crew.mail_via_offered() and "mcp" or nil, agent_dir)
+      -- another live Neovim holds the scope: the slot gets its files and its wiring, never the parts
+      -- that are secret or run a process (its own Codex server, its editor token's file); its
+      -- context comes when this Neovim holds the scope and it joins
+      if setup and crew.scope_denied() then
+        local dropped
+        setup, dropped = crew.without_server(setup)
+        if dropped then
+          vim.notify(("%s starts without its own Codex server: another Neovim holds this project's crew. It joins when this one holds it; start it again then for its own server."):format(spec.name),
+            vim.log.levels.WARN, { title = "auto-agents" })
+        end
+      end
     end
     local reg = { codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
       mail_via = setup ~= nil and setup.mail_via or nil, path = ctx_path }
@@ -996,7 +1005,10 @@ local function ensure_main_slot_terminal(slot, winid)
       env = env or {}
       for k, v in pairs(eenv) do env[k] = v end
       -- a Codex agent's tool shells drop *TOKEN*: its token is a file of its own folder too
-      local cenv, cwhy = require("auto-agents.editor_socket").credential_env(spec.kind, agent_dir, editor_token)
+      local cenv, cwhy = nil, nil
+      if not require("auto-agents.crew").scope_denied() then -- a secret: never while another Neovim holds the scope
+        cenv, cwhy = require("auto-agents.editor_socket").credential_env(spec.kind, agent_dir, editor_token)
+      end
       if cenv then
         for k, v in pairs(cenv) do env[k] = v end
       elseif cwhy then

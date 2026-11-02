@@ -41,7 +41,7 @@ end
 ---@param pid_file string
 ---@param socket string
 function M.stop_stale(pid_file, socket)
-  local pid = tonumber(vim.trim(read(pid_file) or ""))
+  local pid = tonumber((vim.trim(read(pid_file) or "")):match("^%d+"))
   if pid and pid > 1 then
     local cmdline = read("/proc/" .. pid .. "/cmdline")
     if cmdline and cmdline:find(socket, 1, true) then
@@ -100,7 +100,9 @@ function M.start(argv, socket, dir, env, cwd)
     M.stop(h)
     return nil, "the agent's server's pid file: " .. pid_file
   end
-  vim.uv.fs_write(fd, tostring(pid) .. "\n")
+  -- its pid and its process reference: what proves it still this server (a dead host's folder is
+  -- kept while it runs: auto-agents.crew's sweep)
+  vim.uv.fs_write(fd, ("%d %s\n"):format(pid, require("auto-agents.crew").proc_ref(nil, pid)))
   vim.uv.fs_close(fd)
   local ready = vim.wait(M.READY_MS, function() return h.exited or vim.uv.fs_stat(socket) ~= nil end, M.POLL_MS)
   if h.exited then

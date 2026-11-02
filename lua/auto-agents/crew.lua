@@ -430,23 +430,57 @@ local function owner_dead(dir, proc_root)
   local pid, ref = body:match("^(%d+) (%S+)")
   pid = tonumber(pid)
   if not pid or ref == "" or pid == vim.uv.os_getpid() then return false end
-  if not vim.uv.fs_stat((proc_root or "/proc") .. "/" .. pid) then return true end
+  return M.process_gone(pid, ref, proc_root)
+end
+
+---process_gone reports whether process pid, recorded with ref (its proc_ref), is provably gone: no
+---such pid (ENOENT; any other error proves nothing), or the pid is another process now.
+---@param pid integer
+---@param ref string|nil
+---@param proc_root string|nil the /proc root (tests)
+---@return boolean
+function M.process_gone(pid, ref, proc_root)
+  local st, _, ename = vim.uv.fs_stat((proc_root or "/proc") .. "/" .. pid)
+  if not st then return ename == "ENOENT" end
+  if not ref or ref == "" then return false end
   local now = M.proc_ref(proc_root, pid)
   return now ~= "" and now ~= ref
+end
+
+-- records_live_helper reports whether incarnation folder dir records a helper not provably gone:
+-- an agent's Codex server (<codename>/.autodoc-crew/server.pid, its pid and reference). Its folder
+-- is the server's record until the server ends (AutoDoc's Crew Bridges reclaims it), so it stays.
+local function records_live_helper(dir, proc_root)
+  for name, kind in vim.fs.dir(dir) do
+    if kind == "directory" then
+      local f = io.open(vim.fs.joinpath(dir, name, ".autodoc-crew", "server.pid"), "r")
+      if f then
+        local pid, ref = (f:read("*a") or ""):match("^(%d+)%s*(%S*)")
+        f:close()
+        if tonumber(pid) and not M.process_gone(tonumber(pid), ref, proc_root) then return true end
+      end
+    end
+  end
+  return false
 end
 
 local _host_dirs = {} -- this run's incarnation folders, made and swept once each
 
 ---ensure_host_dir makes this incarnation's folder dir (host_path) private, writes its owner file
 ---(this process's pid and reference), and, the first time, removes every sibling incarnation folder
----whose owner is provably gone (owner_dead): a crashed run's. Another live host's is never touched.
+---whose owner is provably gone (owner_dead) and that records no helper still running (a crashed
+---run's Codex server outlives it: its folder stays its record). Another live host's is never touched.
 ---@param dir string
 ---@param proc_root string|nil the /proc root (tests)
 ---@return string|nil dir, string|nil why
 function M.ensure_host_dir(dir, proc_root)
   if _host_dirs[dir] then return dir, nil end
+  -- its folder and the two above it are this user's and private (the scope's, and the root: the
+  -- project's .autodoc-crew or the state folder's crew); a chmod by name assumes no one else can
+  -- move a folder in between, which their being this user's and 0700 keeps true
   local parent = vim.fs.dirname(dir)
-  local ok, why = M.private_dir(parent)
+  local ok, why = M.private_dir(vim.fs.dirname(parent))
+  if ok then ok, why = M.private_dir(parent) end
   if ok then ok, why = M.private_dir(dir) end
   if not ok then return nil, why end
   why = write_private(vim.fs.joinpath(dir, "owner"), ("%d %s\n"):format(vim.uv.os_getpid(), M.proc_ref(proc_root)))
@@ -455,7 +489,8 @@ function M.ensure_host_dir(dir, proc_root)
     local sib = vim.fs.joinpath(parent, name)
     if kind == "directory" and sib ~= dir and name:match("^%d+%-%x+$") then
       local st = vim.uv.fs_lstat(sib)
-      if st and st.type == "directory" and st.uid == vim.uv.getuid() and owner_dead(sib, proc_root) then
+      if st and st.type == "directory" and st.uid == vim.uv.getuid() and owner_dead(sib, proc_root)
+        and not records_live_helper(sib, proc_root) then
         vim.fn.delete(sib, "rf")
       end
     end
@@ -464,10 +499,42 @@ function M.ensure_host_dir(dir, proc_root)
   return dir, nil
 end
 
+---_forget_host_dirs forgets which folders this run made and swept (a test's next start).
+function M._forget_host_dirs()
+  _host_dirs = {}
+end
+
 ---remove_host_dirs removes this run's incarnation folders: the host is going.
 function M.remove_host_dirs()
   for dir in pairs(_host_dirs) do vim.fn.delete(dir, "rf") end
   _host_dirs = {}
+end
+
+---without_server is setup with only what a slot started while another live Neovim holds the scope
+---may have: its files, argv and env, without the parts that are secret or run a process (its own
+---Codex app-server, the --remote that attaches to it, AUTODOC_CODEX_SERVER, the endpoint step that
+---looks for its thread there). Such a slot joins later with its context; a Codex one has no server
+---of its own until it starts again while this Neovim holds the scope.
+---@param setup table
+---@return table setup, boolean dropped whether a server was dropped
+function M.without_server(setup)
+  if type(setup) ~= "table" or #(setup.server or {}) == 0 then return setup, false end
+  local out = vim.deepcopy(setup)
+  out.server, out.server_socket = {}, nil
+  local argv, skip = {}, false
+  for _, a in ipairs(out.argv or {}) do
+    if skip then
+      skip = false
+    elseif a == "--remote" then
+      skip = true
+    elseif not vim.startswith(a, "--remote=") then
+      argv[#argv + 1] = a
+    end
+  end
+  out.argv = argv
+  if type(out.env) == "table" then out.env.AUTODOC_CODEX_SERVER = nil end
+  out.after = vim.tbl_filter(function(step) return not vim.list_contains(step, "--codex-here") end, out.after or {})
+  return out, true
 end
 
 ---_set_denied sets the claim's busy refusal (a test's).
@@ -521,16 +588,16 @@ M.AGENT_ROOT = vim.fs.joinpath(vim.fn.stdpath("state"), "auto-agents", "crew")
 ---agent_folder is the agent codename's own folder, made private: what `crew setup --agent-dir`
 ---writes its kind's files for (agy's MCP config), where a Codex agent's own app-server binds its
 ---socket and where its editor credential is written. It is this Neovim's alone (under its scope and
----incarnation), held or not yet (a slot spawned before the claim gets its folder); none while
----another live Neovim holds the scope. nil and why with no crew set up, the scope held elsewhere, a
----codename that isn't a plain name, or a folder that can't be made private.
+---incarnation), held or not yet: a slot spawned before the claim, or while another live Neovim
+---holds the scope, gets its folder for its setup's files (without_server keeps a denied slot's
+---setup to those). nil and why with no crew set up, a codename that isn't a plain name, or a folder
+---that can't be made private.
 ---@param codename string
 ---@param root string|nil AGENT_ROOT, a test's own
 ---@return string|nil folder, string|nil why
 function M.agent_folder(codename, root)
   local scope = M.held() or M.scope()
   if not scope then return nil, "no crew scope" end
-  if M.scope_denied() then return nil, "another live Neovim holds the crew scope " .. scope end
   if not plain_name(codename) then return nil, "codename " .. tostring(codename) .. " isn't a plain name" end
   local host, why = M.ensure_host_dir(M.host_path(root or M.AGENT_ROOT, scope))
   if not host then return nil, why end
