@@ -1041,9 +1041,8 @@ end
 -- registers nothing twice.
 local function rejoin(st, h)
   if h.ended or h.joining or st.status ~= "held" then return end
-  if h.session and st.sessions[h.session.id] == h.session then return end
   for _, other in pairs(st.sessions) do
-    if other.codename == h.codename then return end
+    if other.codename == h.codename then return end -- its own live session, or another's
   end
   local sess = st.session
   local c = sess and sess.client and sess.client()
@@ -1136,6 +1135,12 @@ function M.finish(handle, why)
   else
     remove_session_file(s) -- the scope changed hands or was released: its session ended with it
   end
+end
+
+---_handles is how many running slots' handles the crew holds (a test's).
+---@return integer
+function M._handles()
+  return _s and vim.tbl_count(_s.handles) or 0
 end
 
 -- How long writing an instruction block waits for the daemon's crew guide before writing it without.
