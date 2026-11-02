@@ -12,6 +12,8 @@
 --   [5] identity: resolved with `autodoc crew whoami`, never from an env var
 --   [6] the model preference resolves <your-name> with `autodoc crew whoami` too
 --   [7] the todo rules: the todos.* verbs on the editor socket, and why not a raw daemon assign
+--   [10] a file Codex reads says CLI mail from a sandboxed Codex asks for approval: use the MCP
+--        tools; one no Codex reads doesn't
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -179,6 +181,8 @@ do
   ok("[8] codex's model note and the others' model preference both",
     has(by_codex, "### Model (`codex` agents)") and has(by_codex, "### Model preference") and has(by_codex, "| (codex's own config) |"))
   ok("[8] an opted-in non-claude peer brings the diff_queue protocol", has(by_codex, "### Interactive diff review"))
+  ok("[10] shared with a Codex: the note, addressed to the `codex` agents, whichever kind spawned",
+    has(by_opencode, "A `codex` agent: CLI mail from a sandboxed Codex asks for approval"), by_opencode)
 end
 
 -- [9] a file one kind reads alone is rendered as before: no Kind column, one guide, no per-kind heading
@@ -189,6 +193,16 @@ do
   ok("[9] one kind: no Kind column, no per-kind guide heading",
     has(s, "| Slot | Name | Model |") and not has(s, "| Kind |") and not has(s, "#### For "))
   ok("[9] one kind: its guide as the guide for your CLI", has(s, "The daemon's guide for your CLI:") and has(s, GUIDE:sub(1, 30)))
+end
+
+-- [10] Codex's sandbox refuses AutoDoc's socket: a file a Codex reads steers it to the MCP tools
+do
+  world(GUIDE)
+  local NOTE = "mail from a sandboxed Codex asks for approval"
+  local alone = block_for("codex")
+  ok("[10] a Codex alone: CLI mail asks for approval, use the MCP tools",
+    has(alone, "CLI mail from a sandboxed Codex asks for approval") and has(alone, "use the MCP tools."), alone)
+  ok("[10] a file no Codex reads has no such note", not has(block_for("claude"), NOTE))
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))

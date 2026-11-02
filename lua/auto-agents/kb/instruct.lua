@@ -284,6 +284,15 @@ local function render_block(spec, kb, crew)
     "still fails, or says the context doesn't match, tell the user.",
     "",
   })
+  -- Codex's Linux sandbox refuses every unix socket unless it opens the whole network (codex-cli
+  -- 0.166: no per-socket allowance), so its shell's `autodoc mail|crew` stops for an approval
+  if kind == "codex" or vim.tbl_contains(kinds, "codex") then
+    vim.list_extend(lines, {
+      (mixed and "A `codex` agent: " or "") .. "CLI mail from a sandboxed Codex asks for approval",
+      "(its sandbox refuses AutoDoc's socket); use the MCP tools.",
+      "",
+    })
+  end
   local guides = crew.guides or {}
   local function guide_lines(g)
     for line in (g:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
