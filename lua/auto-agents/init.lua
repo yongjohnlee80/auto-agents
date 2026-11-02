@@ -979,6 +979,13 @@ local function ensure_main_slot_terminal(slot, winid)
       editor_token = eenv.AUTODOC_EDITOR_TOKEN
       env = env or {}
       for k, v in pairs(eenv) do env[k] = v end
+      -- a Codex agent's tool shells drop *TOKEN*: its token is a file of its own folder too
+      local cenv, cwhy = require("auto-agents.editor_socket").credential_env(spec.kind, agent_dir, editor_token)
+      if cenv then
+        for k, v in pairs(cenv) do env[k] = v end
+      elseif cwhy then
+        logger.warn("editor", spec.name .. "'s editor token file could not be written: " .. cwhy)
+      end
     end
   end
   -- the setup's server, before the CLI, under the CLI's whole environment: started, or the spawn is

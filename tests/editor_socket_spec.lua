@@ -21,6 +21,8 @@
 ---       token and grants alone (Juliet #7 r0 F1)
 ---   [9] start sweeps the folder: a socket whose pid is gone or isn't a Neovim is removed; a live
 ---       Neovim's, a file that isn't a socket, and other names are kept
+---  [10] a Codex agent's editor token (its shells drop *TOKEN*) is a 0600 file of its own folder,
+---       named by AUTODOC_EDITOR_CREDENTIAL_FILE, replaced at a restart; no other kind gets one
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -309,6 +311,31 @@ do
   sleeper:kill(9)
   nvim:kill(9)
   for _, n in ipairs({ names.nvim, plain, "other.sock" }) do vim.uv.fs_unlink(vim.fs.joinpath(dir, n)) end
+end
+
+-- ── [10] a Codex agent's token file (Codex's shells drop *TOKEN*) ─────────────
+do
+  local adir = vim.fn.tempname()
+  vim.fn.mkdir(adir, "p", tonumber("700", 8))
+  local env, why = es.credential_env("codex", adir, "tok-cx")
+  local file = env and env[es.CREDENTIAL_ENV]
+  local st = file and vim.uv.fs_stat(file)
+  local f = file and io.open(file, "r")
+  local body = f and f:read("*a")
+  if f then f:close() end
+  ok("[10] a Codex agent's token is a 0600 file of its folder, named by the variable",
+    why == nil and file == vim.fs.joinpath(adir, es.CREDENTIAL_FILE) and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("600", 8)
+      and body == "tok-cx", vim.inspect({ env, why, st and st.mode, body }))
+  ok("[10] the variable's name holds none of the words Codex filters",
+    not es.CREDENTIAL_ENV:find("KEY") and not es.CREDENTIAL_ENV:find("SECRET") and not es.CREDENTIAL_ENV:find("TOKEN"))
+  local env2 = es.credential_env("codex", adir, "tok-cx-2")
+  local f2 = io.open(vim.fs.joinpath(adir, es.CREDENTIAL_FILE), "r")
+  ok("[10] a restart's new token replaces the file", env2 and f2 and f2:read("*a") == "tok-cx-2")
+  if f2 then f2:close() end
+  ok("[10] any other kind, or no folder of its own, gets none",
+    es.credential_env("claude", adir, "t") == nil and es.credential_env("antigravity", adir, "t") == nil
+      and es.credential_env("codex", nil, "t") == nil)
+  vim.fn.delete(adir, "rf")
 end
 
 es.stop()
