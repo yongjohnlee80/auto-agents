@@ -183,6 +183,28 @@ do
     next(perms.env_for_kind("claude", { KB })) == nil and next(perms.env_for_kind("codex", { KB })) == nil)
 end
 
+-- F3: an OPENCODE_CONFIG_CONTENT the agent inherits from Neovim (none set for the spawn itself) is
+-- merged into, never replaced: its plugin, MCP server and permission rules survive the grant.
+do
+  local inherited = vim.json.encode({ plugin = { "file:///own-plugin.js" },
+    mcp = { tools = { type = "local", command = { "my-mcp" } } },
+    permission = { bash = { ["git *"] = "allow" }, external_directory = { ["/srv/**"] = "allow" } } })
+  local saved = vim.env.OPENCODE_CONFIG_CONTENT
+  vim.env.OPENCODE_CONFIG_CONTENT = inherited
+  local e = perms.env_for_kind("opencode", { KB, "/t/templates" }, {})
+  vim.env.OPENCODE_CONFIG_CONTENT = saved
+  local c = e.OPENCODE_CONFIG_CONTENT and vim.json.decode(e.OPENCODE_CONFIG_CONTENT) or {}
+  local ext = (c.permission or {}).external_directory or {}
+  ok("F3 the inherited plugin and MCP server survive the grant",
+    c.plugin and c.plugin[1] == "file:///own-plugin.js" and c.mcp and c.mcp.tools and c.mcp.tools.command[1] == "my-mcp", vim.inspect(c))
+  ok("F3 the inherited permission rules survive, next to the two granted folders",
+    c.permission and c.permission.bash["git *"] == "allow" and ext["/srv/**"] == "allow"
+      and ext[KB .. "/**"] == "allow" and ext["/t/templates/**"] == "allow", vim.inspect(c.permission))
+  local own = perms.env_for_kind("opencode", { KB }, { OPENCODE_CONFIG_CONTENT = '{"plugin":["file:///spawn.js"]}' })
+  ok("F3 the spawn's own value, when set, is the one merged into",
+    vim.json.decode(own.OPENCODE_CONFIG_CONTENT).plugin[1] == "file:///spawn.js")
+end
+
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
   os.exit(1)
