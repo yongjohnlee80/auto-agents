@@ -149,6 +149,40 @@ ok("supported_kinds() is sorted",
   joined(perms.supported_kinds()) == "antigravity claude codex",
   "got: " .. joined(perms.supported_kinds()))
 
+-- N4: OpenCode takes no --add-dir; its config's permission.external_directory grants the dirs.
+do
+  local function content(env) return vim.json.decode(env.OPENCODE_CONFIG_CONTENT) end
+  local e = perms.env_for_kind("opencode", { KB, "/t/templates/" })
+  local ext = e.OPENCODE_CONFIG_CONTENT and content(e).permission.external_directory or {}
+  ok("N4 opencode, no config yet: each dir allowed as <dir>/**, a trailing slash dropped",
+    ext[KB .. "/**"] == "allow" and ext["/t/templates/**"] == "allow" and vim.tbl_count(ext) == 2,
+    vim.inspect(e))
+
+  local own = vim.json.encode({ plugin = { "file:///p.js" }, mcp = vim.empty_dict(),
+    permission = { bash = { ["git *"] = "allow" }, external_directory = { ["/home/u/**"] = "deny" } } })
+  local cfg = content(perms.env_for_kind("opencode", { KB }, { OPENCODE_CONFIG_CONTENT = own }))
+  ok("N4 the agent's own config kept: its plugin, its bash rules and its own directory rules",
+    cfg.plugin[1] == "file:///p.js" and cfg.permission.bash["git *"] == "allow"
+      and cfg.permission.external_directory["/home/u/**"] == "deny" and cfg.permission.external_directory[KB .. "/**"] == "allow",
+    vim.inspect(cfg))
+  ok("N4 an empty object stays an object (AutoDoc's merge refuses an mcp that isn't one)",
+    perms.env_for_kind("opencode", { KB }, { OPENCODE_CONFIG_CONTENT = own }).OPENCODE_CONFIG_CONTENT:find('"mcp":{}', 1, true) ~= nil)
+
+  local ask = content(perms.env_for_kind("opencode", { KB },
+    { OPENCODE_CONFIG_CONTENT = '{"permission":{"external_directory":"ask"}}' })).permission.external_directory
+  ok("N4 one action for every directory stays that action for the rest",
+    ask["*"] == "ask" and ask[KB .. "/**"] == "allow", vim.inspect(ask))
+
+  local odd = '{"permission":"allow"}'
+  ok("N4 a permission that is one action is the user's, untouched",
+    next(perms.env_for_kind("opencode", { KB }, { OPENCODE_CONFIG_CONTENT = odd })) == nil)
+  local bad, why = perms.env_for_kind("opencode", { KB }, { OPENCODE_CONFIG_CONTENT = "[1]" })
+  ok("N4 a config that isn't a JSON object: nothing changed, and why", next(bad) == nil and why ~= nil)
+  ok("N4 no dirs: nothing", next(perms.env_for_kind("opencode", {}, {})) == nil)
+  ok("N4 every other kind grants by argv, so no env",
+    next(perms.env_for_kind("claude", { KB })) == nil and next(perms.env_for_kind("codex", { KB })) == nil)
+end
+
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then
   os.exit(1)
