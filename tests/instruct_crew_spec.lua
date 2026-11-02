@@ -12,6 +12,8 @@
 --   [5] identity: resolved with `autodoc crew whoami`, never from an env var
 --   [6] the model preference resolves <your-name> with `autodoc crew whoami` too
 --   [7] the todo rules: the todos.* verbs on the editor socket, and why not a raw daemon assign
+--   [11] the spawn's one revision check is the todos convention's; the verbs' reference is read
+--        when needed
 --   [10] a file Codex reads says CLI mail from a sandboxed Codex asks for approval: use the MCP
 --        tools; one no Codex reads doesn't
 
@@ -204,6 +206,21 @@ do
   ok("[10] a Codex alone: CLI mail asks for approval, use the MCP tools",
     has(alone, "CLI mail from a sandboxed Codex asks for approval") and has(alone, "use the MCP tools."), alone)
   ok("[10] a file no Codex reads has no such note", not has(block_for("claude"), NOTE))
+end
+
+-- [11] the spawn makes one revision check: the todos convention's; the verbs' reference is read when
+-- a verb is needed (D10: no per-spawn ritual over the docs)
+do
+  world(GUIDE)
+  local s = block_for("claude")
+  ok("[11] the convention's revision is the one check a spawn makes",
+    has(s, "`$AUTO_AGENTS_TODOS_CONVENTION_DOC`") and has(s, "That is the one check a spawn makes.")
+      and has(s, "`feedback_todo_handling`"), s)
+  ok("[11] the verbs' reference is read when a verb is needed, not on every spawn",
+    has(s, "`$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`") and has(s, "not on every spawn."))
+  ok("[11] no ingest gate over the bootstrap doc's revision",
+    not has(s, "ingest gate") and not has(s, "feedback_todos_bootstrap_revision")
+      and not has(s, "Do not skip it"))
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))

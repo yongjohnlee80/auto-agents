@@ -690,7 +690,8 @@ local function build_agent_env(spec, cwd)
       if #dirs == 0 then return end
       local perms = require("auto-agents.permissions")
       -- OpenCode grants by its config, and asks for every folder it reads outside its own: the
-      -- template folder the spawn's ingest gate reads (the todos bootstrap doc) too (N4)
+      -- template folder too, which holds the todos.* verbs' reference an agent reads when it
+      -- needs a verb (the todos bootstrap doc) (N4)
       local env_dirs = vim.list_slice(dirs)
       local doc = env.AUTO_AGENTS_TODOS_BOOTSTRAP_DOC
       if type(doc) == "string" and doc ~= "" then env_dirs[#env_dirs + 1] = vim.fs.dirname(doc) end
