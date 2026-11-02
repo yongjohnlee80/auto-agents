@@ -169,6 +169,56 @@ function M.argv_for_kind(kind, dirs, cmd)
   return strategy(dirs or {}, cmd)
 end
 
+---OpenCode takes no `--add-dir`: a read outside its folder asks "Access external directory …" and
+---nothing answers it at spawn (N4). Its own config grants it instead: OPENCODE_CONFIG_CONTENT's
+---`permission.external_directory`, a rule `<dir>/**` = "allow" per dir (OpenCode asks for
+---`<parent>/*` and its `*` spans folders). The agent's own rules are kept; a single action for
+---every directory ("ask") stays that action for the rest (`*`); a permission or external_directory
+---that is neither an action nor an object is the user's, left untouched.
+---@param content string|nil the OPENCODE_CONFIG_CONTENT the agent's env sets, if any
+---@param dirs string[]
+---@return string|nil content the new value; nil when nothing is to change
+---@return string|nil why when content isn't a JSON object
+local function opencode_content(content, dirs)
+  local rules = {}
+  for _, d in ipairs(dirs) do
+    if type(d) == "string" and d ~= "" then rules[#rules + 1] = d:gsub("/+$", "") .. "/**" end
+  end
+  if #rules == 0 then return nil end
+  local cfg = {}
+  if type(content) == "string" and content ~= "" then
+    local ok, v = pcall(vim.json.decode, content, { luanil = { object = true, array = true } })
+    if not ok or type(v) ~= "table" or vim.islist(v) and next(v) ~= nil then
+      return nil, "OPENCODE_CONFIG_CONTENT is not a JSON object"
+    end
+    cfg = v
+  end
+  local perm = cfg.permission
+  if perm ~= nil and type(perm) ~= "table" then return nil end
+  perm = perm or {}
+  local ext = perm.external_directory
+  if type(ext) == "string" then ext = { ["*"] = ext } end
+  if ext ~= nil and type(ext) ~= "table" then return nil end
+  ext = ext or {}
+  for _, r in ipairs(rules) do ext[r] = "allow" end
+  perm.external_directory, cfg.permission = ext, perm
+  return vim.json.encode(cfg)
+end
+
+---Return the environment the agent kind needs to pre-grant access to the listed directories,
+---as variable → value: for OpenCode, its OPENCODE_CONFIG_CONTENT with the dirs allowed
+---(opencode_content); for every other kind, which grants by argv (argv_for_kind), nothing.
+---@param kind string|nil
+---@param dirs string[]|nil
+---@param env table<string, string>|nil the agent's env so far
+---@return table<string, string>
+---@return string|nil why when the kind's grant could not be made
+function M.env_for_kind(kind, dirs, env)
+  if kind ~= "opencode" then return {} end
+  local v, why = opencode_content((env or {}).OPENCODE_CONFIG_CONTENT, dirs or {})
+  return v and { OPENCODE_CONFIG_CONTENT = v } or {}, why
+end
+
 ---Returns true when the kind has a registered permission
 ---strategy. Useful for logging / health checks.
 ---@param kind string|nil

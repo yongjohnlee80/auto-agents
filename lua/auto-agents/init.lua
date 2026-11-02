@@ -689,6 +689,16 @@ local function build_agent_env(spec, cwd)
       end
       if #dirs == 0 then return end
       local perms = require("auto-agents.permissions")
+      -- OpenCode grants by its config, and asks for every folder it reads outside its own: the
+      -- template folder the spawn's ingest gate reads (the todos bootstrap doc) too (N4)
+      local env_dirs = vim.list_slice(dirs)
+      local doc = env.AUTO_AGENTS_TODOS_BOOTSTRAP_DOC
+      if type(doc) == "string" and doc ~= "" then env_dirs[#env_dirs + 1] = vim.fs.dirname(doc) end
+      local grant_env, gwhy = perms.env_for_kind(spec.kind, env_dirs, env)
+      for k, v in pairs(grant_env) do env[k] = v end
+      if gwhy then
+        require("auto-agents.log").warn("spawn", spec.name .. "'s directory grant was not made: " .. gwhy)
+      end
       local extra_argv = perms.argv_for_kind(spec.kind, dirs, spec.cmd)
       if #extra_argv > 0 and type(spec.cmd) == "table" then
         spec.cmd = vim.list_slice(spec.cmd)
