@@ -147,16 +147,10 @@ local function handle_say(args, _ctx)
   }
 end
 
----`diff_queue` handler. Enqueue a diff into the unified diff
----queue UI. The synchronous response (auto-core executor path) acks
----the enqueue with `{ ok = true, value = { id, agent_name, ... } }`
----and lands in the sender's `responses/<correlation_id>.json`. The
----user's accept/reject verdict is delivered as a SECOND, follow-up
----message (`kind="message"`, same `correlation_id`) into the
----sender's `inbox/` when the panel resolves — the agent correlates
----via `correlation_id` and reads the verdict from `args.verdict`
----("accepted" / "rejected") plus `args.comment`. Wake fires for the
----inbox arrival via auto-core's router.
+---`diff_queue` handler. Enqueue a diff into the unified diff queue UI. The answer acks the enqueue
+---with `{ id, agent_name, ... }`. The user's accept/reject verdict follows as crew mail to the agent
+---that queued it (the editor socket's caller, ctx.sender), subject "diff verdict (accepted|rejected)
+---for <tab>", its body naming the call's correlation id.
 ---
 ---For the blocking-coroutine flow used by Claude / Codex (the MCP
 ---websocket bridge) see `lua/auto-agents/mcp/ws-server/tools/open_diff.lua`.
@@ -176,33 +170,15 @@ local function handle_diff_queue(args, ctx)
 
   -- Resolve the agent name in priority order:
   --   1. `args.agent_name` — explicit override (caller knows best).
-  --   2. `ctx.sender_bare` — the sender's bare mailbox id, surfaced
-  --      by auto-core v0.1.11+ on the executor-path ctx (auto-core
-  --      ADR §D3). Strip the `agent:` prefix to get the agent name.
-  --      This is the CORRECT field for "who sent this command" —
-  --      `ctx.mailbox` is the EXECUTOR (always `nvim`).
-  --   3. `ctx.mailbox` — legacy fallback for older auto-core that
-  --      doesn't ship ctx.sender_bare. Will incorrectly resolve to
-  --      `nvim` but the resolver below will reject it later via the
-  --      bootstrap scan.
-  --   4. `resolve_diff_agent_name` — last-resort bootstrap scan;
-  --      only resolves when exactly one bootstrap entry has
-  --      `diff_review = true`.
-  --   5. `"?"` literal — the panel maps this to `[unattributed]`.
+  --   2. `ctx.sender_bare` — the caller, as the editor socket names it (its token's agent).
+  --   3. `resolve_diff_agent_name` — last-resort bootstrap scan; only resolves when exactly one
+  --      bootstrap entry has `diff_review = true`.
+  --   4. `"?"` literal — the panel maps this to `[unattributed]`.
   local agent_name = args.agent_name
   if type(agent_name) ~= "string" or agent_name == "" then
     local sender_bare = ctx and ctx.sender_bare or nil
     if type(sender_bare) == "string" and sender_bare ~= "" then
       agent_name = sender_bare:match("^agent:(.+)$") or sender_bare
-    else
-      -- Legacy fallback (pre-0.1.11 auto-core). ctx.mailbox is the
-      -- executor (`nvim`), so the agent: match will fail and we'll
-      -- end up with the literal "nvim" — which then falls through
-      -- to the bootstrap resolver below.
-      local from = ctx and ctx.mailbox or nil
-      if type(from) == "string" then
-        agent_name = from:match("^agent:(.+)$") or from
-      end
     end
   end
   local aa = require("auto-agents")
@@ -219,17 +195,13 @@ local function handle_diff_queue(args, ctx)
     f:close()
   end
 
-  -- Stash the originator's full mailbox id + the command's
-  -- correlation_id so `queue.resolve` / `queue.reject` can emit a
-  -- follow-up `kind="message"` verdict back via the standard router
-  -- when the user accepts / rejects in the panel. ctx.sender lands
-  -- on the executor path via auto-core v0.1.12+; ctx.correlation_id
-  -- lands via v0.1.23+. Both are nil-tolerant — without them the
-  -- queue entry is fire-and-forget (legacy behavior).
-  local originator_mailbox_id
+  -- The agent that queued it (the editor socket's caller) and the call's correlation id, so
+  -- `queue.resolve` / `queue.reject` can send it the verdict as crew mail. Without them the entry
+  -- is fire-and-forget.
+  local originator
   do
     local s = ctx and ctx.sender or nil
-    if type(s) == "string" and s ~= "" then originator_mailbox_id = s end
+    if type(s) == "string" and s ~= "" then originator = s end
   end
   local correlation_id
   do
@@ -244,12 +216,11 @@ local function handle_diff_queue(args, ctx)
     old_contents          = old_contents,
     new_contents          = args.new_file_contents,
     tab_name              = args.tab_name,
-    originator_mailbox_id = originator_mailbox_id,
+    originator            = originator,
     correlation_id        = correlation_id,
-    -- The mailbox-routed verdict goes through `emit_verdict` in
-    -- queue.lua (best-effort outbound message); the coroutine
-    -- callback here stays a no-op because no MCP coroutine is
-    -- blocked on this entry.
+    -- The verdict goes through `emit_verdict` in queue.lua (best-effort
+    -- crew mail); the coroutine callback here stays a no-op because no
+    -- MCP coroutine is blocked on this entry.
     callback              = function(_) end,
   })
 
@@ -259,13 +230,9 @@ local function handle_diff_queue(args, ctx)
     if ui_ok and type(diff_ui.open) == "function" then diff_ui.open() end
   end)
 
-  -- `blocking=false` is the executor-path contract — this command's
-  -- own response lands immediately. `verdict_follow_up` advertises
-  -- that a SECOND mailbox arrival (kind="message", same
-  -- correlation_id) will appear in the sender's inbox/ when the user
-  -- accepts/rejects, IF we captured the originator on enqueue.
-  -- Agents that want the verdict should keep listening for new
-  -- inbox arrivals carrying this correlation_id.
+  -- The answer is the enqueue's ack. `verdict_follow_up` says the user's verdict will follow as
+  -- crew mail (subject "diff verdict (…) for <tab>", the correlation id in its body), which needs
+  -- the agent that queued it.
   return {
     ok = true,
     value = {
@@ -274,15 +241,12 @@ local function handle_diff_queue(args, ctx)
       file_path         = args.old_file_path,
       tab_name          = args.tab_name,
       blocking          = false,
-      verdict_follow_up = originator_mailbox_id ~= nil
-                            and correlation_id ~= nil,
+      verdict_follow_up = originator ~= nil,
       correlation_id    = correlation_id,
-      note              = "Initial response is the enqueue ack. When the user "
-                          .. "accepts/rejects in the panel, a kind=\"message\" "
-                          .. "with this correlation_id lands in your inbox/ "
-                          .. "carrying args.verdict (\"accepted\"|\"rejected\") "
-                          .. "+ args.comment. Use the MCP openDiff transport "
-                          .. "instead if you need a blocking coroutine.",
+      note              = "This answer acks the enqueue. When the user accepts or rejects it in the "
+                          .. "panel, the verdict comes as crew mail: subject \"diff verdict (accepted|"
+                          .. "rejected) for <tab>\", this correlation id in its body. Use the MCP "
+                          .. "openDiff transport instead if you need a blocking call.",
     },
   }
 end

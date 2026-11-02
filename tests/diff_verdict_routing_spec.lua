@@ -1,35 +1,21 @@
--- Regression test for v0.2.19: diff_queue verdict routing back to
--- the mailbox originator.
+-- diff_queue's verdict goes back to the agent that queued the diff, as crew mail (auto-agents
+-- v0.4.0: no file mailbox).
 --
 -- Run with:
---   nvim --headless -u NONE -l tests/diff_verdict_routing_spec.lua
+--   AUTO_CORE_ROOT=<auto-core with auto-core.commands> nvim --headless -u NONE -l tests/diff_verdict_routing_spec.lua
 --
--- Covers the response-path half of the diff-feedback-routing-to-
--- gemini-juliet todo. Pre-patch the mailbox `diff_queue` command was
--- fire-and-forget — the originating agent received an enqueue ack
--- but never learned whether the user accepted or rejected.
---
--- Post-patch:
---   1. `handle_diff_queue` reads `ctx.sender` + `ctx.correlation_id`
---      and stashes both on the queue entry.
---   2. `queue.resolve(id, ...)` / `queue.reject(id, ...)` call
---      `emit_verdict` which `transport.send`s a kind="message"
---      envelope back to the originator with the same correlation_id.
---
--- The spec asserts:
---   [1] The queue entry carries originator + correlation_id when
---       dispatched with both ctx fields.
---   [2] Resolve emits a transport.send with verdict="accepted" and
---       the original correlation_id.
---   [3] Reject (with reason) emits verdict="rejected" + comment.
---   [4] Reject without reason still emits a verdict.
---   [5] Entries without originator_mailbox_id (e.g. MCP openDiff
---       path) do NOT trigger transport.send — fire-and-forget
---       semantics preserved for that path.
---   [6] The handler's response advertises `verdict_follow_up = true`
---       + `correlation_id` when capture succeeded.
+-- The verb is dispatched as the editor socket does: the handler registered on auto-core.commands,
+-- with the caller as ctx.sender. The crew send (auto-agents.crew.crew_send) and auto-core's daemon
+-- runner are stubbed, so each verdict's send is recorded.
+--   [1] the queue entry carries the originator (the caller) and the call's correlation id
+--   [2] resolve sends one verdict: to the agent by name, as a message, keyed by this Neovim's
+--       instance and the entry, its subject naming the verdict, its body the correlation id
+--   [3] reject with a reason: rejected, the reason in the body
+--   [4] reject without a reason still sends a verdict
+--   [5] an entry with no originator (the MCP openDiff path) sends nothing
+--   [6] the answer says a verdict follows only when the caller is known
+--   [7] a send that fails (no scope held) is logged, never raised
 
--- Resolve project roots — same idiom as the other specs.
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
@@ -38,23 +24,14 @@ local core_root = vim.env.AUTO_CORE_ROOT or (plugins_root .. "/auto-core.nvim/ma
 if not vim.env.AUTO_CORE_ROOT and vim.fn.isdirectory(core_root) == 0 then
   core_root = plugins_root .. "/auto-core.nvim"
 end
-
-local LAZY = vim.fn.expand("~/.local/share/nvim/lazy")
-for _, p in ipairs({
-  project_root,
-  core_root,
-  LAZY .. "/plenary.nvim",
-}) do
-  if vim.fn.isdirectory(p) == 1 then
-    vim.opt.runtimepath:prepend(p)
-  end
+for _, p in ipairs({ project_root, core_root }) do
+  if vim.fn.isdirectory(p) == 1 then vim.opt.runtimepath:prepend(p) end
 end
 
 vim.o.swapfile = false
 vim.o.hidden = true
 
-local fail_count = 0
-local pass_count = 0
+local fail_count, pass_count = 0, 0
 local function ok(name, cond, detail)
   if cond then
     pass_count = pass_count + 1
@@ -64,42 +41,39 @@ local function ok(name, cond, detail)
     print(string.format("  FAIL  %s  %s", name, tostring(detail or "")))
   end
 end
-
 local function eq(name, got, want)
   ok(name, got == want, string.format("got=%q want=%q", tostring(got), tostring(want)))
 end
 
-local mailbox = require("auto-core").mailbox
-local queue   = require("auto-agents.diff.queue")
-require("auto-agents.mailbox.commands").register_all()
-
--- ── transport.send capture ──────────────────────────────────────
--- Monkey-patch transport.send so the spec can assert outbound
--- mailbox traffic without spinning up the file-watching router.
--- Restored at end-of-spec.
-local transport = require("auto-core.mailbox.transport")
-local original_send = transport.send
-local sent = {}
-transport.send = function(opts)
-  sent[#sent + 1] = opts
-  return { id = "fake-send-id", path = "/tmp/fake", message = opts, correlation_id = opts.correlation_id }, nil
+-- ── stubs: the crew send, the daemon runner, this Neovim's instance ──────────
+local sent, answer = {}, true
+local crew = require("auto-agents.crew")
+local real_crew_send = crew.crew_send
+crew.crew_send = function(name, key, msg)
+  sent[#sent + 1] = { name = name, key = key, msg = msg }
+  return answer
 end
+package.loaded["auto-core.todo.daemon"] = { run = function(fn, done)
+  local res = { pcall(fn) }
+  done(res[1], res[2])
+end }
+package.loaded["auto-core.instance"] = { id = function() return "1779105000-12345" end }
+local warned = {}
+local log = require("auto-agents.log")
+local real_warn = log.warn
+log.warn = function(scope, msg) warned[#warned + 1] = scope .. ": " .. msg end
+
+local queue = require("auto-agents.diff.queue")
+require("auto-agents.commands").register_all()
+local spec = require("auto-core.commands").get("diff_queue")
 
 local function reset_state()
   queue.clear()
-  sent = {}
+  sent, warned, answer = {}, {}, true
 end
 
 local function dispatch(args, ctx)
-  return mailbox.commands.handle_message({
-    id             = "diff-cmd-" .. tostring(vim.uv.hrtime()),
-    kind           = "command",
-    from           = (ctx and ctx.sender) or "agent:juliet",
-    to             = "nvim",
-    command        = "diff_queue",
-    args           = args,
-    correlation_id = ctx and ctx.correlation_id or nil,
-  }, ctx)
+  return spec.handler(args, ctx or {})
 end
 
 local function diff_args(name)
@@ -111,126 +85,91 @@ local function diff_args(name)
   }
 end
 
--- ── [1] Queue entry carries originator + correlation_id ────────
-print("\n[1] handle_diff_queue stashes ctx.sender + ctx.correlation_id")
-reset_state()
-local r1 = dispatch(diff_args("a.md"), {
-  mailbox        = "nvim",
-  sender         = "agent:juliet:1779105000-12345",
-  sender_bare    = "agent:juliet",
-  correlation_id = "cor-juliet-A",
-})
-ok("response ok", type(r1) == "table" and r1.ok == true)
-ok("response advertises verdict_follow_up",
-   r1.value and r1.value.verdict_follow_up == true,
-   "value.verdict_follow_up=" .. tostring(r1.value and r1.value.verdict_follow_up))
-eq("response echoes correlation_id",
-   r1.value and r1.value.correlation_id, "cor-juliet-A")
+local function juliet(cor)
+  return { sender = "agent:juliet", sender_bare = "agent:juliet", correlation_id = cor, via = "editor" }
+end
 
+ok("diff_queue is on auto-core.commands", spec ~= nil and type(spec.handler) == "function")
+
+-- ── [1] the entry carries the originator ─────────────────────────────────────
+print("\n[1] the entry carries the caller and the correlation id")
+reset_state()
+local r1 = dispatch(diff_args("a.md"), juliet("editor:11"))
+ok("answer ok", type(r1) == "table" and r1.ok == true, vim.inspect(r1))
+ok("the answer says a verdict follows", r1.value and r1.value.verdict_follow_up == true)
+eq("the answer echoes the correlation id", r1.value and r1.value.correlation_id, "editor:11")
 local pending = queue.get_pending()
 ok("one entry enqueued", #pending == 1)
-eq("entry.originator_mailbox_id captured",
-   pending[1] and pending[1].originator_mailbox_id,
-   "agent:juliet:1779105000-12345")
-eq("entry.correlation_id captured",
-   pending[1] and pending[1].correlation_id, "cor-juliet-A")
+eq("entry.originator is the caller", pending[1] and pending[1].originator, "agent:juliet")
+eq("entry.correlation_id kept", pending[1] and pending[1].correlation_id, "editor:11")
 
--- ── [2] Resolve emits accepted verdict ─────────────────────────
-print("\n[2] queue.resolve emits transport.send(verdict=accepted)")
+-- ── [2] resolve sends the accepted verdict ───────────────────────────────────
+print("\n[2] resolve sends one accepted verdict, as crew mail")
 reset_state()
-dispatch(diff_args("b.md"), {
-  mailbox        = "nvim",
-  sender         = "agent:juliet:1779105000-12345",
-  sender_bare    = "agent:juliet",
-  correlation_id = "cor-juliet-B",
-})
+dispatch(diff_args("b.md"), juliet("editor:12"))
 local id_b = queue.get_pending()[1].id
 queue.resolve(id_b, "final body contents")
-ok("transport.send was called exactly once", #sent == 1,
-   "got " .. tostring(#sent) .. " sends")
-local sent_msg = sent[1] or {}
-eq("from = nvim", sent_msg.from, "nvim")
-eq("to = originator full id", sent_msg.to, "agent:juliet:1779105000-12345")
-eq("kind = message", sent_msg.kind, "message")
-eq("correlation_id replayed", sent_msg.correlation_id, "cor-juliet-B")
-eq("args.verdict = accepted",
-   sent_msg.args and sent_msg.args.verdict, "accepted")
-eq("args.comment empty on accept",
-   sent_msg.args and sent_msg.args.comment, "")
-eq("args.file_path forwarded",
-   sent_msg.args and sent_msg.args.file_path, "/tmp/b.md")
-eq("args.tab_name forwarded",
-   sent_msg.args and sent_msg.args.tab_name, "✻ [gemini] b.md ⧉")
-ok("subject mentions verdict",
-   sent_msg.subject and sent_msg.subject:find("accepted", 1, true) ~= nil,
-   "subject=" .. tostring(sent_msg.subject))
+ok("one send", #sent == 1, "got " .. tostring(#sent))
+local s = sent[1] or { msg = {} }
+eq("to the agent, by name", s.name, "juliet")
+eq("a message", s.msg.kind, "message")
+eq("keyed by this Neovim's instance and the entry", s.key, "diff-verdict-1779105000-12345-" .. id_b)
+ok("the subject names the verdict and the tab", s.msg.subject == "diff verdict (accepted) for ✻ [gemini] b.md ⧉",
+  tostring(s.msg.subject))
+ok("the body says accepted and names the correlation id", s.msg.body
+  and s.msg.body:find("Diff accepted for", 1, true) == 1 and s.msg.body:find("(correlation editor:12)", 1, true) ~= nil,
+  tostring(s.msg.body))
 
--- ── [3] Reject (with reason) emits rejected verdict + comment ──
-print("\n[3] queue.reject(id, reason) emits transport.send(verdict=rejected)")
+-- ── [3] reject with a reason ─────────────────────────────────────────────────
+print("\n[3] reject with a reason sends rejected, the reason in the body")
 reset_state()
-dispatch(diff_args("c.md"), {
-  mailbox        = "nvim",
-  sender         = "agent:juliet:1779105000-12345",
-  sender_bare    = "agent:juliet",
-  correlation_id = "cor-juliet-C",
-})
+dispatch(diff_args("c.md"), juliet("editor:13"))
 local id_c = queue.get_pending()[1].id
 queue.reject(id_c, "rename the function before we ship")
-ok("transport.send was called", #sent == 1)
-local rej = sent[1] or {}
-eq("args.verdict = rejected", rej.args and rej.args.verdict, "rejected")
-eq("args.comment carries the reason verbatim",
-   rej.args and rej.args.comment, "rename the function before we ship")
-eq("correlation_id replayed", rej.correlation_id, "cor-juliet-C")
+ok("one send", #sent == 1)
+local rej = (sent[1] or { msg = {} }).msg
+ok("the subject says rejected", rej.subject and rej.subject:find("(rejected)", 1, true) ~= nil, tostring(rej.subject))
+ok("the reason is in the body, verbatim", rej.body and rej.body:find(": rename the function before we ship", 1, true) ~= nil,
+  tostring(rej.body))
 
--- ── [4] Reject without reason still emits a verdict ─────────────
-print("\n[4] queue.reject(id) (no reason) still emits a verdict")
+-- ── [4] reject without a reason ──────────────────────────────────────────────
+print("\n[4] reject without a reason still sends a verdict")
 reset_state()
-dispatch(diff_args("d.md"), {
-  mailbox        = "nvim",
-  sender         = "agent:juliet:1779105000-12345",
-  sender_bare    = "agent:juliet",
-  correlation_id = "cor-juliet-D",
-})
-local id_d = queue.get_pending()[1].id
-queue.reject(id_d, nil)
-ok("transport.send was called for reasonless reject", #sent == 1)
-eq("verdict still rejected", sent[1] and sent[1].args and sent[1].args.verdict, "rejected")
+dispatch(diff_args("d.md"), juliet("editor:14"))
+queue.reject(queue.get_pending()[1].id, nil)
+ok("one send", #sent == 1)
+ok("rejected", sent[1] and sent[1].msg.subject:find("(rejected)", 1, true) ~= nil)
 
--- ── [5] No originator → no verdict emission (MCP path) ──────────
-print("\n[5] entries without originator_mailbox_id stay fire-and-forget")
+-- ── [5] no originator: nothing sent ──────────────────────────────────────────
+print("\n[5] an entry with no originator (MCP openDiff) sends nothing")
 reset_state()
--- Direct enqueue without going through handle_diff_queue — emulates
--- the MCP openDiff path where the coroutine callback is the reply
--- channel.
 local mcp_id = queue.enqueue({
-  agent_name   = "jarvis",
-  file_path    = "/tmp/e.md",
-  old_contents = "",
-  new_contents = "x",
-  callback     = function(_) end,
-  -- originator_mailbox_id + correlation_id intentionally omitted.
+  agent_name = "jarvis", file_path = "/tmp/e.md", old_contents = "", new_contents = "x",
+  callback = function(_) end,
 })
 queue.resolve(mcp_id, "accepted")
-ok("transport.send NOT called for MCP-style entry", #sent == 0,
-   "got " .. tostring(#sent) .. " sends")
+ok("no send", #sent == 0, "got " .. tostring(#sent))
 
--- ── [6] Missing ctx.correlation_id → no follow-up flag ─────────
-print("\n[6] handler's response signals no follow-up when ctx lacks correlation_id")
+-- ── [6] the follow-up flag ───────────────────────────────────────────────────
+print("\n[6] the answer says a verdict follows only when the caller is known")
 reset_state()
-local r6 = dispatch(diff_args("f.md"), {
-  mailbox     = "nvim",
-  sender      = "agent:juliet:1779105000-12345",
-  sender_bare = "agent:juliet",
-  -- correlation_id intentionally omitted (legacy auto-core <v0.1.23).
-})
-ok("response ok", type(r6) == "table" and r6.ok == true)
-ok("verdict_follow_up is false (no correlation)",
-   r6.value and r6.value.verdict_follow_up == false,
-   "value.verdict_follow_up=" .. tostring(r6.value and r6.value.verdict_follow_up))
+local r6 = dispatch(diff_args("f.md"), { sender_bare = nil })
+ok("no caller: no follow-up", r6.value and r6.value.verdict_follow_up == false)
+local r6b = dispatch(diff_args("g.md"), { sender = "agent:juliet", sender_bare = "agent:juliet" })
+ok("a caller with no correlation id: a follow-up still", r6b.value and r6b.value.verdict_follow_up == true)
 
--- ── Cleanup ────────────────────────────────────────────────────
-transport.send = original_send
+-- ── [7] a failed send is logged ──────────────────────────────────────────────
+print("\n[7] a send that fails is logged, never raised")
+reset_state()
+answer = nil -- no crew scope held
+dispatch(diff_args("h.md"), juliet("editor:17"))
+local ok_resolve = pcall(queue.resolve, queue.get_pending()[1].id, "x")
+ok("resolve doesn't raise", ok_resolve)
+ok("one warning naming the agent", #warned == 1 and warned[1]:find("juliet", 1, true) ~= nil, vim.inspect(warned))
+
+-- ── cleanup ──────────────────────────────────────────────────────────────────
+crew.crew_send = real_crew_send
+log.warn = real_warn
 queue.clear()
 
 print()

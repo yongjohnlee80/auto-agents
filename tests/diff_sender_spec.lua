@@ -1,25 +1,16 @@
--- Regression test for ADR 0011 Patch 4.
+-- Regression test for ADR 0011 Patch 4: who a queued diff is from.
 -- Run with:
---   nvim --headless -u NONE -l tests/diff_mailbox_sender_spec.lua
+--   AUTO_CORE_ROOT=<auto-core with auto-core.commands> nvim --headless -u NONE -l tests/diff_sender_spec.lua
 --
--- Covers the mailbox `diff_queue` command handler's attribution
--- chain. Pre-patch, the handler derived agent_name from
--- `ctx.mailbox`, which auto-core's executor path populates with
--- the EXECUTOR's mailbox (`nvim`), not the SENDER's. Every
--- mailbox-routed diff therefore landed in the panel labelled
--- `[nvim]` instead of the actual sender.
+-- The `diff_queue` verb's handler (on auto-core.commands, as the editor socket calls it) names the
+-- diff's agent from, in order: an explicit `args.agent_name`, then `ctx.sender_bare` (the editor
+-- socket's caller), then the bootstrap resolver, then "?". It used to read `ctx.mailbox`, the
+-- executor (`nvim`), so every mailbox-routed diff was labelled `[nvim]`:
 --
--- Post-patch the handler prefers `ctx.sender_bare` (added in
--- auto-core v0.1.11) before falling back to the legacy
--- `ctx.mailbox` path. This spec exercises:
---
---   * explicit `args.agent_name` wins (existing override).
---   * ctx.sender_bare → parsed `agent:<name>` produces the right
---     agent_name in the enqueued entry.
---   * ctx.sender_bare absent + ctx.mailbox = nvim → falls through
---     to the bootstrap resolver (which returns nil when ambiguous,
---     leaving "nvim" or "?" — at least not silently
---     mis-attributing).
+--   * explicit `args.agent_name` wins.
+--   * ctx.sender_bare → parsed `agent:<name>` is the agent_name.
+--   * a ctx.sender_bare without `agent:` is kept verbatim.
+--   * no caller → never "nvim": the resolver's answer, or "?".
 
 -- Resolve project roots — same idiom as the other specs.
 local script_path = debug.getinfo(1).source:sub(2)
@@ -61,22 +52,14 @@ local function eq(name, got, want)
   ok(name, got == want, string.format("got=%q want=%q", tostring(got), tostring(want)))
 end
 
--- Helper: invoke the mailbox commands module's `diff_queue` handler
--- directly. The handler lives inside the SPECS table — we register
--- it through `mailbox.commands` and invoke via `handle_message`.
-local mailbox = require("auto-core").mailbox
+-- Helper: invoke the `diff_queue` verb's handler, registered on auto-core.commands, as the editor
+-- socket does.
 local queue   = require("auto-agents.diff.queue")
-require("auto-agents.mailbox.commands").register_all()
+require("auto-agents.commands").register_all()
+local spec = require("auto-core.commands").get("diff_queue")
 
 local function dispatch(args, ctx)
-  return mailbox.commands.handle_message({
-    id      = "test-" .. tostring(vim.uv.hrtime()),
-    kind    = "command",
-    from    = ctx and (ctx.sender or "agent:test") or "agent:test",
-    to      = "nvim",
-    command = "diff_queue",
-    args    = args,
-  }, ctx)
+  return spec.handler(args, ctx or {})
 end
 
 local function make_args(name)
@@ -94,7 +77,6 @@ queue.clear()
 local args1 = make_args("a.md")
 args1.agent_name = "explicit-override"
 local r1 = dispatch(args1, {
-  mailbox     = "nvim",
   sender_bare = "agent:jarvis",
 })
 ok("response is ok",  type(r1) == "table" and r1.ok == true)
@@ -108,46 +90,37 @@ eq("explicit args.agent_name kept verbatim",
 print("\n[2] ctx.sender_bare → agent_name (the Patch 4 headline fix)")
 queue.clear()
 local r2 = dispatch(make_args("b.md"), {
-  mailbox     = "nvim",         -- executor — pre-fix this is what the handler used
-  sender_bare = "agent:jarvis", -- sender — the field Patch 4 added
+  sender_bare = "agent:jarvis", -- the caller
 })
 ok("response is ok", type(r2) == "table" and r2.ok == true)
 
 pending = queue.get_pending()
 ok("one entry enqueued", #pending == 1)
-eq("agent_name derived from ctx.sender_bare, not ctx.mailbox",
+eq("agent_name derived from ctx.sender_bare",
    pending[1] and pending[1].agent_name, "jarvis")
 
 -- ── [3] ctx.sender_bare without `agent:` prefix passes through ───
 print("\n[3] ctx.sender_bare without `agent:` prefix kept verbatim")
 queue.clear()
 local r3 = dispatch(make_args("c.md"), {
-  mailbox     = "nvim",
-  sender_bare = "user",   -- e.g. messages from the virtual `user` mailbox
+  sender_bare = "user",
 })
 ok("response is ok", type(r3) == "table" and r3.ok == true)
 pending = queue.get_pending()
 eq("non-`agent:` sender_bare is kept verbatim",
    pending[1] and pending[1].agent_name, "user")
 
--- ── [4] Legacy fallback — no sender_bare, ctx.mailbox is nvim ────
-print("\n[4] legacy fallback (no sender_bare) — agent_name doesn't silently become \"nvim\"")
+-- ── [4] No caller: never "nvim" ──────────────────────────────────
+print("\n[4] no caller: the resolver's answer or \"?\", never \"nvim\"")
 queue.clear()
-local r4 = dispatch(make_args("d.md"), {
-  mailbox     = "nvim",  -- pre-0.1.11 auto-core only surfaces this
-  -- sender_bare omitted → simulates older auto-core
-})
+local r4 = dispatch(make_args("d.md"), {})
 ok("response is ok", type(r4) == "table" and r4.ok == true)
 pending = queue.get_pending()
-
--- With no diff_review agent in the bootstrap (this spec runs without
--- a configured agent roster), the resolver returns nil and the handler
--- falls through to "nvim" — at least we don't crash, and the
--- panel's display predicate maps "nvim" to itself (it's a valid name
--- string). The bug avoidance is in case [2] above; this case
--- documents the legacy behavior.
-ok("entry enqueued with legacy fallback value",
-   pending[1] ~= nil and type(pending[1].agent_name) == "string")
+-- With no diff_review agent in the bootstrap (this spec runs without a configured roster), the
+-- resolver finds no one and the handler answers "?", which the panel shows as [unattributed].
+ok("entry enqueued, attributed to no one rather than the executor",
+   pending[1] ~= nil and type(pending[1].agent_name) == "string" and pending[1].agent_name ~= "nvim",
+   pending[1] and pending[1].agent_name)
 
 -- ── Cleanup ──────────────────────────────────────────────────────
 queue.clear()
