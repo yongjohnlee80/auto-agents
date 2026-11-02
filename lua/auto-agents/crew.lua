@@ -1224,7 +1224,10 @@ end
 
 ---crew_send is the todo notifier's crew hook (auto-core notifier.set_crew_recipient, ADR 1793489028
 ---§4.7): it sends an assignment to name through AutoDoc's crew, as the user, under this Neovim's
----claim (inbox.send with fire), keyed by the notifier's message id mid, so a repeat is the same send.
+---claim (inbox.send, never rung), keyed by the notifier's message id mid, so a repeat is the same send.
+---Unrung, the daemon queues it and wakes the agent as for any mail (a stopped one gets its host's
+---fallback); rung, a send no wake reaches right then was refused for certain, and the notifier filed
+---it in the file inbox instead.
 ---It is the one sender of an assignment Neovim sees: this Neovim's todos.assign, and one no surface
 ---sends (a bare `autodoc --call todos.add`). The notifier asks it only for an assignment of this
 ---scope, of no scope, or of this instance. A scoped one is sent by the bare name, which the daemon
@@ -1232,7 +1235,7 @@ end
 ---Neovim resolves a bare name in its own scope first, so the first to send would pick the recipient:
 ---it is sent only when crew.list shows exactly one live profile of that name, to name@scope, and
 ---is otherwise not sent (false). Runs inside the notifier's daemon.run. Answers:
----  - true: rang, or handed over (the recipient's host carries it as a fallback job);
+---  - true: sent (queued for the recipient, woken as any mail), or handed over;
 ---  - false: refused for certain (no such agent, ambiguous, unreachable, a reused key, a stale
 ---    epoch, an older daemon): the notifier files its file notice;
 ---  - "retry": any other answer, its outcome unknown: the notifier asks again with the same mid;
@@ -1263,7 +1266,7 @@ function M.crew_send(name, mid, msg, how)
     if #found ~= 1 then return false end -- none, or two projects' agents: the no-notice rule stands
     to = name .. "@" .. found[1]
   end
-  local _, err = st.rpc("inbox.send", { scope, st.run, epoch, { to }, msg.body, mid, msg.kind, msg.subject, true })
+  local _, err = st.rpc("inbox.send", { scope, st.run, epoch, { to }, msg.body, mid, msg.kind, msg.subject, false })
   if err == nil then return true end
   local c = code(err)
   if c == M.CODE_HANDED_OVER then return true end
