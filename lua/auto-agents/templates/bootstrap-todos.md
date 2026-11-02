@@ -1,15 +1,16 @@
 ---
-revision: 8
+revision: 9
 title: auto-agents todos command surface — bootstrap guide
 ---
 
 # auto-agents todos command surface
 
 This document is the canonical agent-facing reference for the
-`todos.*` mailbox command verbs registered by
-**auto-agents v0.2.37+**. The verbs expose the per-project task
-store (ADR-0031) to peer agents without granting raw filesystem
-write access to the workspace's `.todo-list/` directory.
+`todos.*` command verbs auto-agents serves from Neovim. The verbs
+expose the per-project task store (ADR-0031) to the agents Neovim
+started, through Neovim's editor socket (`autodoc --editor`, from
+**auto-agents v0.4.0**: the file mailbox they were sent through
+before is gone).
 
 **AutoDoc owns the store** (ADR 1791532020): its daemon holds the
 task format, the rules and every write. From **auto-agents v0.3.6**
@@ -19,9 +20,10 @@ the daemon has. Without AutoDoc every verb answers
 fallback. The same verbs are on the daemon directly:
 `autodoc --call todos.<verb>`, described by `autodoc --contracts 'todos.*'`.
 
-The verbs share the `todos.` namespace prefix so they appear
-together in `commands_list` output, distinct from the existing
-`wake` / `say` / `addressbook` / `diff_queue` etc. surface.
+Call them here rather than on the daemon: `todos.assign` (and an
+`add` with an assignee) made here carries this project's scope, so
+its recipient is told; a raw daemon `todos.assign` without one
+reaches no one.
 
 ---
 
@@ -42,8 +44,8 @@ together in `commands_list` output, distinct from the existing
 | `todos.refresh`   | AutoDoc reconciles the active buckets (placement, errors[], 28-day archive) |
 | `todos.set_dir`   | Point this workspace at a different, existing `.todo-list/`            |
 
-These twelve are the whole surface. A call to a removed verb is
-rejected with `code = "unknown_command"`:
+These twelve are the whole surface. A removed verb is not on the
+editor socket (method not found):
 
 - `todos.fire` and `todos.automation_set` went with automation (the
   `automated` status, `condition` / `execute`, firing): ADR 1791532020
@@ -55,30 +57,26 @@ rejected with `code = "unknown_command"`:
 
 ## Calling convention
 
-All verbs are mailbox `kind="command"` messages. Example invocation:
+Every verb is a call on Neovim's editor socket, its arguments one
+object (`autodoc --editor` passes your `$AUTODOC_EDITOR_TOKEN` first
+itself). It needs the `todos` grant, which every agent has unless its
+roster entry's `editor_grants` leaves it out:
 
-```jsonc
-{
-  "kind": "command",
-  "command": "todos.add",
-  "args": {
-    "title": "Fix the kb-token-cost audit feedback",
-    "priority": "high",
-    "due": "2026-06-15",
-    "tags": ["audit", "kb"]
-  }
-}
+```sh
+autodoc --editor todos.add '[{"title": "Fix the kb-token-cost audit feedback",
+  "priority": "high", "due": "2026-06-15", "tags": ["audit", "kb"]}]'
 ```
 
-Responses follow the standard `{ ok, value | error, code }` envelope:
+On success the answer is the verb's value, as JSON:
 
 ```jsonc
-// ok
-{ "ok": true, "value": { "id": "2026-05-26-fix-the-kb-token-cost-audit-feedback" } }
-
-// error
-{ "ok": false, "code": "invalid_args", "error": "args.id must be a non-empty string" }
+{ "id": "2026-05-26-fix-the-kb-token-cost-audit-feedback" }
 ```
+
+A refusal is the editor socket's refused error, its message
+`<code>: <why>` (e.g. `invalid_args: args.id must be a non-empty
+string`); bad arguments are invalid params, and a verb your grants
+leave out is access denied, naming the grant.
 
 | `code`                   | Means                                                                  |
 |--------------------------|------------------------------------------------------------------------|
@@ -129,16 +127,16 @@ archived, all}`; the default is `open`. `all` spans every bucket,
 the archive included. The answer is a slim projection, `{id,
 title, file_path}` per task; pass `full = true` for the whole task.
 
-```jsonc
-{ "kind": "command", "command": "todos.list", "args": { "status": "open" } }
-→ { "ok": true, "value": { "count": 5, "status": "open", "tasks": [...] } }
+```sh
+autodoc --editor todos.list '[{"status": "open"}]'
+# → { "count": 5, "status": "open", "tasks": [...] }
 ```
 
 ### `todos.show`
 
-```jsonc
-{ "kind": "command", "command": "todos.show", "args": { "id": "2026-05-26-foo" } }
-→ { "ok": true, "value": { /* the frontmatter, plus rev, path, file_path, description */ } }
+```sh
+autodoc --editor todos.show '[{"id": "2026-05-26-foo"}]'
+# → { the frontmatter, plus rev, path, file_path, description }
 ```
 
 `rev` is the SHA-256 of the task file's bytes, `path` is
@@ -172,19 +170,13 @@ only when no root contains it). This is what lets the panel open
 the attachment from any workspace. A bare relative ref resolves
 against the KB root only. Pass the absolute path.
 
-```jsonc
-{
-  "kind": "command", "command": "todos.add",
-  "args": {
-    "title": "Verify v0.1.43 assign event payload shape",
-    "priority": "normal",
-    "tags": ["test", "ad-hoc"],
-    "adr": ["/Users/you/.config/nvim/.auto-agents-config/kb/adrs/0031-auto-core-per-project-todo-task-system.md"]
-  }
-}
-→ { "ok": true, "value": { "id": "2026-05-26-verify-v0143-assign-event-payload-shape" } }
-// the stored task records adr[0] as
-//   $KB_ROOT/adrs/0031-auto-core-per-project-todo-task-system.md
+```sh
+autodoc --editor todos.add '[{"title": "Verify v0.1.43 assign event payload shape",
+  "priority": "normal", "tags": ["test", "ad-hoc"],
+  "adr": ["/Users/you/.config/nvim/.auto-agents-config/kb/adrs/0031-auto-core-per-project-todo-task-system.md"]}]'
+# → { "id": "2026-05-26-verify-v0143-assign-event-payload-shape" }
+# the stored task records adr[0] as
+#   $KB_ROOT/adrs/0031-auto-core-per-project-todo-task-system.md
 ```
 
 The panel auto-refreshes: `todos.add` (and `update` / `remove`)
@@ -208,14 +200,9 @@ Patch any hand-editable field: `title`, `description`,
 naming `status` or `assignee` is refused (`invalid_args`): those
 go through `todos.status` and `todos.assign`.
 
-```jsonc
-{
-  "kind": "command", "command": "todos.update",
-  "args": {
-    "id":    "2026-05-26-foo",
-    "patch": { "due": "2026-06-30", "priority": "high" }
-  }
-}
+```sh
+autodoc --editor todos.update '[{"id": "2026-05-26-foo",
+  "patch": {"due": "2026-06-30", "priority": "high"}}]'
 ```
 
 ### `todos.status` / `todos.archive`
@@ -259,9 +246,10 @@ assignments it hands its own agents with the same text.
 
 The message's id is derived from the change (`todo-<store>-<seq>`),
 so delivery is at-least-once: **an assignment message whose id you
-have already seen is a duplicate.** The recipient must be registered
-in the same Neovim (its addressbook); a recipient that registers
-within a grace window still gets it.
+have already seen is a duplicate.** The recipient must be one of this
+Neovim's agents, or a crew agent the daemon knows; a recipient that
+starts within a grace window still gets it, and one no crew wake can
+reach has the notice typed into its terminal, once.
 
 **A bare name is this project's agent** (ADR 1791532020 §2.5a). Several
 Neovims, of several projects, can share one store (the global KB's). An
@@ -346,6 +334,5 @@ refresh (errors-to-top, then chronological); ids never change.
   rules, the change log and the notifications.
 - `autodoc --contracts 'todos.*'` — the daemon's verbs, their
   params, answers and error codes.
-- `commands_list` — call with `args.owner = "auto-agents"` to
-  see this surface alongside the rest of the auto-agents
-  command verbs.
+- The block in your CLAUDE.md / AGENTS.md (its "Neovim's editor"
+  section) — every verb the editor socket serves you.

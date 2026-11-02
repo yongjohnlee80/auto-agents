@@ -74,8 +74,9 @@ its helpers all share one panel.
   for the `:AutoAgentsDock` navigation dock and the playground-terminal floats
   (`T1..T4`).
 - **[AutoDoc](https://github.com/yongjohnlee80/autodoc)** — required by the
-  `todos.*` mailbox verbs: autodoc.nvim **v0.1.39** or later and its binary, with
-  auto-core **v0.4.0** or later (its store resolution, `auto-core.todo.where`).
+  `todos.*` verbs and the crew: autodoc.nvim **v0.1.39** or later and its binary, with
+  auto-core **v0.6.0** or later (`auto-core.commands`, and its store resolution,
+  `auto-core.todo.where`).
   AutoDoc's daemon owns the todo store (ADR 1791532020); without it the verbs
   answer `dependency_unavailable` ("AutoDoc required").
 
@@ -250,7 +251,7 @@ auto-agents: new agent
 > 1
   kind (claude|codex|antigravity|junie|goose|opencode|copilot|generic)  [claude]:
 > 
-  name (handle, used for the mailbox id + grants)  [(blank to auto-generate)]:
+  name (handle, used for the crew codename + grants)  [(blank to auto-generate)]:
 > main
   ...
 
@@ -345,47 +346,46 @@ Top-level lua `opts` is now small — just runtime settings:
 at multiple paths (a clone, a worktree, a sibling repo) — agents are
 duplicated, and the `[kb].root` comes along.
 
-## Mailbox command surface — and where verbs live
+## Command verbs — and where they live
 
-An agent discovers what it can ask the host to do by sending
-`kind = "command"`, `command = "commands_list"` to `nvim`. The reply lists
-every whitelisted verb with its `name`, `owner`, `description` and **arg
-`schema`**, so discovery is actionable rather than a list of names. An
-optional `owner` filter narrows it to one plugin. `addressbook` is its
-sibling: peer discovery vs verb discovery, both backed by a live registry
-so results stay accurate as plugins register and unregister.
+The agents this Neovim starts reach its verbs through Neovim's editor socket
+(`autodoc --editor <verb> '[{…}]'`, `auto-agents.editor_socket`), each verb
+behind a grant (`editor_grants` in the roster; the defaults are
+`editor.read`, `review`, `peek` and `todos`). Every message between agents,
+and from the user, goes through AutoDoc's crew mail; there is no file
+mailbox (auto-agents v0.4.0).
 
 **The registry is not here.** This is the part that surprises people
 adding a verb:
 
 | Concern | Lives in |
 |---|---|
-| the registry | `auto-core.mailbox.commands` (`register` / `list` / `handle_message`, incl. schema validation) |
-| dispatch | `auto-core.mailbox.router`, calling `commands.handle_message` |
-| discovery | auto-agents' `commands_list` — a **relay**: it calls `core.mailbox.commands.list()` and forwards the entries, schema included |
+| the registry | `auto-core.commands` (`register` / `get` / `list` / `unregister` / `validate_args`) |
+| dispatch | the editor socket (for agents), admin `run` and `:AutoAgentsTodos` (for you), each calling the registered handler with its schema checked |
 
-So **a verb registered in auto-core (or in any family plugin) is discovered
-and dispatched with no auto-agents change at all.** auto-core's
-`editor.open` was added exactly that way and needed nothing here. Adding a
-matching entry on this side would be a second implementation of whatever
-the verb does, which is the shape worth avoiding rather than mirroring.
+So **a verb registered in auto-core (or in any family plugin) is served
+with no auto-agents change at all**, once the editor socket bridges its
+name. Adding a matching entry on this side would be a second implementation
+of whatever the verb does, which is the shape worth avoiding rather than
+mirroring.
 
 Either side *may* register — the registry is shared, and this repo does
-both. Verbs registered here are `wake`, `say`, `send_user`, `peek`,
-`diff_queue`, `refresh_agent_id`, `addressbook`, `commands_list`, plus the
-`todos.*` roster (ADR-0031 §5's 12 thin wrappers over AutoDoc's daemon,
-ADR 1791532020; ADR-0035's `todos.fire` and `todos.automation_set` went with
-automation, and `todos.import` with D3) and
-the `review.*` namespace, four verbs wrapping `worktree.review`. So "it
-wraps another plugin's Lua API" is not by itself a reason to put a verb in
-that plugin.
+both. Verbs registered here are `peek`, `say` and `diff_queue`
+(`auto-agents.commands`), the `todos.*` roster (`auto-agents.commands.todos`:
+ADR-0031 §5's 12 thin wrappers over AutoDoc's daemon, ADR 1791532020;
+ADR-0035's `todos.fire` and `todos.automation_set` went with automation, and
+`todos.import` with D3) and the `review.*` namespace
+(`auto-agents.commands.review`), four verbs wrapping `worktree.review`. So
+"it wraps another plugin's Lua API" is not by itself a reason to put a verb
+in that plugin.
 
 What matters is that a verb is registered **once**, and that the logic it
-needs lives in exactly one place. `editor.open` belongs in auto-core
-because the window-selection logic is auto-core's — registering it here as
-well would mean a second implementation of that logic, which is the shape
-worth avoiding. A thin wrapper with no logic of its own, like `todos.*`,
-carries no such risk.
+needs lives in exactly one place. A thin wrapper with no logic of its own,
+like `todos.*`, carries no such risk.
+
+When the crew can't get a message to an agent (it isn't woken in time),
+AutoDoc hands it back to this Neovim, which types it into the agent's
+terminal once (`auto-agents.fallback`).
 
 ## Help
 
@@ -509,7 +509,7 @@ extra env. Override them per-slot via `cmd = { ... }` if you need flags.
 |-----------|------------------------|----------------------------------------------------------------------------------|
 | `claude`  | `claude`               | Anthropic Claude Code CLI                                                        |
 | `codex`   | `codex`                | OpenAI Codex CLI; pads its own footer                                            |
-| `antigravity` | `agy`              | Google Antigravity CLI (replaces deprecated `gemini`; v0.2.30+). Config nests at `~/.gemini/antigravity/`; mailbox tool root is `~/.gemini/antigravity/mailbox`. |
+| `antigravity` | `agy`              | Google Antigravity CLI (replaces deprecated `gemini`; v0.2.30+). Config nests at `~/.gemini/antigravity/`. |
 | `junie`   | `junie`                | JetBrains [Junie CLI](https://junie.jetbrains.com/docs/junie-cli.html); install via `npm i -g @jetbrains/junie-cli` |
 | `goose`   | `goose session`        | [goose-docs.ai](https://goose-docs.ai/); env-var-driven (`GOOSE_MODEL`, `GOOSE_PROVIDER`, `GOOSE_PROVIDER__HOST` for ollama). Wizard prompts for `model` / `provider` / `api_base`. |
 | `opencode`| `opencode`             | [opencode.ai](https://opencode.ai/docs); takes `--model <provider>/<id>`. Local LLMs configured in `~/.config/opencode/opencode.json` (no CLI flag for base URL). |
@@ -549,7 +549,7 @@ this minor as a shim over `auto-core.kb.root()`.
 Each agent kind auto-loads an instruction file at its cwd (`CLAUDE.md` /
 `AGENTS.md` / `GEMINI.md`, per kind). auto-agents keeps a block in it between
 `<!-- auto-agents:begin -->` and `<!-- auto-agents:end -->`: the roster, the
-mailbox and todo protocols, the model preference, and three KB lines (the
+crew mail and todo protocols, the model preference, and three KB lines (the
 root, the AutoDoc workspace, and "read `<root>/AGENTS.md`"). The KB's own
 `AGENTS.md` is its contract.
 

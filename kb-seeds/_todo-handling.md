@@ -1,6 +1,6 @@
 ---
 type: convention
-revision: 6
+revision: 7
 status: active
 sources:
   - adrs/0031-auto-core-per-project-todo-task-system.md
@@ -31,7 +31,8 @@ authoritative for THIS project.
 The store is AutoDoc's (ADR 1791532020): its daemon owns the format, the
 rules and every write. Every surface is a client of the daemon:
 
-  - **Mailbox**: `todos.*` verbs — see `$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`.
+  - **The editor socket** (agents): `autodoc --editor todos.<verb>` — see
+    `$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`. An assignment made there carries the project's scope.
   - **User cmd**: `:AutoAgentsTodos <verb>` — humans, with tab-complete.
   - **The daemon itself**: `autodoc --call todos.<verb>` (`autodoc --contracts 'todos.*'`
     describes each), and `require("autodoc.todos")` in Lua.
@@ -41,9 +42,9 @@ rules and every write. Every surface is a client of the daemon:
 
 ## Agent protocol — store this in GLOBAL memory
 
-Mailbox actions are reliably second-nature to agents because the
-protocol is **internalized once** and applied everywhere — not
-re-derived on every spawn. Todo handling should work the same way.
+Crew mail is reliably second-nature to agents because its protocol is
+**internalized once** and applied everywhere — not re-derived on every
+spawn. Todo handling should work the same way.
 
 Save the core protocol (the `todos.*` surface exists; status /
 assign / create / archive go through verbs; doc refs are
@@ -73,9 +74,8 @@ On every spawn (ingest gate):
      update your global memory (+ per-project entry if customized).
   4. If equal: nothing to do.
 
-This mirrors the mailbox bootstrap-revision protocol (see
-`$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC`) — same discipline, same
-reliability.
+The same discipline as any revision-pinned doc: read the value, compare,
+re-ingest only on a change.
 
 ---
 
@@ -96,7 +96,7 @@ Schema v1 in ADR-0031 §2.
 | Update arbitrary fields           | `todos.update`                | safer than YAML edit when in doubt     |
 | Archive                           | `todos.archive`               | sets archived_at + preserves history   |
 | Remove                            | `todos.remove`                | irreversible; auditable                |
-| Assign + notify                   | `todos.assign`                | `open` → `in-progress` in the same write; mailbox message to the recipient |
+| Assign + notify                   | `todos.assign`                | `open` → `in-progress` in the same write; one crew message to the recipient |
 | Reconcile a stale dir             | `todos.refresh`               | re-evaluates buckets + errors[]        |
 
 **Encouraged**: direct YAML edits to non-managed hand-editable fields
@@ -105,7 +105,7 @@ blocked). Faster than a verb round-trip, and the panel picks up the
 change on next refresh.
 
 **Required via verbs**: anything that needs cross-process side
-effects — `status` (events), `assign` (mailbox notification),
+effects — `status` (events), `assign` (the recipient's notice),
 `add`/`remove`/`archive` (lifecycle + bucket placement).
 
 **Do NOT** edit by hand: `id`, `version`, lifecycle timestamps
@@ -198,20 +198,19 @@ first or passing `force_schema = true`).
 ## Spawned outside autovim?
 
 If you are running **without** the autovim host — no
-`$AUTO_AGENTS_MAILBOX_DIR`, no `$AUTO_AGENTS_TODOS_*` env vars,
-`commands_list` doesn't list `todos.*` — then the mailbox verb
-surface is **unavailable**. Detect this up front:
+`$AUTO_AGENTS_TODOS_*` env vars, no `$AUTODOC_EDITOR` — then the
+`todos.*` verb surface is **unavailable**. Detect this up front:
 
 ```sh
-[ -n "$AUTO_AGENTS_MAILBOX_DIR" ] && echo "in autovim" || echo "standalone"
+[ -n "$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC" ] && echo "in autovim" || echo "standalone"
 ```
 
 In standalone mode:
 
 - You can still **read** any `<workspace>/.todo-list/` that
   exists, and **hand-edit** task files — but status / lifecycle
-  side effects (events, bucket reconciliation, mailbox
-  notifications) will NOT fire, because nothing is listening.
+  side effects (events, bucket reconciliation, assignment
+  notices) will NOT fire, because nothing is listening.
 - Do **not** silently invent a task store in a random location.
   **Ask the user** where todos should live and how to manage
   them: (a) point you at an existing `.todo-list/` to hand-edit,

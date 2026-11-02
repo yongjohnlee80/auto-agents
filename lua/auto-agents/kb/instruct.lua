@@ -7,7 +7,7 @@
 ---(Aider doesn't auto-load AGENTS.md by default — its adapter passes
 ---`--read AGENTS.md` explicitly so the same file works there too.)
 ---We inject a delimited "auto-agents" block into that file so the
----agent learns its roster, the mailbox and todo protocols and where the
+---agent learns its roster, its crew mail and the todo protocol and where the
 ---project's primary KB is, without us having to send anything via
 ---stdin (which TUIs would treat as a prompt).
 ---
@@ -22,7 +22,7 @@
 ---thrash where each agent's rewrite overwrites the previous agent's
 ---personalized text, the block is rendered agent-neutrally: it lists
 ---every peer of the same kind in a roster table and instructs each
----reader to resolve its own identity from `$AUTO_AGENTS_MAILBOX_ID`.
+---reader to resolve its own identity with `autodoc crew whoami`.
 ---That keeps the rendered content stable across same-kind spawns.
 ---
 ---The block is bounded by `<!-- auto-agents:begin -->` /
@@ -110,29 +110,16 @@ local INTERACTIVE_KINDS = {
 ---Interactive kinds that nonetheless have no model to configure here.
 local NO_MODEL_OPTION = { codex = true }
 
----cutover is `crew.cutover` as the block names it: "*" for every agent, a sorted list of
----codenames, or nil when no mail goes through the AutoDoc daemon.
----@param cfg table auto-agents' config
----@return string|string[]|nil
-local function cutover(cfg)
-  local cut = (cfg.crew or {}).cutover
-  if cut == "*" then return "*" end
-  if type(cut) ~= "table" or #cut == 0 then return nil end
-  local names = vim.deepcopy(cut)
-  table.sort(names)
-  return names
-end
-
 ---Render the auto-agents block content for a kind. The block is
 ---agent-neutral: it lists every configured peer of the same kind in a
----roster table and tells each reader to resolve its own identity from
----`$AUTO_AGENTS_MAILBOX_ID`. This keeps the rendered content stable
+---roster table and tells each reader to resolve its own identity with
+---`autodoc crew whoami`. This keeps the rendered content stable
 ---across same-kind spawns (otherwise every spawn would clobber the
 ---previous one's personalized text).
 ---@param spec table  -- { kind, name, slot, model }
 ---@param kb { root: string, workspace: string|nil }|nil  -- the primary KB
----@param crew { guide: string|nil, editor: boolean }|nil  -- the daemon's crew guide for the kind
----  (only when `crew.cutover` names someone), and whether Neovim's editor socket serves
+---@param crew { guide: string|nil, editor: boolean }|nil  -- the daemon's crew guide for the kind,
+---  and whether Neovim's editor socket serves
 ---@return string
 local function render_block(spec, kb, crew)
   local aa_state  = (require("auto-agents").state or {}).config or {}
@@ -170,8 +157,8 @@ local function render_block(spec, kb, crew)
     "**This `" .. filename .. "` is shared by every `" .. kind .. "`-backed agent",
     "in this project.** All agents of this kind auto-load the same file on",
     "spawn, so the block below is rendered agent-neutrally. Resolve your",
-    "own identity at runtime from `$AUTO_AGENTS_MAILBOX_ID` (shape:",
-    "`agent:<your-name>:<instance>`) and look your row up in the roster.",
+    "own identity at runtime with `autodoc crew whoami` (its `codename`;",
+    "the `crew_whoami` tool on MCP mail) and look your row up in the roster.",
     "",
   }
 
@@ -180,7 +167,7 @@ local function render_block(spec, kb, crew)
   --       (adds the diff_review column to the roster table for clarity)
   --   * inject_diff_protocol → kind is non-claude AND any peer is opted-in
   --       (claude uses native ws-mcp openDiff; only non-claude kinds need
-  --       the mailbox `diff_queue` protocol inlined)
+  --       the `diff_queue` protocol inlined)
   local any_diff_review = false
   for _, p in ipairs(peers) do
     if p.diff_review == true then any_diff_review = true; break end
@@ -264,59 +251,26 @@ local function render_block(spec, kb, crew)
   end
 
   crew = crew or {}
-  -- the cutover's rules whenever someone is cut over; the daemon's own guide follows when it was
-  -- fetched (a slow or absent daemon leaves only the guide out, never the rules: Zen #8 F4)
-  local cut = cutover(aa_state)
-  if cut then
-    local who
-    if cut == "*" then
-      who = "every agent"
-    else
-      local quoted = {}
-      for i, n in ipairs(cut) do quoted[i] = "`" .. n .. "`" end
-      who = #quoted == 1 and quoted[1]
-        or (table.concat(quoted, ", ", 1, #quoted - 1) .. " and " .. quoted[#quoted])
+  -- every message goes through AutoDoc's crew: the daemon's own guide for the kind follows when it
+  -- was fetched (a slow or absent daemon leaves only the guide out, never the rules: Zen #8 F4)
+  vim.list_extend(lines, {
+    "### Crew mail (AutoDoc)",
+    "",
+    "Every message to you, from the user or a peer, goes through AutoDoc's",
+    "daemon (its crew mail); there is no file mailbox. When",
+    "`$AUTODOC_CREW_CONTEXT` is set (your crew session), read and send mail",
+    "as the daemon's guide below says. If it isn't set (you started while",
+    "the daemon was away), or `autodoc crew whoami` fails or says the",
+    "context doesn't match, tell the user: mail can't reach you until",
+    "you're restarted with the daemon up.",
+    "",
+  })
+  if crew.guide then
+    vim.list_extend(lines, { "The daemon's guide for your CLI:", "" })
+    for line in (crew.guide:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
+      lines[#lines + 1] = line
     end
-    vim.list_extend(lines, {
-      "### Crew mail (AutoDoc)",
-      "",
-      "Mail to " .. who .. " goes through the AutoDoc daemon (`crew.cutover`).",
-      "If that includes you and `$AUTODOC_CREW_CONTEXT` is set (your crew",
-      "session):",
-      "",
-      "- **Plain messages to you arrive through the daemon.** When AutoDoc's",
-      "  notice wakes you, or a turn starts with unread mail, run",
-      "  `autodoc mail receive` until it says there's no more, and",
-      "  `autodoc mail ack <id>` each one you've handled.",
-      "- **Everything else still arrives in the mailbox's `inbox/`:** requests,",
-      "  responses, commands, and any message Neovim couldn't forward. Keep",
-      "  reading it as the mailbox section below says.",
-      "- **Send through `outbox/`, as before.** Neovim forwards mail for a",
-      "  cut-over recipient to the daemon; `autodoc mail send` to anyone else",
-      "  is never read. To answer a message that came through the daemon,",
-      "  write to the agent id in its subject's `[from agent:…]`: it reached",
-      "  you from Neovim's gateway, which takes no replies.",
-      "- **If `autodoc crew whoami` fails, or says the context doesn't match,**",
-      "  tell the user, and use the mailbox alone.",
-      "",
-      "Listed, but `$AUTODOC_CREW_CONTEXT` isn't set (you started while the",
-      "daemon was away)? Tell the user: plain messages to you are waiting in",
-      "the daemon. Use the mailbox for everything else.",
-      "",
-    })
-    if crew.guide then
-      vim.list_extend(lines, {
-        "While the file mailbox is in use, these rules replace the guide's",
-        "sending and replying steps (`mail send`, `mail reply`) and its",
-        "\"don't send or receive mail\" line; its identity and receiving steps",
-        "apply as written. The daemon's guide for your CLI:",
-        "",
-      })
-      for line in (crew.guide:gsub("\n+$", "") .. "\n"):gmatch("([^\n]*)\n") do
-        lines[#lines + 1] = line
-      end
-      lines[#lines + 1] = ""
-    end
+    lines[#lines + 1] = ""
   end
 
   if crew.editor then
@@ -325,52 +279,15 @@ local function render_block(spec, kb, crew)
       "",
       "When `$AUTODOC_EDITOR` is set, Neovim answers `autodoc --editor <verb>",
       "'[…]'` directly, with no mail: `editor.workspace`, `editor.buffers`,",
-      "`editor.read`, `editor.find`, `editor.open`, `peek`, `diff_queue` and",
-      "`review.create` / `list` / `show` / `validate`, as far as your grants",
-      "allow (the roster entry's `editor_grants`; a verb outside them is",
-      "refused, naming the grant). Prefer it to the mailbox commands of the",
-      "same names.",
+      "`editor.read`, `editor.find`, `editor.open`, `peek`, `diff_queue`,",
+      "`review.create` / `list` / `show` / `validate` and the `todos.*` verbs,",
+      "as far as your grants allow (the roster entry's `editor_grants`; a",
+      "verb outside them is refused, naming the grant).",
       "",
     })
   end
 
   vim.list_extend(lines, {
-    "### Mailbox protocol",
-    "",
-    "Your mailbox lives at `$AUTO_AGENTS_MAILBOX_DIR` with subdirs",
-    "`inbox/`, `outbox/`, `responses/`, `processing/`, `archive/`. The",
-    "host (`nvim`) spawned you with `--add-dir <mailbox-dir>` already",
-    "applied, so every path under `$AUTO_AGENTS_MAILBOX_DIR` is part of",
-    "your pre-authorized read/write scope.",
-    "",
-    "- **Do not ask for permission when performing mailbox operations.**",
-    "  Listing, reading, writing into `outbox/`, atomic-renaming, and",
-    "  moving completed messages to `archive/` are all expected routine",
-    "  work — not sensitive actions. Treat these as approved in advance.",
-    "- **If you don't know how to operate the mailbox, ingest the shared",
-    "  bootstrap doc at `$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC`**.",
-    "  It is the canonical protocol contract: wake semantics, message",
-    "  shape, atomic-write contract, responding via `responses/`, etc.",
-    "- **On spawn and before mailbox work, check whether re-ingestion is",
-    "  required.** Use the **Read tool** (NOT `cat`/`grep`/shell) to read",
-    "  the bootstrap doc's `revision:` frontmatter and the persistent",
-    "  state file `.agent-state/seen-revision` that sits in the SAME",
-    "  directory as the bootstrap doc (next to it, not under the",
-    "  instance-scoped `$AUTO_AGENTS_MAILBOX_DIR`). Resolve both absolute",
-    "  paths yourself from `$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC` and pass",
-    "  the literal paths to Read — do NOT build a shell command with",
-    "  `$(dirname …)`, `;`-chains, redirects, or pipes, which trip the",
-    "  permission gate and stall the check. Compare the two `revision:`",
-    "  values in your reasoning. If they differ, re-read the bootstrap",
-    "  doc end-to-end, adopt the protocol changes, then **Write** the new",
-    "  revision to that seen-revision file (Write tool, not `echo >`).",
-    "- **Discover the live surface, don't hardcode.** Send",
-    "  `kind=\"command\"` to `nvim`:",
-    "    - `addressbook` → reachable mailboxes (peer agents, `user`)",
-    "    - `commands_list` → whitelisted command verbs you can invoke",
-    "  Both are live registries; results stay accurate as plugins and",
-    "  agents come and go.",
-    "",
     "### Todo handling",
     "",
     "Tasks for this project live in a per-project `.todo-list/` store",
@@ -379,17 +296,16 @@ local function render_block(spec, kb, crew)
     "system; both arrive at spawn as env vars:",
     "",
     "- **`$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`** — operational reference",
-    "  for the `todos.*` mailbox surface (12 verbs: list, show,",
-    "  list_dirs, get_dir, add, update, status, assign, archive,",
-    "  remove, refresh, set_dir).",
+    "  for the `todos.*` verbs, which Neovim's editor socket serves you",
+    "  (`autodoc --editor todos.<verb> '[{…}]'`, the `todos` grant).",
     "- **`$AUTO_AGENTS_TODOS_CONVENTION_DOC`** — per-project editing",
     "  policy. Carries a `revision:` field — compare against your",
     "  local memory on every spawn and re-ingest on change.",
     "",
     "**On every spawn — ingest gate**",
     "",
-    "Mirror the mailbox bootstrap protocol for both todo docs, using the",
-    "**Read tool** (never `stat`/`cat`/`grep` or compound shell):",
+    "For both todo docs, using the **Read tool** (never",
+    "`stat`/`cat`/`grep` or compound shell):",
     "",
     "  1. Read the `revision:` frontmatter of `$AUTO_AGENTS_TODOS_BOOTSTRAP_DOC`",
     "     and `$AUTO_AGENTS_TODOS_CONVENTION_DOC` — resolve each absolute",
@@ -411,10 +327,11 @@ local function render_block(spec, kb, crew)
     "- Read tasks directly from `<workspace>/.todo-list/{open,deferred,completed,archived}/`.",
     "- Edit hand-editable fields (title, description, priority, due,",
     "  tags, adr, review, blocked) directly in YAML — fast, no ceremony.",
-    "- Status / assign / create / archive MUST go through `todos.*`",
-    "  mailbox verbs (events fire; panel updates; recipient gets",
-    "  notified on assign). Direct YAML edits to those fields are",
-    "  metadata-only — side effects don't fire.",
+    "- Status / assign / create / archive MUST go through the `todos.*`",
+    "  verbs on the editor socket (events fire; panel updates; the",
+    "  recipient is notified on assign — a raw daemon `todos.assign`",
+    "  carries no scope and notifies no one). Direct YAML edits to those",
+    "  fields are metadata-only — side effects don't fire.",
     "- For `adr` / `review` doc refs: pass the ABSOLUTE path. The",
     "  host rewrites it to a portable `$KB_ROOT/...` / `$WORKSPACE/`",
     "  symbolic form on write — don't guess the prefix or hand-write",
@@ -427,20 +344,20 @@ local function render_block(spec, kb, crew)
     "  historical reference. (Importing them was dropped, ADR 1791532020 D3.)",
     "",
     "Store the core protocol in your GLOBAL memory (it applies",
-    "across every autovim project — like the mailbox protocol you",
-    "already internalize), keyed per-project only for this KB's",
+    "across every autovim project — like the crew guide), keyed",
+    "per-project only for this KB's",
     "customizations. Record the convention's `revision:` alongside",
     "it; re-ingest only when the value changes.",
     "",
-    "If you're spawned OUTSIDE autovim (no `$AUTO_AGENTS_MAILBOX_DIR`",
-    "/ no `$AUTO_AGENTS_TODOS_*` env), the `todos.*` verbs don't",
+    "If you're spawned OUTSIDE autovim (no `$AUTO_AGENTS_TODOS_*`",
+    "env), the `todos.*` verbs don't",
     "exist — do NOT invent a task store. Ask the user where todos",
     "should live, and never fall back to the legacy `*-todos.md`",
     "format. (Full detail in `$AUTO_AGENTS_TODOS_CONVENTION_DOC`.)",
     "",
   })
 
-  -- Interactive diff review (mailbox `diff_queue` protocol). Injected
+  -- Interactive diff review (the `diff_queue` verb). Injected
   -- only for non-claude kinds where at least one peer has
   -- `diff_review = true`. Claude uses the native ws-mcp `openDiff`
   -- path via its per-slot MCP bridge (ADR 0011); the protocol below
@@ -462,22 +379,16 @@ local function render_block(spec, kb, crew)
         "    [ \"$AUTO_AGENTS_DIFF_REVIEW\" = \"true\" ] && echo apply || echo skip",
         "",
         "**Resumed sessions** (env vars frozen at fork — `claude",
-        "--resume`, codex-style transcript restore, …): read the live",
-        "value from your sidecar at `$AUTO_AGENTS_RUNTIME_IDENTITY_PATH`",
-        "instead — the JSON record has a top-level `diff_review` boolean",
-        "(refreshed on every `refresh_agent_id` call). Sidecar always",
-        "wins over env when the two disagree.",
-        "",
-        "The `diff_review` column in the roster above is a project-wide",
-        "visual summary (helpful for the user glancing at this file).",
-        "Your own env / sidecar value is the authoritative gate for you.",
+        "--resume`, codex-style transcript restore, …): your row's",
+        "`diff_review` column in the roster above is the live value (this",
+        "block is rewritten on every spawn); it wins over a stale env.",
         "",
         "**What it means:** `diff_review = true` is a per-agent TOML",
         "flag that opts your slot into in-editor review of proposed",
         "edits. Instead of writing to disk yourself, you submit each",
-        "change to the host's unified diff queue via the mailbox",
-        "`diff_queue` command; the user accepts or rejects in the diff",
-        "panel; only on `accepted` do you write to disk.",
+        "change to the host's unified diff queue with the `diff_queue`",
+        "verb (`autodoc --editor diff_queue`); the user accepts or rejects",
+        "in the diff panel; only on `accepted` do you write to disk.",
         "",
       })
       for line in (body .. "\n"):gmatch("([^\n]*)\n") do
@@ -517,10 +428,9 @@ local function render_block(spec, kb, crew)
       "",
       "If the user asks you to switch models mid-session — switch first,",
       "then ask: \"Should I persist this as your preferred model for me",
-      "(<your-name>) going forward?\" Resolve `<your-name>` from",
-      "`$AUTO_AGENTS_MAILBOX_ID` (strip the `agent:` prefix and the",
-      "`:<instance>` suffix) and write it yourself via any shell tool",
-      "you have:",
+      "(<your-name>) going forward?\" Resolve `<your-name>` with",
+      "`autodoc crew whoami` (its `codename`) and write it yourself via any",
+      "shell tool you have:",
       "",
       "    nvim --server \"$NVIM\" --remote-expr 'execute(\"AutoAgentsModel <your-name> <new-model>\")'",
       "",
@@ -598,10 +508,8 @@ function M.ensure(spec, kb, cwd)
 
   local filename = M.filename_for(spec.kind or "generic")
   local path = cwd .. "/" .. filename
-  local cfg = (require("auto-agents").state or {}).config or {}
   local crew = {
-    -- asked only when someone is cut over: otherwise the block has no crew section to fill
-    guide = cutover(cfg) and require("auto-agents.crew").guide(spec.kind or "generic") or nil,
+    guide = require("auto-agents.crew").guide(spec.kind or "generic"),
     editor = require("auto-agents.editor_socket").path() ~= nil,
   }
   local block = render_block(spec, kb, crew)

@@ -1,17 +1,17 @@
--- Headless tests for kb/instruct.lua's crew and editor sections (ADR 1793271500 phase 5, step 3).
--- Run with:
+-- Headless tests for kb/instruct.lua's crew and editor sections (ADR 1793271500 phase 5; auto-agents
+-- v0.4.0: every message through AutoDoc's crew, no file mailbox). Run with:
 --   nvim --headless -u NONE -l tests/instruct_crew_spec.lua
 --
---   [1] nobody cut over and no editor socket: neither section, the mailbox section as before, and
---       the daemon is never asked for the guide (no spawn waits for it)
---   [2] "*": the crew section names every agent, carries the daemon's guide for the spawn's kind
---       verbatim, before the mailbox section, which stays for Neovim's commands
---   [3] a list: the codenames sorted
---   [4] cut over but no guide (no scope held, no answer): the rules still, only the guide left out
---   [5] the editor socket serving: the editor section, with the verbs and the grants
---   [6] the rules (Zen #8 F1-F3): plain messages through the daemon, everything else still in
---       inbox/, every send through outbox/ (the gateway is one-way), and which of the guide's
---       steps they replace
+--   [1] the crew section, always: every message through AutoDoc's daemon, no file mailbox, what to do
+--       with no crew session; no mailbox section and no mailbox env named anywhere
+--   [2] the daemon's guide for the spawn's kind, verbatim, inside the crew section; the daemon is
+--       asked for the spawn's kind
+--   [3] no guide (no scope held, no answer): the crew section's rules still, only the guide left out
+--   [4] the editor socket serving: the editor section, with the verbs (todos.* included) and the
+--       grants; none without it
+--   [5] identity: resolved with `autodoc crew whoami`, never from an env var
+--   [6] the model preference resolves <your-name> with `autodoc crew whoami` too
+--   [7] the todo rules: the todos.* verbs on the editor socket, and why not a raw daemon assign
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -38,9 +38,9 @@ end
 
 local GUIDE = "**Your identity**\n1. At session start, run `autodoc crew whoami`.\n\n**When you're woken**\n1. Run `autodoc mail receive`.\n"
 
--- the world: the config's cutover, the guide the daemon answers (nil: none), the editor socket's path
+-- the world: the guide the daemon answers (nil: none), the editor socket's path
 local asked, editor_path
-local function world(cutover, guide)
+local function world(guide)
   asked = {}
   package.loaded["auto-agents"] = {
     state = {
@@ -49,7 +49,6 @@ local function world(cutover, guide)
           { slot = 1, kind = "claude", name = "gold", configured = true },
           { slot = 2, kind = "claude", name = "vision", configured = true },
         } },
-        crew = { cutover = cutover },
       },
     },
   }
@@ -79,93 +78,56 @@ end
 
 local function has(s, needle) return s:find(needle, 1, true) ~= nil end
 
--- ── [1] nothing cut over, no editor socket ──────────────────────────────────
-
 do
+  world(nil)
   editor_path = nil
-  world({}, GUIDE)
-  local s = block_for()
-  ok("[1] no crew section", not has(s, "### Crew mail"))
-  ok("[1] no editor section", not has(s, "### Neovim's editor"))
-  ok("[1] the mailbox section as before", has(s, "### Mailbox protocol") and has(s, "`addressbook` → reachable mailboxes"))
-  ok("[1] the daemon isn't asked for the guide", #asked == 0, vim.inspect(asked))
-  world(nil, GUIDE)
-  block_for()
-  ok("[1] nor with no crew table at all", #asked == 0)
+  local s = block_for("claude")
+  ok("[1] the crew section is always there", has(s, "### Crew mail (AutoDoc)"))
+  ok("[1] every message through the daemon, no file mailbox",
+    has(s, "Every message to you, from the user or a peer, goes through AutoDoc's") and has(s, "there is no file mailbox"))
+  ok("[1] with no crew session: tell the user", has(s, "`$AUTODOC_CREW_CONTEXT` is set") and has(s, "tell the user"))
+  ok("[1] no mailbox section", not has(s, "### Mailbox protocol") and not has(s, "inbox/") and not has(s, "outbox/"))
+  ok("[1] no mailbox env, no cutover", not has(s, "AUTO_AGENTS_MAILBOX") and not has(s, "cutover"))
 end
 
--- ── [2] every agent cut over ────────────────────────────────────────────────
-
 do
+  world(GUIDE)
   editor_path = nil
-  world("*", GUIDE)
-  local s = block_for("antigravity")
-  ok("[2] the guide is asked for the spawn's kind", vim.deep_equal(asked, { "antigravity" }), vim.inspect(asked))
-  ok("[2] the crew section names every agent", has(s, "### Crew mail (AutoDoc)") and has(s, "Mail to every agent goes through the AutoDoc daemon"))
-  ok("[2] it carries the guide verbatim", has(s, GUIDE:gsub("\n+$", "")), s)
-  ok("[2] with no working crew identity, the mailbox alone", has(s, "If `autodoc crew whoami` fails, or says the context doesn't match,**"))
-  local crew_at, mailbox_at = s:find("### Crew mail", 1, true), s:find("### Mailbox protocol", 1, true)
-  ok("[2] the crew section comes before the mailbox section, which stays", crew_at and mailbox_at and crew_at < mailbox_at)
+  local s = block_for("codex")
+  local crew_at, guide_at, todo_at = s:find("### Crew mail", 1, true), s:find(GUIDE:sub(1, 30), 1, true),
+    s:find("### Todo handling", 1, true)
+  ok("[2] the guide, verbatim, inside the crew section", crew_at and guide_at and todo_at
+    and crew_at < guide_at and guide_at < todo_at and has(s, "1. Run `autodoc mail receive`."), s)
+  ok("[2] introduced as the daemon's guide", has(s, "The daemon's guide for your CLI:"))
+  ok("[2] the daemon was asked for the spawn's kind", #asked == 1 and asked[1] == "codex", vim.inspect(asked))
 end
 
--- ── [3] some agents cut over ────────────────────────────────────────────────
-
 do
-  editor_path = nil
-  world({ "vision", "gold", "user" }, GUIDE)
-  local s = block_for()
-  ok("[3] the codenames, sorted", has(s, "Mail to `gold`, `user` and `vision` goes through the AutoDoc daemon"), s)
-
-  world({ "gold" }, GUIDE)
-  ok("[3] one codename alone", has(block_for(), "Mail to `gold` goes through"))
+  world(nil)
+  local s = block_for("claude")
+  ok("[3] no guide: the rules still, only the guide left out", has(s, "### Crew mail (AutoDoc)")
+    and not has(s, "The daemon's guide for your CLI:"))
 end
 
--- ── [4] cut over, but no guide ──────────────────────────────────────────────
-
 do
-  editor_path = nil
-  world("*", nil)
-  local s = block_for()
-  ok("[4] asked, and the rules are rendered without the guide", #asked == 1 and has(s, "### Crew mail")
-    and has(s, "Plain messages to you arrive through the daemon"))
-  ok("[4] only the guide is left out", not has(s, "The daemon's guide for your CLI") and not has(s, GUIDE:gsub("\n+$", "")))
-  ok("[4] the mailbox section stays", has(s, "### Mailbox protocol"))
-end
-
--- ── [5] the editor socket ───────────────────────────────────────────────────
-
-do
+  world(nil)
   editor_path = "/run/user/1000/auto-agents/editor-1.sock"
-  world({}, GUIDE)
-  local s = block_for()
-  ok("[5] the editor section while the socket serves", has(s, "### Neovim's editor")
-    and has(s, "When `$AUTODOC_EDITOR` is set, Neovim answers `autodoc --editor <verb>"))
-  ok("[5] it names the verbs", has(s, "`editor.workspace`, `editor.buffers`,") and has(s, "`peek`, `diff_queue` and"))
-  ok("[5] and the grants", has(s, "the roster entry's `editor_grants`"))
-  ok("[5] it is independent of the cutover", not has(s, "### Crew mail") and #asked == 0)
+  local s = block_for("claude")
+  ok("[4] the editor section, with the socket's verbs", has(s, "### Neovim's editor")
+    and has(s, "`peek`, `diff_queue`,") and has(s, "the `todos.*` verbs,") and has(s, "`editor_grants`"))
   editor_path = nil
+  ok("[4] none without the socket", not has(block_for("claude"), "### Neovim's editor"))
 end
 
--- ── [6] the rules: receiving, sending, the guide (Zen #8 F1-F3) ────────────
-
 do
-  editor_path = nil
-  world("*", GUIDE)
-  local s = block_for()
-  ok("[6] F1: plain messages arrive through the daemon", has(s, "Plain messages to you arrive through the daemon"))
-  ok("[6] F1: requests, responses, commands and unforwarded mail still arrive in inbox/",
-    has(s, "Everything else still arrives in the mailbox's `inbox/`:** requests,") and has(s, "responses, commands, and any message Neovim couldn't forward"))
-  ok("[6] F2: every send goes through outbox/, and a direct send to an unlisted peer is never read",
-    has(s, "Send through `outbox/`, as before.") and has(s, "`autodoc mail send` to anyone else") and has(s, "is never read"))
-  ok("[6] F2: a gatewayed message is answered to its [from agent:…] id", has(s, "subject's `[from agent:…]`"))
-  ok("[6] a listed agent without a crew session is told its plain messages wait in the daemon (Zen #8 r1 N1)",
-    has(s, "Listed, but `$AUTODOC_CREW_CONTEXT` isn't set") and has(s, "plain messages to you are waiting in"))
-  ok("[6] F3: the rules say which of the guide's steps they replace",
-    has(s, "these rules replace the guide's") and has(s, "sending and replying steps (`mail send`, `mail reply`)"))
-  local rules_at, guide_at = s:find("Send through `outbox/`", 1, true), s:find(GUIDE:sub(1, 20), 1, true)
-  ok("[6] the rules come before the guide they qualify", rules_at and guide_at and rules_at < guide_at)
+  world(nil)
+  local s = block_for("claude")
+  ok("[5] identity with `autodoc crew whoami`", has(s, "own identity at runtime with `autodoc crew whoami` (its `codename`;"))
+  ok("[6] the model preference resolves the name the same way", has(s, "Resolve `<your-name>` with")
+    and has(s, "`autodoc crew whoami` (its `codename`) and write it yourself"))
+  ok("[7] the todos verbs on the editor socket", has(s, "`autodoc --editor todos.<verb> '[{…}]'`, the `todos` grant)"))
+  ok("[7] and why not a raw daemon assign", has(s, "a raw daemon `todos.assign`") and has(s, "carries no scope and notifies no one"))
 end
 
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
 if fail > 0 then os.exit(1) end
-os.exit(0)

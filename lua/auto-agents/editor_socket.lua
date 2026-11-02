@@ -17,9 +17,10 @@
 ---  editor.find term [buf]                 [[l1, c1, l2, c2], …]                           editor.read
 ---  editor.open path                       {opening}                                       commands
 ---  peek / diff_queue / review.* {args}    the command verb's own answer                   review (peek: peek)
+---  todos.* {args}                         the command verb's own answer                   todos
 ---
 ---Positions are 1-based lines and columns (a column is a character), as AutoDoc's are. The command
----verbs that act in Neovim (peek, diff_queue, review.*) are served here: the handler registered on
+---verbs that act in Neovim (peek, diff_queue, review.*, todos.*) are served here: the handler registered on
 ---auto-core's command registry (auto-core.commands), its argument schema checked.
 local M = {}
 
@@ -30,8 +31,9 @@ M.CODE_INVALID_PARAMS = -32602
 M.CODE_INTERNAL = -32603
 M.CODE_REFUSED = -32097
 
--- An agent's grants unless its roster entry says otherwise: read the page, review, peek a slot.
-M.DEFAULT_GRANTS = { "editor.read", "review", "peek" }
+-- An agent's grants unless its roster entry says otherwise: read the page, review, peek a slot, and
+-- the todos.* verbs (what any agent could do through the file mailbox before it went).
+M.DEFAULT_GRANTS = { "editor.read", "review", "peek", "todos" }
 
 -- The longest request a client may send, as a guard against a runaway peer.
 M.MAX_REQUEST = 4 * 1024 * 1024
@@ -150,6 +152,12 @@ end }
 -- the command verbs that act in Neovim, served through their own registered handlers (auto-core.commands)
 local bridged = { peek = "peek", diff_queue = "review", ["review.create"] = "review", ["review.list"] = "review",
   ["review.show"] = "review", ["review.validate"] = "review" }
+-- the todos.* verbs (auto-agents.commands.todos): an assignment made here carries this project's
+-- scope, so its recipient is told; a raw daemon todos.assign without it reaches no one
+for _, v in ipairs({ "list", "show", "list_dirs", "get_dir", "add", "update", "status", "assign", "archive",
+  "remove", "refresh", "set_dir" }) do
+  bridged["todos." .. v] = "todos"
+end
 
 local function bridge(name, agent, args, msgid)
   local ok, commands = pcall(require, "auto-core.commands")
@@ -164,7 +172,8 @@ local function bridge(name, agent, args, msgid)
     local vok, verr = commands.validate_args(a, spec.schema)
     if not vok then return nil, rpc_error(M.CODE_INVALID_PARAMS, tostring(verr)) end
   end
-  local hok, res = pcall(spec.handler, a, { sender = "agent:" .. agent, sender_bare = agent,
+  -- the caller, as each verb reads it: diff_queue its sender, todos.assign who made the assignment
+  local hok, res = pcall(spec.handler, a, { sender = "agent:" .. agent, sender_bare = agent, from = "agent:" .. agent,
     correlation_id = "editor:" .. tostring(msgid), via = "editor" })
   if not hok then return nil, rpc_error(M.CODE_INTERNAL, tostring(res)) end
   if type(res) == "table" and res.ok == false then
