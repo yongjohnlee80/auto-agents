@@ -976,6 +976,23 @@ local function ensure_main_slot_terminal(slot, winid)
       return nil
     end
   end
+  -- a Codex agent with no crew setup is kept off Codex's shared daemon, which runs its commands
+  -- with whichever agent's environment started it (auto-agents.codex_daemon): --no-daemon when its
+  -- Codex takes it, or the spawn refused when that can't be told
+  if spec.configured ~= false and spec.kind == "codex" and not crew_setup and type(spec.cmd) == "table" and spec.cmd[1] then
+    local extra, cwhy = require("auto-agents.codex_daemon").argv(spec.cmd, env, cwd)
+    if not extra then
+      require("auto-agents.crew").finish(crew_session, "start_failed")
+      if editor_token then require("auto-agents.editor_socket").forget(spec.name, editor_token) end
+      vim.notify(("%s did not start: %s"):format(spec.name or "codex", tostring(cwhy)), vim.log.levels.ERROR,
+        { title = "auto-agents" })
+      return nil
+    end
+    if #extra > 0 then
+      spec.cmd = vim.list_slice(spec.cmd)
+      vim.list_extend(spec.cmd, extra)
+    end
+  end
   local term_opts = {
     cmd = spec.cmd,
     cwd = cwd,
