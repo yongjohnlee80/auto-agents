@@ -1,5 +1,5 @@
 <!--
-Canonical, plugin-shipped copy of the mailbox `diff_queue` protocol.
+Canonical, plugin-shipped copy of the `diff_queue` protocol.
 
 This file is inlined by `lua/auto-agents/kb/instruct.lua` into every
 non-claude agent's per-kind instruction file (AGENTS.md / GEMINI.md /
@@ -18,7 +18,7 @@ verbatim KB mirror at `$AUTO_AGENTS_KB_ROOT/conventions/diff-queue-workflow.md`
 ws-mcp `openDiff` path via your slot's per-slot MCP bridge (set up by
 the host when your bootstrap row has `diff_review = true`). Continue
 proposing edits via your normal Edit/Write tools — the host attributes
-your diffs through the bridge. The mailbox `diff_queue` lifecycle below
+your diffs through the bridge. The `diff_queue` lifecycle below
 is for non-claude kinds (codex / gemini / junie / aider / goose /
 opencode / generic) that have no equivalent native integration.
 
@@ -35,15 +35,9 @@ diff, wait for the user's verdict in the diff panel, then apply on
 `accepted`.
 
 **Resumed sessions** (env vars frozen at fork — `claude --resume`,
-codex transcript restore, …): read the live value from your sidecar
-at `$AUTO_AGENTS_RUNTIME_IDENTITY_PATH` instead. The JSON record has
-a top-level `diff_review` boolean refreshed on every
-`refresh_agent_id` call. Sidecar always wins over env when the two
-disagree.
-
-(The `diff_review` column in the roster above is a project-wide
-visual summary for the user — your own env / sidecar value is the
-authoritative gate for you.)
+codex transcript restore, …): your row's `diff_review` column in the
+roster above is the live value (the block is rewritten on every
+spawn); it wins over a stale env.
 
 #### "Safety-First" lifecycle
 
@@ -54,19 +48,22 @@ authoritative gate for you.)
    **REVERT it to its current head state first**.
    *Rationale*: if the disk already matches your proposal, the
    `diff_queue` panel shows "No Changes" and the user rejects.
-3. **Enqueue (`diff_queue`)** — Send a `kind="command"` message to
-   `nvim` with the `diff_queue` verb. Required args:
-    - `diff` — unified diff string
+3. **Enqueue (`diff_queue`)** — Call Neovim's editor socket:
+   `autodoc --editor diff_queue '[{…}]'` (it needs the `review` grant,
+   which every agent has unless its roster entry says otherwise).
+   Required args:
     - `old_file_path` — absolute path of the current file
     - `new_file_path` — absolute path of the target file
     - `tab_name` — descriptive label (e.g. `<your-name>: Feature`)
     - `new_file_contents` — complete final content of the file
-4. **Idle / wait** — Stop all execution on that file. Wait for an
-   `inbox/` message where `args.verdict == "accepted"`.
+   The answer acks the enqueue and carries a `correlation_id`.
+4. **Idle / wait** — Stop all execution on that file. The user's
+   verdict comes as crew mail from `user`, subject
+   `diff verdict (accepted) for <tab_name>` (or `(rejected)`, with the
+   user's comment in the body), its body naming the `correlation_id`.
 5. **Apply** — Only after the `accepted` verdict, write
    `new_file_contents` to disk.
-6. **Cleanup** — Archive the verdict message and any related
-   response tokens.
+6. **Cleanup** — Ack the verdict mail (`autodoc mail ack <id>`).
 
 #### Common pitfalls
 
@@ -78,18 +75,11 @@ authoritative gate for you.)
   the "new" side of the comparison; without it the panel can't
   render the proposed state.
 
-#### Example payload
+#### Example call
 
-    {
-      "kind": "command",
-      "to": "nvim",
-      "command": "diff_queue",
-      "args": {
-        "diff": "--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,2 @@\n old line\n+new line",
-        "old_file_path": "/abs/path/to/file.txt",
-        "new_file_path": "/abs/path/to/file.txt",
-        "tab_name": "<your-name>: Update file.txt",
-        "new_file_contents": "old line\nnew line\n",
-        "context": "Adding a new line as requested."
-      }
-    }
+    autodoc --editor diff_queue '[{
+      "old_file_path": "/abs/path/to/file.txt",
+      "new_file_path": "/abs/path/to/file.txt",
+      "tab_name": "<your-name>: Update file.txt",
+      "new_file_contents": "old line\nnew line\n"
+    }]'

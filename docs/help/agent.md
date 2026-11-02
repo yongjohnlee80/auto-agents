@@ -325,8 +325,8 @@ Behavior is **kind-dispatched** — both paths land in the same
 Unified Diff Queue (`:AutoAgentsDiffQueue`), but the wire differs.
 **Today only Claude Code is proven to honor the ws-mcp `openDiff`
 path end-to-end**; every other CLI surface (codex, antigravity,
-junie, goose, opencode, generic) routes through the mailbox
-`diff_queue` protocol instead.
+junie, goose, opencode, generic) routes through the
+`diff_queue` verb instead.
 
 - **`claude` + `diff_review = true`** — host boots a per-slot ws-mcp
   bridge (ADR 0011) and injects `AUTO_AGENTS_IDE_INTEGRATION=true`,
@@ -337,16 +337,17 @@ junie, goose, opencode, generic) routes through the mailbox
 
 - **non-claude + `diff_review = true`** *(v0.2.25, refined v0.2.26)*
   — including codex, antigravity, junie, goose, opencode, and
-  generic. Host inlines the **mailbox `diff_queue` protocol** into
+  generic. Host inlines the **`diff_queue` protocol** into
   the per-kind instruction file (`AGENTS.md` / `GEMINI.md` /
   `.junie/guidelines.md` / `.goosehints`) via
   `lua/auto-agents/kb/instruct.lua`. Content is loaded verbatim from
   `instructions/diff-queue-workflow.md` shipped with the plugin. The
   agent reads the protocol on spawn, then for every proposed edit:
-  drafts internally → verifies disk state → enqueues via the
-  `diff_queue` mailbox command → waits for an `accepted` verdict →
-  applies. Re-rendered on every `refresh_agent_id` call so resumed
-  agents stay current. The MCP env vars are still injected for
+  drafts internally → verifies disk state → enqueues with
+  `autodoc --editor diff_queue` (Neovim's editor socket) → waits for
+  the verdict, which comes as crew mail from the user → applies on
+  `accepted`. Re-rendered on every spawn, so a resumed agent reads the
+  current gate in its roster row. The MCP env vars are still injected for
   forward compatibility (some kinds may gain native MCP `openDiff`
   later), but they are not currently relied upon.
 

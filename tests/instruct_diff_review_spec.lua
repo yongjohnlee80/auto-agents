@@ -119,9 +119,10 @@ do
   ok("preamble references AUTO_AGENTS_DIFF_REVIEW env var",
     content:find("$AUTO_AGENTS_DIFF_REVIEW", 1, true) ~= nil,
     "preamble missing AUTO_AGENTS_DIFF_REVIEW gate")
-  ok("preamble references runtime-identity sidecar fallback for resumed sessions",
-    content:find("$AUTO_AGENTS_RUNTIME_IDENTITY_PATH", 1, true) ~= nil,
-    "preamble missing sidecar fallback")
+  ok("preamble points resumed sessions at the roster's diff_review column, no sidecar",
+    content:find("your row's\n`diff_review` column", 1, true) ~= nil
+      and content:find("RUNTIME_IDENTITY", 1, true) == nil,
+    "preamble missing the roster fallback, or a sidecar left in")
   ok("preamble no longer asks agent to look up its own row",
     content:find("look up your own row", 1, true) == nil,
     "stale 'look up your own row' instruction leaked through")
@@ -166,46 +167,6 @@ do
     "section leaked when no peer is opted in")
 end
 
-print("\n[4] runtime_identity.build_record stamps diff_review (v0.2.26)")
-do
-  -- build_record requires auto-core for instance_id + full_id; emulate
-  -- those two surfaces with a minimal stub so the test doesn't need a
-  -- real auto-core install on the runtimepath.
-  package.loaded["auto-core"] = {
-    mailbox = { get_instance_id = function() return "test-instance-id" end },
-  }
-  package.loaded["auto-core.mailbox.path"] = {
-    full_id = function(bare) return bare .. ":test-instance-id" end,
-  }
-  -- Force a re-require so our stubs are honored even if the module was
-  -- loaded earlier in this test run.
-  package.loaded["auto-agents.runtime_identity"] = nil
-  local ri = require("auto-agents.runtime_identity")
-
-  local r_true = ri.build_record(2, "codex-a", "/tmp/tr", "/tmp/tr/agent:codex-a", "test", 99999, true)
-  ok("build_record(diff_review=true) → record.diff_review == true",
-    r_true.diff_review == true, tostring(r_true.diff_review))
-
-  local r_false = ri.build_record(3, "codex-b", "/tmp/tr", nil, "test", nil, false)
-  ok("build_record(diff_review=false) → record.diff_review == false",
-    r_false.diff_review == false, tostring(r_false.diff_review))
-
-  local r_nil = ri.build_record(4, "codex-c", "/tmp/tr", nil, "test", nil, nil)
-  ok("build_record(diff_review=nil) → record.diff_review == false (default off)",
-    r_nil.diff_review == false, tostring(r_nil.diff_review))
-
-  -- Round-trip through atomic write + read so we verify the field
-  -- survives JSON encode/decode (resumed-agent recovery path).
-  local sidecar_path = vim.fn.tempname() .. ".json"
-  local wok, werr = ri.write(sidecar_path, r_true)
-  ok("ri.write(sidecar) ok", wok == true, tostring(werr))
-  local decoded, derr = ri.read(sidecar_path)
-  ok("ri.read returns the record back", type(decoded) == "table", tostring(derr))
-  ok("sidecar JSON round-trip preserves diff_review=true",
-    decoded and decoded.diff_review == true,
-    decoded and tostring(decoded.diff_review) or "decoded is nil")
-end
-
 print("\n[5] KB v2 managed block (ADR 1791209946 §2.4)")
 do
   local function block_of(content)
@@ -244,8 +205,8 @@ do
     block:find("KB_READ", 1, true) == nil and block:find("KB_WRITE", 1, true) == nil
       and block:find("KB_SCOPE", 1, true) == nil)
   ok("no KB types", block:find("KB type", 1, true) == nil)
-  ok("mailbox protocol kept", block:find("### Mailbox protocol", 1, true) ~= nil
-    and block:find("$AUTO_AGENTS_MAILBOX_BOOTSTRAP_DOC", 1, true) ~= nil)
+  ok("no mailbox protocol: the crew section instead", block:find("### Mailbox protocol", 1, true) == nil
+    and block:find("AUTO_AGENTS_MAILBOX", 1, true) == nil and block:find("### Crew mail (AutoDoc)", 1, true) ~= nil)
   ok("todo protocol kept", block:find("### Todo handling", 1, true) ~= nil
     and block:find("$AUTO_AGENTS_TODOS_CONVENTION_DOC", 1, true) ~= nil
     and block:find("todos.set_dir", 1, true) ~= nil

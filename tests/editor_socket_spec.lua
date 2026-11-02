@@ -12,6 +12,8 @@
 ---   [5] the bridged command verbs (auto-core.commands): the registered handler runs with the args and the agent as
 ---       sender; ok answers its value, a refusal is the editor's refused code, bad args are invalid
 ---       params, an unregistered one is method-not-found
+---   [5b] the todos.* verbs: bridged under the default grants (todos), the caller as ctx.from;
+---       a roster without the todos grant is refused
 ---   [6] framing: a request split across writes is answered once, two in one write both, and bytes
 ---       that aren't msgpack close the connection
 ---   [7] an unknown verb is method-not-found
@@ -191,6 +193,35 @@ do
   local tok2 = es.agent_env("nopeek", { "editor.read" }).AUTODOC_EDITOR_TOKEN
   local _, gerr = call(path, "review.list", { tok2, { repo = "golib" } })
   ok("[5] a bridged verb needs its grant", gerr and gerr.code == es.CODE_ACCESS_DENIED)
+end
+
+-- ── [5b] the todos.* verbs ──────────────────────────────────────────────────
+
+do
+  local tok = es.agent_env("planner").AUTODOC_EDITOR_TOKEN
+  local got
+  registry["todos.assign"] = { schema = { id = "string" }, handler = function(args, ctx)
+    got = { args = args, ctx = ctx }
+    return { ok = true, value = { id = args.id, assignee = args.assignee } }
+  end }
+  local res, err = call(path, "todos.assign", { tok, { id = "t1", assignee = "gold" } })
+  ok("[5b] todos.assign is bridged under the default grants", err == nil and res and res.assignee == "gold",
+    vim.inspect({ res, err }))
+  ok("[5b] its handler is told who assigned it (ctx.from)", got and got.ctx.from == "agent:planner"
+    and got.ctx.sender == "agent:planner", vim.inspect(got and got.ctx))
+  local tok2 = es.agent_env("notodos", { "editor.read", "review" }).AUTODOC_EDITOR_TOKEN
+  local _, gerr = call(path, "todos.assign", { tok2, { id = "t1", assignee = "gold" } })
+  ok("[5b] a roster without the todos grant is refused, naming it", gerr and gerr.code == es.CODE_ACCESS_DENIED
+    and gerr.message:find("todos", 1, true) ~= nil, vim.inspect(gerr))
+  ok("[5b] all twelve todos verbs are on the socket", (function()
+    for _, v in ipairs({ "list", "show", "list_dirs", "get_dir", "add", "update", "status", "assign", "archive",
+      "remove", "refresh", "set_dir" }) do
+      local _, e = call(path, "todos." .. v, { tok, {} })
+      -- registered here or not, a verb on the socket is never "no verb … on Neovim's editor socket"
+      if e and e.message:find("no verb", 1, true) then return false end
+    end
+    return true
+  end)())
 end
 
 -- ── [6] framing ─────────────────────────────────────────────────────────────

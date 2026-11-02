@@ -169,7 +169,7 @@ function M.validate(cfg)
     return "panel.bottom_margin must be a non-negative integer"
   end
   local a = cfg.agents
-  local GRANTS = { ["editor.read"] = true, review = true, peek = true, commands = true }
+  local GRANTS = { ["editor.read"] = true, review = true, peek = true, commands = true, todos = true }
   for _, entry in ipairs((a and a.bootstrap) or {}) do
     local g = entry.editor_grants
     if g ~= nil then
@@ -178,7 +178,7 @@ function M.validate(cfg)
       end
       for _, x in ipairs(g) do
         if not GRANTS[x] then
-          return ("agents.bootstrap entry %s: editor_grants %q is not one of editor.read, review, peek, commands"):format(tostring(entry.name), tostring(x))
+          return ("agents.bootstrap entry %s: editor_grants %q is not one of editor.read, review, peek, commands, todos"):format(tostring(entry.name), tostring(x))
         end
       end
     end
