@@ -1059,9 +1059,17 @@ do
   ok("[23] another host's slot of the same name has its own context path, absent: nothing of this host's to read",
     other_path ~= reg.path and vim.uv.fs_stat(other_path) == nil, other_path)
   crew._set_denied(true)
-  local denied_dir, denied_why = crew.agent_folder("cx", root)
-  ok("[23] a host denied the scope gets no folder (no setup file, credential or server), and says why",
-    denied_dir == nil and denied_why and denied_why:find("another live Neovim", 1, true), tostring(denied_why))
+  local denied_dir = crew.agent_folder("cx", root)
+  ok("[23] a host denied the scope gets a folder of its own for its setup's files, never this host's",
+    denied_dir and denied_dir ~= my_dir and denied_dir:find("999999-0123456789ab", 1, true) ~= nil, tostring(denied_dir))
+  local setup = { argv = { "--remote", "unix:///f/codex.sock", "--keep" }, env = { AUTODOC_CODEX_SERVER = "/f/codex.sock", KEEP = "1" },
+    server = { "codex", "app-server", "--listen", "unix:///f/codex.sock" }, server_socket = "/f/codex.sock",
+    after = { { "crew", "endpoint", "--codex-here", "--wait", "60s" }, { "crew", "other-step" } }, folder_files = { { path = "a", content = "x" } } }
+  local stripped, dropped = crew.without_server(setup)
+  ok("[23] a denied slot's setup keeps its files and wiring, without the server, --remote, its socket's env or the endpoint step",
+    dropped and #stripped.server == 0 and stripped.server_socket == nil and vim.deep_equal(stripped.argv, { "--keep" })
+      and stripped.env.AUTODOC_CODEX_SERVER == nil and stripped.env.KEEP == "1" and #stripped.after == 1
+      and stripped.after[1][2] == "other-step" and #stripped.folder_files == 1 and #setup.server == 4, vim.inspect(stripped))
   crew._set_denied(false)
   crew.incarnation = real
   local held = crew.held
@@ -1125,6 +1133,56 @@ do -- F4: an existing folder or file is made private, or refused; never followed
   vim.uv.fs_symlink(elsewhere, vim.fs.joinpath(dir, "sub"))
   ok("[23] a link in place of a folder is refused, naming it",
     (crew.write_folder_files(dir, { { path = "sub/x.json", content = "x" } }) or ""):find("isn't a directory of its own", 1, true) ~= nil)
+  crew.stop()
+end
+
+do -- F5: a crashed run's folder that records its Codex server still running stays, until it ends
+  new_world()
+  local root = vim.fn.tempname()
+  local parent = vim.fs.joinpath(root, "autovim_alpha")
+  local sleeper = vim.fn.jobstart({ "sleep", "60" })
+  local spid = vim.fn.jobpid(sleeper)
+  local dead = vim.fs.joinpath(parent, "4194301-eeeeeeeeeeee")
+  vim.fn.mkdir(vim.fs.joinpath(dead, "cx", ".autodoc-crew"), "p", tonumber("700", 8))
+  vim.fn.writefile({ "4194301 boot:1:4194301:1" }, vim.fs.joinpath(dead, "owner"))
+  vim.fn.writefile({ spid .. " " .. crew.proc_ref(nil, spid) }, vim.fs.joinpath(dead, "cx", ".autodoc-crew", "server.pid"))
+  local stale = vim.fs.joinpath(parent, "4194302-ffffffffffff") -- its server's pid runs as another process now
+  vim.fn.mkdir(vim.fs.joinpath(stale, "cx", ".autodoc-crew"), "p", tonumber("700", 8))
+  vim.fn.writefile({ "4194302 boot:1:4194302:1" }, vim.fs.joinpath(stale, "owner"))
+  vim.fn.writefile({ spid .. " boot:1:" .. spid .. ":1" }, vim.fs.joinpath(stale, "cx", ".autodoc-crew", "server.pid"))
+  crew.agent_folder("cx", root)
+  ok("[23] a dead run's folder whose Codex server still runs is kept: its record", vim.uv.fs_stat(dead) ~= nil)
+  ok("[23] one whose recorded server is another process now is swept", vim.uv.fs_stat(stale) == nil)
+  vim.fn.jobstop(sleeper)
+  vim.fn.jobwait({ sleeper }, 5000)
+  vim.wait(2000, function() return vim.uv.fs_stat("/proc/" .. spid) == nil end, 20)
+  crew._forget_host_dirs() -- the next start
+  crew.agent_folder("cx", root)
+  ok("[23] once its server ended, the next start sweeps it", vim.uv.fs_stat(dead) == nil)
+  local noexec = vim.fn.tempname()
+  vim.fn.mkdir(noexec, "p")
+  vim.fn.mkdir(vim.fs.joinpath(noexec, "77"), "p")
+  vim.uv.fs_chmod(noexec, 0)
+  ok("[23] a /proc that can't be read (not ENOENT) proves nothing gone", crew.process_gone(77, "x", noexec) == false)
+  vim.uv.fs_chmod(noexec, tonumber("700", 8))
+  ok("[23] a pid with no /proc entry (ENOENT) is gone", crew.process_gone(77, "x", vim.fn.tempname()) == true)
+  crew.stop()
+end
+
+do -- F6: a slot started while another Neovim holds the scope joins once this one holds it
+  local w = new_world({ claim = false })
+  local cwd = tmpcwd()
+  crew._set_denied(true)
+  local path = crew.context_path(cwd, "ag")
+  local h = crew.defer({ codename = "ag", kind = "antigravity", cwd = cwd, path = path })
+  h.after = { { "autodoc", "crew", "bridge", "--agy" } }
+  crew.started(h, { AUTODOC_CREW_CONTEXT = path })
+  ok("[23] denied: no context, no step yet", vim.uv.fs_stat(path) == nil and #w.ran == 0)
+  w.subs["autodoc.session:connected"]({}) -- the other Neovim let go: this one's claim is answered
+  ok("[23] held now: no longer denied, the slot joined, its context written, its steps run once",
+    not crew.scope_denied() and h.session and read_json(path) and read_json(path).session == h.session.id and #w.ran == 1,
+    vim.inspect({ crew.scope_denied(), h.session, w.ran }))
+  crew.finish(h, "exit")
   crew.stop()
 end
 
