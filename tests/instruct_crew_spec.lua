@@ -85,7 +85,9 @@ do
   ok("[1] the crew section is always there", has(s, "### Crew mail (AutoDoc)"))
   ok("[1] every message through the daemon, no file mailbox",
     has(s, "Every message to you, from the user or a peer, goes through AutoDoc's") and has(s, "there is no file mailbox"))
-  ok("[1] with no crew session: tell the user", has(s, "`$AUTODOC_CREW_CONTEXT` is set") and has(s, "tell the user"))
+  ok("[1] with no crew session yet: ask again in a minute (Neovim joins it), then tell the user",
+    has(s, "no session") and has(s, "context, you started before AutoDoc's daemon answered") and has(s, "ask again in a minute")
+      and has(s, "still fails") and has(s, "tell the user"))
   ok("[1] no mailbox section", not has(s, "### Mailbox protocol") and not has(s, "inbox/") and not has(s, "outbox/"))
   ok("[1] no mailbox env, no cutover", not has(s, "AUTO_AGENTS_MAILBOX") and not has(s, "cutover"))
 end
