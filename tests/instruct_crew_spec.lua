@@ -131,5 +131,65 @@ do
   ok("[7] and why not a raw daemon assign", has(s, "a raw daemon `todos.assign`") and has(s, "carries no scope and notifies no one"))
 end
 
+-- [8] one AGENTS.md read by Codex, OpenCode and agy (row 23): rendered for all of them, the same
+-- whichever spawned last: every one's roster row with its Kind, each kind's guide under its own
+-- heading, the model parts for each.
+do
+  world(nil)
+  package.loaded["auto-agents"].state.config.agents.bootstrap = {
+    { slot = 1, kind = "claude", name = "jarvis", configured = true },
+    { slot = 2, kind = "codex", name = "lector", configured = true },
+    { slot = 3, kind = "antigravity", name = "juliet", configured = true, model = "gemini-3" },
+    { slot = 4, kind = "opencode", name = "zen", configured = true, diff_review = true },
+  }
+  package.loaded["auto-agents.crew"].guide = function(kind)
+    asked[#asked + 1] = kind
+    return "guide for " .. kind .. ": register with `autodoc crew bridge --" .. kind .. "`\n"
+  end
+  local function shared_block(kind, name, slot)
+    instruct._invalidate_ensure_cache()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    local path = instruct.ensure({ kind = kind, name = name, slot = slot }, KB, cwd)
+    local f = assert(io.open(path, "r"))
+    local s = f:read("*a")
+    f:close()
+    vim.fn.delete(cwd, "rf")
+    return s, path
+  end
+  local by_codex, path = shared_block("codex", "lector", 2)
+  local by_opencode = shared_block("opencode", "zen", 4)
+  local by_agy = shared_block("antigravity", "juliet", 3)
+  ok("[8] the file is AGENTS.md", vim.fs.basename(path) == "AGENTS.md")
+  ok("[8] the same block whichever kind spawned last", by_codex == by_opencode and by_opencode == by_agy)
+  ok("[8] it names every kind that reads it",
+    has(by_codex, "CLI reads it: `antigravity`, `codex`, `opencode`.") and not has(by_codex, "-backed agent"))
+  ok("[8] every sharing agent in the roster, with its Kind; claude's (CLAUDE.md) not",
+    has(by_codex, "| 2 | `lector` | `codex` |") and has(by_codex, "| 3 | `juliet` | `antigravity` | `gemini-3` |")
+      and has(by_codex, "| 4 | `zen` | `opencode` |") and not has(by_codex, "`jarvis`"), by_codex)
+  local cx, ag, oc = by_codex:find("#### For `codex` agents", 1, true), by_codex:find("#### For `antigravity` agents", 1, true),
+    by_codex:find("#### For `opencode` agents", 1, true)
+  ok("[8] each kind's guide under its own heading, in kind order",
+    ag and cx and oc and ag < cx and cx < oc and has(by_codex, "guide for codex: register with `autodoc crew bridge --codex`")
+      and has(by_codex, "guide for antigravity:") and has(by_codex, "guide for opencode:"))
+  ok("[8] told to follow its own kind's guide only", has(by_codex, "for your own kind (your roster row's Kind) and none of the others"))
+  ok("[8] the daemon is asked for each kind's guide",
+    vim.tbl_contains(asked, "codex") and vim.tbl_contains(asked, "opencode") and vim.tbl_contains(asked, "antigravity")
+      and not vim.tbl_contains(asked, "claude"))
+  ok("[8] codex's model note and the others' model preference both",
+    has(by_codex, "### Model (`codex` agents)") and has(by_codex, "### Model preference") and has(by_codex, "| (codex's own config) |"))
+  ok("[8] an opted-in non-claude peer brings the diff_queue protocol", has(by_codex, "### Interactive diff review"))
+end
+
+-- [9] a file one kind reads alone is rendered as before: no Kind column, one guide, no per-kind heading
+do
+  world(GUIDE)
+  local s = block_for("claude")
+  ok("[9] one kind: the kind's own heading line", has(s, "shared by every `claude`-backed agent"))
+  ok("[9] one kind: no Kind column, no per-kind guide heading",
+    has(s, "| Slot | Name | Model |") and not has(s, "| Kind |") and not has(s, "#### For "))
+  ok("[9] one kind: its guide as the guide for your CLI", has(s, "The daemon's guide for your CLI:") and has(s, GUIDE:sub(1, 30)))
+end
+
 io.stdout:write(("\n%d passed, %d failed\n"):format(pass, fail))
 if fail > 0 then os.exit(1) end
