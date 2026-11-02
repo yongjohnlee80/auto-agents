@@ -1,6 +1,6 @@
 --- Tests for auto-agents.crew's crew send (phase 7, ADR 1793489028 §4.7): the todo notifier's hook
 --- (auto-core notifier.set_crew_recipient), which sends an assignment through AutoDoc's crew, as the
---- user, under this Neovim's claim (inbox.send with fire), keyed by the notifier's message id. Run with:
+--- user, under this Neovim's claim (inbox.send, never rung), keyed by the notifier's message id. Run with:
 ---   nvim --headless -u NONE -l tests/crew_send_spec.lua
 ---
 --- A fake autodoc.session holds the claim; the verb calls (crew_send's rpc) and the notifier are fakes.
@@ -8,7 +8,7 @@
 ---       the hook is left alone
 ---   [2] with no scope held, nothing is asked (nil)
 ---   [3] a scoped assignment is sent by the bare name: scope, run, epoch, the name, body, mid as the
----       key, kind, subject, fire; rang is true
+---       key, kind, subject, never rung (fire false: queued and woken as any mail); sent is true
 ---   [4] handed over (the recipient's host carries it) is true
 ---   [5] every certain refusal is false (the file notice); any other answer is "retry"
 ---   [6] an unscoped assignment goes only to the one live profile of its name, by name@scope; none,
@@ -117,10 +117,13 @@ do
   local w = new_world()
   local got = crew.crew_send("vision", MID, MSG, { unscoped = false })
   local p = (w.of("inbox.send")[1] or {}).params or {}
-  ok("[3] a scoped assignment is sent by the bare name, under the claim, keyed by mid, fired",
+  -- never rung: rung, a send no wake reaches right now is refused for certain, and the notifier then
+  -- files it in the file inbox (Johno's live test, an assignment to a cut-over agent); unrung, the
+  -- daemon queues it and wakes the agent as any mail, and a stopped one gets its host's fallback
+  ok("[3] a scoped assignment is sent by the bare name, under the claim, keyed by mid, never rung",
     got == true and p[1] == "autovim:alpha" and type(p[2]) == "string" and #p[2] > 0 and p[3] == 5
       and type(p[4]) == "table" and p[4][1] == "vision" and #p[4] == 1 and p[5] == MSG.body and p[6] == MID
-      and p[7] == MSG.kind and p[8] == MSG.subject and p[9] == true and #w.of("crew.list") == 0,
+      and p[7] == MSG.kind and p[8] == MSG.subject and p[9] == false and #w.of("crew.list") == 0,
     vim.inspect({ got = got, p = p }))
   ok("[3] a three-argument call (an auto-core before how) is scoped", crew.crew_send("vision", MID, MSG) == true
     and #w.of("crew.list") == 0)
