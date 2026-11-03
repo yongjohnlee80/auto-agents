@@ -1454,8 +1454,10 @@ local function certain(c)
 end
 
 ---crew_send is the todo notifier's crew hook (auto-core notifier.set_crew_recipient, ADR 1793489028
----§4.7): it sends an assignment to name through AutoDoc's crew, as the user, under this Neovim's
----claim (inbox.send, never rung), keyed by the notifier's message id mid, so a repeat is the same send.
+---§4.7): it sends an assignment to name through AutoDoc's crew under this Neovim's claim, keyed by the
+---notifier's message id mid, so a repeat is the same send: the user's own as the user (inbox.send,
+---never rung); one an agent made (how.by, as the daemon recorded it) from that agent, with the peer
+---marker (inbox.forward, by how.store, how.seq and how.task), never as the user's.
 ---Unrung, the daemon queues it and wakes the agent as for any mail (a stopped one gets its host's
 ---fallback); one refused for certain goes to the notifier's own fallback (auto-agents.fallback).
 ---It is the one sender of an assignment Neovim sees: this Neovim's todos.assign, and one no surface
@@ -1473,7 +1475,7 @@ end
 ---@param name string the assignee's name
 ---@param mid string the notifier's message id: the send's key
 ---@param msg table { kind, subject, body }
----@param how table|nil { unscoped = boolean }
+---@param how table|nil { unscoped = boolean, by = string|nil, store = string|nil, seq = integer|nil, task = string|nil }
 ---@return boolean|string|nil
 function M.crew_send(name, mid, msg, how)
   local st = _s
@@ -1496,7 +1498,18 @@ function M.crew_send(name, mid, msg, how)
     if #found ~= 1 then return false end -- none, or two projects' agents: the no-notice rule stands
     to = name .. "@" .. found[1]
   end
-  local _, err = st.rpc("inbox.send", { scope, st.run, epoch, { to }, msg.body, mid, msg.kind, msg.subject, false })
+  local by = type(how) == "table" and type(how.by) == "string" and how.by ~= "" and how.by or nil
+  local err
+  if by and type(how.store) == "string" and how.store ~= "" and type(how.task) == "string" and how.task ~= "" then
+    -- an agent made it: the daemon sends it from that agent, as it recorded the assignment (store,
+    -- seq, task), with the peer marker, never as the user's; the window's feed sends its own so too
+    _, err = st.rpc("inbox.forward", { scope, st.run, epoch, how.store, tonumber(how.seq) or 0, how.task, { to },
+      msg.body, mid, msg.kind, msg.subject })
+  elseif by then
+    return false -- an agent's assignment that names no change to forward: never sent as the user's
+  else
+    _, err = st.rpc("inbox.send", { scope, st.run, epoch, { to }, msg.body, mid, msg.kind, msg.subject, false })
+  end
   if err == nil then return true end
   local c = code(err)
   if c == M.CODE_HANDED_OVER then return true end
