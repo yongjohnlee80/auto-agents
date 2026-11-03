@@ -28,7 +28,10 @@
 local M = {}
 
 -- golib rpc's codes (server/rpc/message.go), and AutoDoc's editor refusal (tui/editorsocket.go).
-M.CODE_ACCESS_DENIED = -32001
+M.CODE_ACCESS_DENIED = -32001 -- a token that is not an agent's
+-- a capability the agent's roster entry doesn't grant: the editor socket's own code, as AutoDoc's
+-- window gives it (tui/editorsocket.go), never golib's access denied, whose remedy is another socket
+M.CODE_NOT_GRANTED = -32098
 M.CODE_METHOD_NOT_FOUND = -32601
 M.CODE_INVALID_PARAMS = -32602
 M.CODE_INTERNAL = -32603
@@ -214,7 +217,7 @@ function M.handle(method, params, msgid)
       "param 1 is not an agent's token: only the agents this Neovim started reach it ($AUTODOC_EDITOR_TOKEN)")
   end
   if v.grant and not (_s.grants[agent] or {})[v.grant] then
-    return nil, rpc_error(M.CODE_ACCESS_DENIED,
+    return nil, rpc_error(M.CODE_NOT_GRANTED,
       ("needs %s: not granted to %s (its roster entry's editor_grants)"):format(v.grant, agent))
   end
   local args = {}

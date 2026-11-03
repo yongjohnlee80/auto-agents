@@ -149,11 +149,12 @@ do
   local _, err = call(path, "editor.read", { tok })
   ok("[3] the default grants read the page", err == nil, vim.inspect(err))
   local _, oerr = call(path, "editor.open", { tok, "x.md" })
-  ok("[3] editor.open needs commands, not granted by default", oerr and oerr.code == es.CODE_ACCESS_DENIED
+  ok("[3] editor.open needs commands, not granted by default, with the editor socket's own code (-32098)",
+    oerr and oerr.code == -32098 and oerr.code == es.CODE_NOT_GRANTED
     and oerr.message:find("commands", 1, true) ~= nil, vim.inspect(oerr))
   local tok2 = es.agent_env("ro", { "commands" }).AUTODOC_EDITOR_TOKEN
   local _, rerr = call(path, "editor.read", { tok2 })
-  ok("[3] a roster's own list replaces the defaults", rerr and rerr.code == es.CODE_ACCESS_DENIED)
+  ok("[3] a roster's own list replaces the defaults", rerr and rerr.code == es.CODE_NOT_GRANTED)
 end
 
 -- ── [4] read and find ───────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ do
   ok("[5] a command not registered here is method-not-found", nerr and nerr.code == es.CODE_METHOD_NOT_FOUND)
   local tok2 = es.agent_env("nopeek", { "editor.read" }).AUTODOC_EDITOR_TOKEN
   local _, gerr = call(path, "review.list", { tok2, { repo = "golib" } })
-  ok("[5] a bridged verb needs its grant", gerr and gerr.code == es.CODE_ACCESS_DENIED)
+  ok("[5] a bridged verb needs its grant", gerr and gerr.code == es.CODE_NOT_GRANTED)
 end
 
 -- ── [5b] the todos.* verbs ──────────────────────────────────────────────────
@@ -215,7 +216,7 @@ do
     and got.ctx.sender == "agent:planner", vim.inspect(got and got.ctx))
   local tok2 = es.agent_env("notodos", { "editor.read", "review" }).AUTODOC_EDITOR_TOKEN
   local _, gerr = call(path, "todos.assign", { tok2, { id = "t1", assignee = "gold" } })
-  ok("[5b] a roster without the todos grant is refused, naming it", gerr and gerr.code == es.CODE_ACCESS_DENIED
+  ok("[5b] a roster without the todos grant is refused, naming it", gerr and gerr.code == es.CODE_NOT_GRANTED
     and gerr.message:find("todos", 1, true) ~= nil, vim.inspect(gerr))
   ok("[5b] all twelve todos verbs are on the socket", (function()
     for _, v in ipairs({ "list", "show", "list_dirs", "get_dir", "add", "update", "status", "assign", "archive",
@@ -245,7 +246,7 @@ do
   local dflt = es.agent_env("plain").AUTODOC_EDITOR_TOKEN
   local _, derr = call(path, "run.list", { dflt, {} })
   ok("[5c] *** the defaults don't grant `run`: refused, naming it, the handler never run ***",
-    derr and derr.code == es.CODE_ACCESS_DENIED and derr.message:find("run", 1, true) ~= nil and got == nil,
+    derr and derr.code == es.CODE_NOT_GRANTED and derr.message:find("run", 1, true) ~= nil and got == nil,
     vim.inspect(derr))
   local _, uerr = call(path, "run.ghost", { runner, {} })
   ok("[5c] a run.* verb auto-run hasn't registered is not found, as a bridged verb is",
@@ -291,7 +292,7 @@ do
   local res, err = call(path, "editor.read", { t2 })
   ok("[8] the old process's forget leaves the new token working", err == nil and res ~= nil, vim.inspect(err))
   local _, oerr = call(path, "editor.open", { t2, "nowhere-that-exists.md" })
-  ok("[8] and its grants", not oerr or oerr.code ~= es.CODE_ACCESS_DENIED, vim.inspect(oerr))
+  ok("[8] and its grants", not oerr or (oerr.code ~= es.CODE_NOT_GRANTED and oerr.code ~= es.CODE_ACCESS_DENIED), vim.inspect(oerr))
   es.forget("gold", t2)
   local _, gerr = call(path, "editor.read", { t2 })
   ok("[8] its own forget, by its token, revokes it", gerr and gerr.code == es.CODE_ACCESS_DENIED)

@@ -17,6 +17,9 @@ message between agents, and from the user, goes through AutoDoc's crew mail.
   sends an assignment an agent made through AutoDoc's `inbox.forward`, from its maker, with the peer
   marker; only the user's own is sent as the user's (`inbox.send`). A daemon without
   `inbox.forward` gets the typed fallback, never the user's mail. Needs auto-core v0.6.0's hook.
+- **An ungranted editor-socket verb is refused with -32098**, the editor socket's own code, as
+  AutoDoc's window gives it, not golib's -32001, whose remedy is another socket. A token that isn't
+  an agent's is still -32001.
 - **Neovim's editor socket** serves the command verbs that act in Neovim: `peek`, `diff_queue`,
   `review.*`, the `todos.*` verbs and, new, **auto-run's `run.*` verbs under an opt-in grant,
   `run`**. The defaults don't grant it, and auto-core.trust still gates the verbs that start a
