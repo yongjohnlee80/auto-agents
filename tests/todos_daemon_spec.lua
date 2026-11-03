@@ -503,6 +503,82 @@ do
     end)
     ok("… which is the daemon's no-recipient code, as crew_send reads it", ok_code and type(nerr) == "table"
       and nerr.code == crew.CODE_NO_RECIPIENT, vim.inspect(nerr))
+
+    -- An agent's assignment, end to end (docs/decisions/todos.md#an-assignment-says-who-made-it, on
+    -- AutoDoc's side): gold-e2e's own `autodoc --call todos.assign`, its hello carrying its crew
+    -- context, to the bare name jarvis-e2e. This Neovim's notifier reads the change, crew_send sends it,
+    -- and jarvis-e2e receives it from gold-e2e, never from the user; this Neovim's own assignment, the
+    -- user's, still comes from the user.
+    if proto < 48 then
+      ok("AutoDoc before protocol 48 records no assignment's maker: its end-to-end cells need a newer daemon", true)
+    else
+      local hello = client:hello() or {}
+      local function register(codename)
+        local secret = crew.run_token()
+        local okr, res, rerr = daemon.sync(function()
+          return daemon.rpc("crew.register", { scope, crew._run_for_tests(), epoch, codename, "claude", "w", "i-" .. codename, secret })
+        end)
+        local sid = okr and type(res) == "table" and res.session or nil
+        ok("crew.register " .. codename .. " on the real daemon", sid ~= nil, vim.inspect({ okr, res, rerr }))
+        return { session = sid, profile = type(res) == "table" and res.profile or nil, credential = (sid or "") .. "." .. secret }
+      end
+      local gold, jarvis = register("gold-e2e"), register("jarvis-e2e")
+      local ctx = sb .. "/gold-e2e.context.json"
+      vim.fn.writefile({ vim.json.encode({ store = hello.store_id, socket = sock, scope = scope, profile = gold.profile,
+        session = gold.session, credential = gold.credential, kind = "claude" }) }, ctx)
+      vim.fn.setfperm(ctx, "rw-------")
+      local wm = sb .. "/notifier-wm"
+      vim.fn.mkdir(wm, "p")
+      notifier._configure({ poll_ms = false, watermark_dir = wm, grace_ms = 0 })
+      notifier.start()
+      notifier._connect()
+      local function poll()
+        local done = false
+        notifier.poll_all(function() done = true end)
+        vim.wait(15000, function() return done end, 20)
+      end
+      poll() -- the notifier's first look: what was there before it is history
+      local function received(cred)
+        local okr, res = daemon.sync(function() return daemon.rpc("mail.receive", { cred }) end)
+        return okr and type(res) == "table" and res.deliveries or {}
+      end
+      received(jarvis.credential) -- nothing from before
+      local made = run("todos.add", { title = "Made by an agent" })
+      local id = made.ok and made.value and made.value.id
+      local okg, t = daemon.sync(function() return daemon.rpc("todos.get", { { root = proj }, id }) end)
+      local res = vim.system({ bin, "--config", cfg, "--call", "todos.assign",
+        vim.json.encode({ { root = proj }, id, okg and type(t) == "table" and t.rev or "", "jarvis-e2e", "Take it." }) },
+        { env = { AUTODOC_CREW_CONTEXT = ctx }, text = true }):wait()
+      ok("gold-e2e's own autodoc --call todos.assign, run with its crew context, is accepted", res.code == 0,
+        vim.inspect({ code = res.code, err = res.stderr }))
+      poll()
+      local got
+      vim.wait(10000, function()
+        for _, d in ipairs(received(jarvis.credential)) do
+          if type(d) == "table" and type(d.message) == "table" and tostring(d.message.subject):find("Made by an agent", 1, true) then
+            got = d
+          end
+        end
+        return got ~= nil
+      end, 50)
+      ok("jarvis-e2e receives gold-e2e's assignment from gold-e2e (the peer who made it), not from the user",
+        got ~= nil and got.from == "gold-e2e", vim.inspect(got and { from = got.from, subject = got.message.subject }))
+      local mine = run("todos.add", { title = "Made by the user" })
+      run("todos.assign", { id = mine.ok and mine.value and mine.value.id, assignee = "jarvis-e2e", reason = "Yours." })
+      poll()
+      local user
+      vim.wait(10000, function()
+        for _, d in ipairs(received(jarvis.credential)) do
+          if type(d) == "table" and type(d.message) == "table" and tostring(d.message.subject):find("Made by the user", 1, true) then
+            user = d
+          end
+        end
+        return user ~= nil
+      end, 50)
+      ok("… and this Neovim's own assignment, the user's, comes from the user", user ~= nil and user.from == "user",
+        vim.inspect(user and { from = user.from, subject = user.message.subject }))
+      notifier.stop()
+    end
     crew.stop()
     ok("stop clears the hook", hooked == nil, tostring(hooked))
     notifier.set_crew_recipient = real_set

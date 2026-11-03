@@ -13,6 +13,10 @@ message between agents, and from the user, goes through AutoDoc's crew mail.
   fallback), and a diff verdict goes as crew mail. The bootstrap keymaps (`<leader>am`, `<leader>ai`,
   `<leader>ap`) went with it.
 - **The command verbs register on `auto-core.commands`**, each module on its own.
+- **An agent's todo assignment comes from that agent:** the crew send (the todo notifier's hook)
+  sends an assignment an agent made through AutoDoc's `inbox.forward`, from its maker, with the peer
+  marker; only the user's own is sent as the user's (`inbox.send`). A daemon without
+  `inbox.forward` gets the typed fallback, never the user's mail. Needs auto-core v0.6.0's hook.
 - **Neovim's editor socket** serves the command verbs that act in Neovim: `peek`, `diff_queue`,
   `review.*`, the `todos.*` verbs and, new, **auto-run's `run.*` verbs under an opt-in grant,
   `run`**. The defaults don't grant it, and auto-core.trust still gates the verbs that start a

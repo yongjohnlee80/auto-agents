@@ -14,6 +14,9 @@
 ---   [6] an unscoped assignment goes only to the one live profile of its name, by name@scope; none,
 ---       or two projects' live agents, is false and sends nothing; an offline profile doesn't count;
 ---       a crew.list with no outcome is "retry"
+---   [7] an assignment an agent made (how.by) is sent from its maker: inbox.forward with the change's
+---       store, seq and task, scoped or (to name@scope) unscoped; one naming no change is not sent; the
+---       user's own stays inbox.send; a daemon with no inbox.forward is the fallback, never inbox.send
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -187,6 +190,40 @@ do
   w.rpc_answer["crew.list"] = function() return nil, { code = crew.CODE_METHOD_NOT_FOUND, message = "unknown method" } end
   got = crew.crew_send("vision", MID, MSG, U)
   ok("[6] a crew.list refused for certain is not sent", got == false and #w.of("inbox.send") == 0, vim.inspect(got))
+end
+
+do
+  local w = new_world()
+  w.rpc_answer["inbox.forward"] = { message = "m2" }
+  local BY = { unscoped = false, by = "gold@autodoc:aaaa", store = "store-1", seq = 42, task = "2026-11-04-t" }
+  local got = crew.crew_send("vision", MID, MSG, BY)
+  local f = (w.of("inbox.forward")[1] or {}).params or {}
+  ok("[7] an agent's assignment is sent from its maker: inbox.forward under the claim, by store, seq and task",
+    got == true and #w.of("inbox.send") == 0 and f[1] == "autovim:alpha" and type(f[2]) == "string" and #f[2] > 0
+      and f[3] == 5 and f[4] == "store-1" and f[5] == 42 and f[6] == "2026-11-04-t" and type(f[7]) == "table"
+      and f[7][1] == "vision" and #f[7] == 1 and f[8] == MSG.body and f[9] == MID and f[10] == MSG.kind
+      and f[11] == MSG.subject, vim.inspect({ got = got, f = f, sends = w.of("inbox.send") }))
+  w.rpcs = {}
+  w.rpc_answer["crew.list"] = { { codename = "vision", scope = "autodoc:7ac1", presence = "live" } }
+  got = crew.crew_send("vision", MID, MSG, { unscoped = true, by = "gold@autodoc:aaaa", store = "store-1", seq = 43,
+    task = "2026-11-04-u" })
+  f = (w.of("inbox.forward")[1] or {}).params or {}
+  ok("[7] … unscoped too: to the one live profile of the name, by name@scope, from its maker",
+    got == true and #w.of("inbox.send") == 0 and type(f[7]) == "table" and f[7][1] == "vision@autodoc:7ac1" and f[5] == 43,
+    vim.inspect({ got = got, f = f }))
+  w.rpcs = {}
+  got = crew.crew_send("vision", MID, MSG, { unscoped = false, by = "gold@autodoc:aaaa" })
+  ok("[7] an agent's assignment that names no change to forward is never sent as the user's", got == false
+    and #w.rpcs == 0, vim.inspect({ got = got, rpcs = w.rpcs }))
+  w.rpcs = {}
+  got = crew.crew_send("vision", MID, MSG, { unscoped = false, by = "", store = "store-1", seq = 44, task = "t" })
+  ok("[7] the user's own (no maker) is still the user's: inbox.send", got == true and #w.of("inbox.send") == 1
+    and #w.of("inbox.forward") == 0, vim.inspect(w.rpcs))
+  w.rpcs = {}
+  w.rpc_answer["inbox.forward"] = function() return nil, { code = crew.CODE_METHOD_NOT_FOUND, message = "unknown method" } end
+  got = crew.crew_send("vision", MID, MSG, BY)
+  ok("[7] a daemon with no inbox.forward refuses it for certain: the notifier's fallback, never inbox.send",
+    got == false and #w.of("inbox.send") == 0, vim.inspect({ got = got, rpcs = w.rpcs }))
 end
 
 crew.stop()
