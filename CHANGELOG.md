@@ -44,6 +44,10 @@ message between agents, and from the user, goes through AutoDoc's crew mail.
 - **Instruction files:** one that several kinds read (AGENTS.md: codex, opencode, agy) is rendered
   for all of them, with each kind's crew guide under its own heading. The blocks name crew mail and
   the editor socket, not the file mailbox.
+- **One revision check per spawn:** the todos block asks a spawn for one check, the todos
+  convention's `revision:`, and reads the `todos.*` verbs' reference when a verb is needed, not on
+  every spawn. The per-spawn ingest gate over both docs is gone (24 lines fewer in every agent's
+  instructions).
 
 ## [v0.3.22] — 2026-11-02 — an assignment reaches its agent through the crew, stated
 
