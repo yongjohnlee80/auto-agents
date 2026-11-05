@@ -174,6 +174,18 @@ local function list_bucket(ctx, status)
   return tasks
 end
 
+---say_reach shows an assignment's answer's warning in this Neovim when nobody will be told (AutoDoc's
+---reach, protocol 54), as the daemon worded it: the caller's response carries reach too, so an agent
+---that assigned reads it there, and the user sees it here either way. A note (another project's
+---agent) stays in the response alone. sc is auto-core's todo.scope, or nil before it.
+local function say_reach(sc, answer)
+  if not sc or type(sc.reach_message) ~= "function" then return end
+  local msg, warn = sc.reach_message(answer)
+  if msg and warn then
+    vim.schedule(function() vim.notify("[todos] " .. msg, vim.log.levels.WARN) end)
+  end
+end
+
 ---todo_scope is auto-core's assignment scope (ADR 1791532020 §2.5a), nil with an auto-core
 ---before it: then an assignment is built as before, with no scope.
 local function todo_scope()
@@ -295,7 +307,8 @@ local function h_add(args)
   store.publish("core.todo:changed", { kind = "add", id = task.id })
   -- With an assignee it is an assignment (D1): the notifier tells them.
   if type(task.assignee) == "string" and task.assignee ~= "" then store.poke_notifier() end
-  return ok_response({ id = task.id })
+  say_reach(sc, task)
+  return ok_response({ id = task.id, reach = type(task) == "table" and task.reach or nil })
 end
 
 local function h_update(args)
@@ -388,6 +401,7 @@ local function h_assign(args, ctx)
   if failure then return failure end
   store.publish("core.todo:changed", { kind = "assign", id = args.id })
   if who ~= "" then store.poke_notifier() end
+  say_reach(sc, task)
   return ok_response(task)
 end
 

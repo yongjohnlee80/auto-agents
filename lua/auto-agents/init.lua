@@ -181,6 +181,11 @@ function M.setup(opts)
   -- this Neovim's instance id, so a restart keeps it.
   local ok_scope, todo_scope = pcall(require, "auto-core.todo.scope") -- absent before auto-core v0.5.1
   if ok_scope then todo_scope.set("auto-agents:" .. M.state.session_project_key) end
+  -- and its crew scope, read at each assignment from the claim held then (AutoDoc protocol 54): the
+  -- answer says who a bare assignee reaches, and warns when nobody will be told
+  if ok_scope and type(todo_scope.set_crew) == "function" then -- absent before auto-core's crew param
+    todo_scope.set_crew(function() return (require("auto-agents.crew").held()) end)
+  end
 
   -- M6: TOML config store replaces the lazy-spec bootstrap entirely.
   -- Resolution order: per-project file → global file → empty.

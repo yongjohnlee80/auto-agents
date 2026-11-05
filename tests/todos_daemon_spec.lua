@@ -289,6 +289,46 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────
+section("an assignment says who it reaches: crew (AutoDoc protocol 54)")
+do
+  -- setup reads the crew scope from its claim (crew.held()); here a reader stands in for it. At 54
+  -- the verbs send it after the scope, and the daemon's answer says who the assignee reaches: an
+  -- agent no project has is reach none, its warning shown in this Neovim and returned to the caller.
+  local ok_sc, sc = pcall(require, "auto-core.todo.scope")
+  local has = ok_sc and type(sc.set_crew) == "function"
+  if has then
+    sc.set("auto-agents:spec")
+    sc.set_crew(function() return "autovim:spec" end)
+  end
+  local at54 = has and sc.protocol() >= (sc.CREW_PROTOCOL or 54)
+  local notes = {}
+  local notify = vim.notify
+  vim.notify = function(msg, level) notes[#notes + 1] = { msg = msg, level = level } end
+  local r = run("todos.assign", { id = id, assignee = "agent:nobody-anywhere", reason = "reach" })
+  local p = last_params["assign"]
+  vim.wait(500, function() return #notes > 0 end)
+  vim.notify = notify
+  if at54 then
+    ok("assign sends crew after the scope", r.ok and p and p[6] == "auto-agents:spec" and p[7] == "autovim:spec", vim.inspect(p))
+    local reach = r.ok and r.value and r.value.reach
+    ok("the answer's reach: none, with the daemon's warning", type(reach) == "table" and reach.state == "none"
+      and type(reach.warning) == "string" and reach.warning:find("nobody will be told", 1, true) ~= nil, vim.inspect(r))
+    ok("… shown in this Neovim at WARN, as worded", #notes == 1 and notes[1].level == vim.log.levels.WARN
+      and notes[1].msg == "[todos] " .. (reach and reach.warning or "?"), vim.inspect(notes))
+    r = run("todos.add", { title = "Created for nobody", assignee = "agent:nobody-anywhere" })
+    p = last_params["add"]
+    ok("add with an assignee sends crew too, and answers reach", r.ok and p and p[4] == "autovim:spec"
+      and type(r.value.reach) == "table" and r.value.reach.state == "none", vim.inspect({ r, p }))
+    if r.ok then run("todos.remove", { id = r.value.id }) end
+  else
+    ok("below AutoDoc 54 (or an auto-core without crew): no crew is sent, and nothing is said",
+      r.ok and p and p[7] == nil and #notes == 0, vim.inspect({ r, p, notes }))
+  end
+  run("todos.assign", { id = id })
+  if has then sc.set_crew(nil); sc.set(nil) end
+end
+
+-- ─────────────────────────────────────────────────────────────
 section("status, archive, refresh, remove")
 do
   local r = run("todos.status", { id = id, status = "automated" })
