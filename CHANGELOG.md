@@ -2,6 +2,15 @@
 
 All notable changes to `auto-agents.nvim` are documented here.
 
+## [Unreleased]
+
+- **An assignment says who it reaches.** Setup gives auto-core a reader for this Neovim's crew
+  scope (its claim, `crew.held()`). `todos.assign` and `todos.add` then send it as AutoDoc's `crew`
+  (protocol 54), and their responses carry the daemon's `reach`. When nobody will be told (no
+  project has an agent of that name, or two or more other projects do), the warning is shown here
+  at WARN, as the daemon words it. Needs auto-core's `todo.scope.set_crew`; without it, or with an
+  AutoDoc below 54, nothing changes.
+
 ## [v0.4.0] — 2026-11-02 — the file mailbox retired; crew-wired slots join late
 
 ADR 1793271500, phase 5: the joint release with auto-core v0.6.0. **It needs auto-core v0.6.0**
