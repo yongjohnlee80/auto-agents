@@ -621,7 +621,7 @@ do
   local has_start = type(notifier.start) == "function" and type(notifier.is_running) == "function"
   if has_start then
     notifier._reset_for_tests()
-    notifier._configure({ poll_ms = false, watermark_dir = sb .. "/notifier-wm-setup", grace_ms = 0 })
+    notifier._configure({ poll_ms = 200, watermark_dir = sb .. "/notifier-wm-setup", grace_ms = 0 })
     ok("as autovim runs it: auto-core's setup never ran", require("auto-core")._initialized ~= true)
     ok("… and nothing has started the notifier yet", notifier.is_running() == false)
   end
@@ -674,21 +674,17 @@ do
         local okm, m = daemon.sync(function() return daemon.rpc("mail.receive", { cred }) end)
         return okm and type(m) == "table" and m.deliveries or {}
       end
-      -- headless, VimEnter never fires: connect stands in for it, as the notifier's own suite does
-      notifier._connect()
-      local function poll()
-        local done = false
-        notifier.poll_all(function() done = true end)
-        vim.wait(15000, function() return done end, 20)
-      end
-      poll() -- the notifier's first look: what was there before it is history
+      -- Headless, VimEnter never fires: connect stands in for it, as the notifier's own suite does.
+      -- Nothing here polls by hand: connect, the catch-up and every poll after it (the timer, the
+      -- verb's poke) run only in a started notifier, so this cell needs setup's start as much as the
+      -- one above does.
       received()
+      notifier._connect()
       local task = run("todos.add", { title = "Assigned with setup alone" })
       local ra = task.ok and run("todos.assign", { id = task.value.id, assignee = "lector-setup", reason = "Wake up." })
       ok("the assignment to lector-setup is made", ra and ra.ok, vim.inspect(ra))
       local mine = {}
-      poll()
-      vim.wait(15000, function()
+      local function collect()
         for _, d in ipairs(received()) do
           if type(d) == "table" and type(d.message) == "table"
             and tostring(d.message.subject):find("Assigned with setup alone", 1, true) then
@@ -696,8 +692,10 @@ do
           end
         end
         return #mine > 0
-      end, 100)
-      poll()
+      end
+      vim.wait(15000, collect, 100)
+      -- a few more of the notifier's own polls: a second send of it would show here
+      vim.wait(1500, function() collect(); return false end, 100)
       for _, d in ipairs(received()) do
         if type(d) == "table" and type(d.message) == "table"
           and tostring(d.message.subject):find("Assigned with setup alone", 1, true) then
