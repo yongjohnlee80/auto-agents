@@ -169,10 +169,21 @@ function M.notifier_handler(delivery)
   return M.type_once(name, delivery.key, text)
 end
 
----attach hands the notifier its fallback, at setup; detach takes it back.
+---attach hands the notifier its fallback, at setup, and starts it; detach takes the fallback back.
+---The host that sets the notifier's hooks starts it: since auto-core v0.6.0 only auto-core's setup
+---starts it otherwise, and a consumer such as autovim never calls that setup, so no assignment was
+---ever read. start is idempotent, waits for VimEnter, and keeps `vim.g.auto_core_todo_notifier =
+---false` off.
 function M.attach()
   local ok, notifier = pcall(require, "auto-core.todo.notifier")
-  if ok and type(notifier.set_fallback) == "function" then notifier.set_fallback(M.notifier_handler) end
+  if not ok then return end
+  if type(notifier.set_fallback) == "function" then notifier.set_fallback(M.notifier_handler) end
+  if type(notifier.start) == "function" then
+    local oks, err = pcall(notifier.start)
+    if not oks then
+      pcall(function() require("auto-agents.log").warn("fallback", "the todo notifier didn't start: " .. tostring(err)) end)
+    end
+  end
 end
 
 function M.detach()

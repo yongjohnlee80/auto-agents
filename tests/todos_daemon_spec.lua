@@ -614,10 +614,26 @@ do
   local cwd = vim.fn.getcwd()
   vim.fn.chdir(proj)
   local root = vim.fn.getcwd()
+  -- The real notifier, as autovim runs it: auto-core's setup is never called (autovim's spec leaves
+  -- it to the consumer, and no consumer calls it), so only auto-agents' setup can start it.
+  package.loaded["auto-core.todo.notifier"] = nil
+  local notifier = require("auto-core.todo.notifier")
+  local has_start = type(notifier.start) == "function" and type(notifier.is_running) == "function"
+  if has_start then
+    notifier._reset_for_tests()
+    notifier._configure({ poll_ms = false, watermark_dir = sb .. "/notifier-wm-setup", grace_ms = 0 })
+    ok("as autovim runs it: auto-core's setup never ran", require("auto-core")._initialized ~= true)
+    ok("… and nothing has started the notifier yet", notifier.is_running() == false)
+  end
   local okset, serr = pcall(require("auto-agents").setup, { log_level = "error" })
   vim.fn.chdir(cwd)
   worktree.set_workspace_root(proj) -- the store this suite resolves, whatever setup touched
   ok("auto-agents' setup ran", okset, serr)
+  if has_start then
+    ok("auto-agents' setup starts the todo notifier: it sets the notifier's hooks", notifier.is_running() == true)
+  else
+    ok("auto-core before v0.6.0 starts its notifier from the mailbox router: nothing for setup to start", true)
+  end
   local ok_sc, sc = pcall(require, "auto-core.todo.scope")
   if ok_sc then
     -- the key as setup's rule makes it, computed here from the directory, not read back
@@ -630,6 +646,70 @@ do
     ok("… and an assignment made through the verb carries it",
       r and r.ok and p and p[6] == (sc.scoped() and want or nil), vim.inspect({ r, p }))
     if made.ok then run("todos.remove", { id = made.value.id }) end
+
+    -- An assignment to a live crew agent wakes it, with nothing but setup having run: exactly one
+    -- "[todos] task assigned to you" in its crew mail. Before this fix the notifier never started
+    -- under autovim, and no assignment reached anyone.
+    local crew = require("auto-agents.crew")
+    local daemon = require("auto-core.todo.daemon")
+    local client = require("autodoc.session").client()
+    local proto = client and client.hello and tonumber((client:hello() or {}).protocol) or 0
+    if not has_start then
+      ok("auto-core before v0.6.0: no notifier for setup to start, so no delivery to check", true)
+    elseif proto < 41 then
+      ok("AutoDoc before protocol 41 serves no crew send (protocol " .. proto .. "): no delivery to check", true)
+    else
+      vim.wait(10000, function() return crew.held() ~= nil end, 20)
+      local cscope, epoch = crew.held()
+      ok("setup's crew claims a scope from the real daemon", cscope ~= nil, vim.inspect({ cscope, epoch }))
+      local secret = crew.run_token()
+      local okr, res = daemon.sync(function()
+        return daemon.rpc("crew.register", { cscope, crew._run_for_tests(), epoch, "lector-setup", "claude", "w",
+          "i-lector-setup", secret })
+      end)
+      local sid = okr and type(res) == "table" and res.session or nil
+      ok("crew.register lector-setup on the real daemon", sid ~= nil, vim.inspect({ okr, res }))
+      local cred = (sid or "") .. "." .. secret
+      local function received()
+        local okm, m = daemon.sync(function() return daemon.rpc("mail.receive", { cred }) end)
+        return okm and type(m) == "table" and m.deliveries or {}
+      end
+      -- headless, VimEnter never fires: connect stands in for it, as the notifier's own suite does
+      notifier._connect()
+      local function poll()
+        local done = false
+        notifier.poll_all(function() done = true end)
+        vim.wait(15000, function() return done end, 20)
+      end
+      poll() -- the notifier's first look: what was there before it is history
+      received()
+      local task = run("todos.add", { title = "Assigned with setup alone" })
+      local ra = task.ok and run("todos.assign", { id = task.value.id, assignee = "lector-setup", reason = "Wake up." })
+      ok("the assignment to lector-setup is made", ra and ra.ok, vim.inspect(ra))
+      local mine = {}
+      poll()
+      vim.wait(15000, function()
+        for _, d in ipairs(received()) do
+          if type(d) == "table" and type(d.message) == "table"
+            and tostring(d.message.subject):find("Assigned with setup alone", 1, true) then
+            mine[#mine + 1] = d
+          end
+        end
+        return #mine > 0
+      end, 100)
+      poll()
+      for _, d in ipairs(received()) do
+        if type(d) == "table" and type(d.message) == "table"
+          and tostring(d.message.subject):find("Assigned with setup alone", 1, true) then
+          mine[#mine + 1] = d
+        end
+      end
+      ok("lector-setup gets exactly one '[todos] task assigned to you' for it", #mine == 1
+        and tostring(mine[1].message.subject):find("[todos] task assigned to you", 1, true) ~= nil,
+        vim.inspect(vim.tbl_map(function(d) return { from = d.from, subject = d.message.subject } end, mine)))
+      if task.ok then run("todos.remove", { id = task.value.id }) end
+    end
+    if has_start then notifier.stop() end
     sc.set(nil)
   else
     ok("an auto-core without the scope: setup sets none and assignments are made as before", true)
