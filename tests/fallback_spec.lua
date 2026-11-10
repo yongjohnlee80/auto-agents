@@ -13,6 +13,11 @@
 --   [7] the notifier's handler: subject and body typed; another instance's agent refused; no key
 --       refused
 --   [8] the state file keeps the newest keys, oldest dropped first
+--   [9] two Neovims, then a restart: no Neovim erases another's keys
+--   [10] guarded (a delivery): an agent on a prompt gets nothing typed and no key kept, then is
+--       typed once it has closed; prompts unreported (or nothing says) → pasted with no Enter,
+--       typed_not_sent; unguarded typing unchanged; a todo notice is held the same way
+--   [11] the inbox's waits_on_user: nil before a snapshot, true only on a permission or blocked
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:prepend(project_root)
@@ -191,6 +196,86 @@ do
   ok("[9] after a restart, neither Neovim's key is typed again", #sends == n)
   crew.incarnation = real
   restart()
+end
+
+-- ── [10] the guard: never typed into an open prompt ─────────────────────────
+
+do
+  local crew = require("auto-agents.crew")
+  local inbox = require("auto-agents.crew_inbox")
+  local real_session_of, real_waits = crew.session_of, inbox.waits_on_user
+  local session, waits = nil, nil -- gold-man's crew session; whether the inbox has it on a prompt
+  crew.session_of = function(name) return name == "gold-man" and session or nil end
+  inbox.waits_on_user = function(id) return session and id == session.id and waits or nil end
+  local function kept(key) return vim.tbl_contains(vim.fn.readfile(fb.state_file()), key) end
+
+  session, waits = { id = "s-gold", codename = "gold-man", prompts = true }, true
+  local n = #sends
+  local r, why, how = fb.type_once("gold-man", "job-prompt", "Mail from jarvis.", { guard = true })
+  ok("[10] an open prompt: false, waits, saying why", r == false and how == "waits" and type(why) == "string"
+    and why:find("prompt", 1, true) ~= nil, vim.inspect({ r, why, how }))
+  ok("[10] an open prompt: nothing typed, not even pasted", #sends == n, vim.inspect(sends[#sends]))
+  ok("[10] an open prompt: no key kept, so the next offer types it", not kept("job-prompt"))
+  waits = false
+  r, why, how = fb.type_once("gold-man", "job-prompt", "Mail from jarvis.", { guard = true })
+  ok("[10] once the prompt has closed, the next offer is typed and sent", r == true and how == "sent" and #sends == n + 1
+    and sends[#sends].opts.submit == true and vim.deep_equal(sends[#sends].opts.submit_keys, { "<CR>" }),
+    vim.inspect({ r, why, how, sends[#sends] }))
+  ok("[10] ... and its key kept", kept("job-prompt"))
+  r = fb.type_once("gold-man", "job-prompt", "Mail from jarvis.", { guard = true })
+  ok("[10] ... once", r == true and #sends == n + 1)
+
+  session, waits = { id = "s-gold", codename = "gold-man", prompts = false }, false
+  n = #sends
+  r, why, how = fb.type_once("gold-man", "job-unreported", "Mail from lector.", { guard = true })
+  ok("[10] prompts unreported: pasted with no Enter, typed_not_sent", r == true and how == "typed_not_sent"
+    and #sends == n + 1 and sends[#sends].opts.submit == false and sends[#sends].text == "Mail from lector.",
+    vim.inspect({ r, why, how, sends[#sends] }))
+  ok("[10] prompts unreported: its key kept (it is in the input)", kept("job-unreported"))
+  session = nil
+  r, why, how = fb.type_once("gold-man", "job-nosession", "x", { guard = true })
+  ok("[10] no crew session: unreported, pasted with no Enter", how == "typed_not_sent" and sends[#sends].opts.submit == false,
+    vim.inspect({ r, why, how }))
+  session, waits = { id = "s-gold", codename = "gold-man", prompts = true }, nil
+  r, why, how = fb.type_once("gold-man", "job-noinbox", "x", { guard = true })
+  ok("[10] no inbox snapshot yet: unreported, pasted with no Enter", how == "typed_not_sent"
+    and sends[#sends].opts.submit == false, vim.inspect({ r, why, how }))
+
+  waits = true
+  n = #sends
+  r = fb.type_once("gold-man", "job-unguarded", "the user's own prompt")
+  ok("[10] unguarded (not a delivery): typed and sent as before", r == true and #sends == n + 1
+    and sends[#sends].opts.submit == true)
+
+  n = #sends
+  local nr, nwhy = fb.notifier_handler({ recipient = "agent:gold-man", key = "todo-prompt-1", body = "b" })
+  ok("[10] a todo notice to an agent on a prompt: false (held), nothing typed", nr == false and type(nwhy) == "string"
+    and #sends == n and not kept("todo-prompt-1"), vim.inspect({ nr, nwhy }))
+  waits = false
+  nr = fb.notifier_handler({ recipient = "agent:gold-man", key = "todo-prompt-1", body = "b" })
+  ok("[10] ... typed and sent once the prompt has closed", nr == true and #sends == n + 1 and sends[#sends].opts.submit == true)
+
+  crew.session_of, inbox.waits_on_user = real_session_of, real_waits
+end
+
+-- ── [11] prompt_state reads the crew's session and the inbox's attention ────
+
+do
+  local crew = require("auto-agents.crew")
+  local inbox = require("auto-agents.crew_inbox")
+  local real_session_of = crew.session_of
+  crew.session_of = function() return { id = "s-x", codename = "x", prompts = true } end
+  local x = inbox.new({ session = {}, notify = function() end })
+  ok("[11] an inbox before its first snapshot says nothing", x:waits_on_user("s-x") == nil)
+  x.known = true
+  x.open.attention["s-x"] = { what = "permission" }
+  ok("[11] a permission attention waits on the user", x:waits_on_user("s-x") == true)
+  x.open.attention["s-x"] = { what = "idle" }
+  ok("[11] another attention doesn't", x:waits_on_user("s-x") == false)
+  x.open.attention["s-x"] = nil
+  ok("[11] no attention doesn't", x:waits_on_user("s-x") == false)
+  ok("[11] no inbox set up: nothing says", inbox.waits_on_user("s-x") == nil)
+  crew.session_of = real_session_of
 end
 
 vim.fn.delete(sb, "rf")

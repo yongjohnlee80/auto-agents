@@ -14,6 +14,11 @@
 ---       delivered, never typed twice
 ---   [5] a job that can't be typed is reported unknown, and the user is given its text
 ---   [6] a daemon without the verb, or a lost epoch, ends the asking; any other failure asks again
+---   [7] a job is typed guarded (the typing checks the agent's prompts); one whose agent shows the
+---       user a prompt is not reported and the user not told, so its lease lapses; offered again
+---       (tries 1) once the prompt has closed, it is typed and reported delivered
+---   [8] a job left in the input for the user's Enter (prompts unreported) is reported
+---       typed_not_sent, and the user told to press Enter there
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -64,13 +69,18 @@ local function new_world(opts)
     subscribe = function(topic, fn) w.subs[topic] = fn; return topic end,
     unsubscribe = function(topic) w.subs[topic] = nil end,
   }
-  -- the typing: typed[key] is a key typed before; type_err refuses the next one
-  w.type_once = function(codename, key, text)
+  -- the typing: typed[key] is a key typed before; type_err refuses the next one; prompt is what the
+  -- agent's prompt state makes of a guarded typing ("waits", "unreported" or nil: clear)
+  w.type_once = function(codename, key, text, topts)
+    w.opts = topts
     if w.typed[key] then return true end
     if w.type_err then return false, w.type_err end
+    local guard = topts and topts.guard
+    if guard and w.prompt == "waits" then return false, codename .. " waits on the user's answer to a prompt", "waits" end
     w.types[#w.types + 1] = { codename = codename, key = key, text = text }
     w.typed[key] = true
-    return true
+    if guard and w.prompt == "unreported" then return true, nil, "typed_not_sent" end
+    return true, nil, "sent"
   end
   w.tick = function()
     local due = w.timers
@@ -172,6 +182,39 @@ do
   end
   ok("[5] a job that can't be typed is reported unknown, the user given its text",
     d ~= nil and d[6] == "unknown" and given, vim.inspect({ d, w.notices }))
+end
+
+do
+  local w = new_world()
+  w.prompt = "waits"
+  w.jobs = { job("j7") }
+  w.tick()
+  ok("[7] the job is typed guarded", type(w.opts) == "table" and w.opts.guard == true, vim.inspect(w.opts))
+  local told = false
+  for _, n in ipairs(w.notices) do if n:find("jarvis", 1, true) then told = true end end
+  ok("[7] an agent on a prompt: nothing typed, nothing reported, the user not told",
+    #w.types == 0 and done_of(w, "j7") == nil and not told, vim.inspect({ w.types, w.of("mail.fallback_done"), w.notices }))
+  w.prompt = nil
+  w.jobs = { job("j7", 1) } -- its lease lapsed: offered again
+  w.tick()
+  local d = done_of(w, "j7")
+  ok("[7] offered again once the prompt has closed: typed once, reported delivered",
+    #w.types == 1 and w.types[1].key == "j7" and d ~= nil and d[6] == "delivered", vim.inspect({ w.types, d }))
+end
+
+do
+  local w = new_world()
+  w.prompt = "unreported"
+  w.jobs = { job("j8") }
+  w.tick()
+  local d = done_of(w, "j8")
+  ok("[8] left for the user's Enter: reported typed_not_sent", #w.types == 1 and d ~= nil and d[6] == "typed_not_sent",
+    vim.inspect({ w.types, d }))
+  local told = false
+  for _, n in ipairs(w.notices) do
+    if n:find("gold", 1, true) and n:find("press Enter", 1, true) then told = true end
+  end
+  ok("[8] the user is told to press Enter there", told, vim.inspect(w.notices))
 end
 
 -- after a failure answer, how many more asks the next ticks make (the renewals keep ticking)
