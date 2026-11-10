@@ -515,6 +515,26 @@ local function _cache_store(path, sig)
   end
 end
 
+---after_setup writes spec's instruction block again once its crew setup has answered a mail mode:
+---the block was first written before the spawn's setup ran, so its guide was in the mode the kind had
+---then (crew.answered_mode), and the agent must start reading the guide for the tools it is given.
+---A spawn calls it after its setup and before its agent starts. It never raises: a block it can't
+---write is logged, and the agent starts with the block as it was.
+---@param spec table      -- the slot's spec, as ensure takes it
+---@param setup table|nil -- crew.agent_setup's answer; nil or one without mail_via: nothing to do
+---@param cwd string|nil
+---@param kb table|string|nil
+---@return string|nil written_path
+function M.after_setup(spec, setup, cwd, kb)
+  if type(setup) ~= "table" or not setup.mail_via then return nil end
+  local ok, path = pcall(M.ensure, spec, kb, cwd)
+  if not ok then
+    require("auto-agents.log").warn("instruct", "the instruction block could not be written again: " .. tostring(path))
+    return nil
+  end
+  return path
+end
+
 ---Ensure the instruction file at `cwd/<kind-file>` contains an up-to-date
 ---auto-agents block. Idempotent. User content outside the block is
 ---preserved verbatim.

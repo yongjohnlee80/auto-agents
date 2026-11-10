@@ -755,6 +755,56 @@ do
   vim.fn.delete(cwd, "rf")
 end
 
+-- ── [18b] the spawn's guide is the mode its setup gave ───────────────────────
+-- the block is written before the spawn's setup answers (in the kind's mode then), and again after
+-- it (instruct.after_setup), before the agent starts: the file the agent reads names its tools
+
+do
+  crew._reset_setups()
+  local w = new_world({ protocol = crew.PROTOCOL_MAIL_VIA })
+  w.answer["crew.guide"] = function(p) return { markdown = "GUIDE-FOR-" .. p[1] .. "-BY-" .. tostring(p[2]) } end
+  local saved = { package.loaded["auto-agents"], package.loaded["auto-agents.editor_socket"], package.loaded["auto-agents.kb.instruct"] }
+  package.loaded["auto-agents"] = { state = { config = { agents = { bootstrap = {
+    { slot = 1, kind = "claude", name = "gold", configured = true } } } } } }
+  package.loaded["auto-agents.editor_socket"] = { path = function() return nil end }
+  package.loaded["auto-agents.kb.instruct"] = nil
+  local instruct = require("auto-agents.kb.instruct")
+  instruct._invalidate_ensure_cache()
+  local cwd = vim.fn.tempname()
+  vim.fn.mkdir(cwd, "p")
+  local spec, kb = { kind = "claude", name = "gold", slot = 1 }, { root = cwd .. "/kb", workspace = "kb" }
+  local function read(path)
+    local f = io.open(path, "r")
+    local t = f and f:read("*a") or ""
+    if f then f:close() end
+    return t
+  end
+  local path = instruct.ensure(spec, kb, cwd) -- the spawn's first write, before its setup
+  ok("[18b] before the setup: the kind's own form (no mode answered yet)", read(path):find("GUIDE-FOR-claude-BY-nil", 1, true) ~= nil,
+    read(path))
+  local setup = crew.agent_setup("claude", "/opt/autodoc", "claude", { PATH = "/p" }, function()
+    return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false, mail_via = "mcp" }), ""
+  end, "mcp", cwd .. "/agent")
+  instruct.after_setup(spec, setup, cwd, kb)
+  local after = read(path)
+  ok("[18b] after the setup answered mcp: the file the agent starts on has the MCP guide",
+    after:find("GUIDE-FOR-claude-BY-mcp", 1, true) ~= nil and after:find("GUIDE-FOR-claude-BY-nil", 1, true) == nil, after)
+  ok("[18b] no setup, or one with no mode: nothing written", instruct.after_setup(spec, nil, cwd, kb) == nil
+    and instruct.after_setup(spec, { argv = {} }, cwd, kb) == nil)
+  -- the spawn calls it between its setup and its registration (so before the agent's terminal)
+  local src = read(project_root .. "/lua/auto-agents/init.lua")
+  local at_setup = src:find("setup, setup_why, older = crew.agent_setup(", 1, true)
+  local at_after = src:find('require("auto-agents.kb.instruct").after_setup(spec, setup, cwd,', 1, true)
+  local at_begin = src:find("return crew.begin(reg)", 1, true)
+  ok("[18b] the spawn writes the block again after its setup and before its registration and terminal",
+    at_setup and at_after and at_begin and at_setup < at_after and at_after < at_begin,
+    vim.inspect({ at_setup, at_after, at_begin }))
+  vim.fn.delete(cwd, "rf")
+  package.loaded["auto-agents"], package.loaded["auto-agents.editor_socket"], package.loaded["auto-agents.kb.instruct"] =
+    saved[1], saved[2], saved[3]
+  crew._reset_setups()
+end
+
 -- ── [18] the crew guide ─────────────────────────────────────────────────────
 
 do
@@ -827,11 +877,13 @@ do
     return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false }), ""
   end, "mcp", nil)
   ok("[18] a setup that says no mode leaves none for its kind", crew.answered_mode("opencode") == nil)
-  w.protocol = crew.PROTOCOL_MAIL_VIA - 1
+  -- an older daemon (another build, so nothing kept answers for it)
+  w.protocol, w.version = crew.PROTOCOL_MAIL_VIA - 1, "an-older-build"
+  local before = #w.of("crew.guide")
   g = crew.guide("claude")
-  asked = w.of("crew.guide")[#w.of("crew.guide")].params
-  ok("[18] an older daemon: no mode sent, whatever was answered", g == "guide for claude by nil" and asked[2] == nil,
-    vim.inspect(asked))
+  asked = w.of("crew.guide")[before + 1] and w.of("crew.guide")[before + 1].params or {}
+  ok("[18] an older daemon: no mode sent, whatever was answered", g == "guide for claude by nil" and asked[1] == "claude"
+    and asked[2] == nil, vim.inspect(asked))
   crew._reset_setups()
 end
 
