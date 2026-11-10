@@ -56,7 +56,9 @@
 ---       slot is never typed into; an agy slot whose bridge didn't register gets its launch prompt
 ---       once per session; a registration refused while held is asked again at a renewal, logged once
 ---  [18] the crew guide for the instruction block: none while no scope is held or the daemon lacks
----       crew.guide; asked by crew's kind and cached per store, daemon version and kind; an answer
+---       crew.guide; asked by crew's kind, in the mail mode a spawn asks for (mcp from a daemon of
+---       PROTOCOL_MAIL_VIA, the kind's own form from an older one), and cached per store, daemon
+---       version, kind and mode; an answer
 ---       that fails or doesn't come within the wait is none, not cached, and asked again
 
 local script_path = debug.getinfo(1).source:sub(2)
@@ -776,6 +778,25 @@ do
   w.store = "store-2"
   crew.guide("antigravity")
   ok("[18] another store is asked again", #w.of("crew.guide") == 4)
+end
+
+do
+  -- the mode a spawn asks its setup for: a daemon of PROTOCOL_MAIL_VIA gives every agent the crew
+  -- MCP server, so its guide is asked in that form; an older daemon's in the kind's own
+  local w = new_world({ protocol = crew.PROTOCOL_MAIL_VIA })
+  w.answer["crew.guide"] = function(p) return { markdown = "guide for " .. p[1] .. " by " .. tostring(p[2]) } end
+  local g = crew.guide("claude")
+  local asked = w.of("crew.guide")[1].params
+  ok("[18] a daemon that takes a mail mode: the guide asked for mcp", g == "guide for claude by mcp"
+    and asked[1] == "claude" and asked[2] == "mcp", vim.inspect(asked))
+  crew.guide("claude")
+  ok("[18] the same mode is answered from the cache", #w.of("crew.guide") == 1)
+  -- the same store and build, now taking no mail mode: the mode alone makes it another guide
+  w.protocol = crew.PROTOCOL_MAIL_VIA - 1
+  g = crew.guide("claude")
+  asked = w.of("crew.guide")[2] and w.of("crew.guide")[2].params or {}
+  ok("[18] an older daemon: asked again, in the kind's own form, no mode sent",
+    g == "guide for claude by nil" and #w.of("crew.guide") == 2 and asked[2] == nil, vim.inspect(asked))
 end
 
 do
