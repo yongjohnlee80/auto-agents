@@ -39,6 +39,28 @@ vim.o.lines = 60
 vim.o.swapfile = false
 vim.o.hidden = true
 
+-- An IN-MEMORY clipboard provider, set before any register is used (Neovim loads its provider
+-- once), as tests/forward_text_visual_spec.lua has: [28]'s clipboard cells set and read "+" and
+-- "*", which on a host with no provider (no wl-copy, xclip or xsel, or no DISPLAY: a headless
+-- runner) store nothing, so five cells failed there; and on a desktop they wrote into the
+-- developer's own clipboard.
+local _clip = { ["+"] = { "" }, ["*"] = { "" } }
+vim.g.clipboard = {
+  name = "in-memory-test",
+  copy = {
+    ["+"] = function(lines) _clip["+"] = lines end,
+    ["*"] = function(lines) _clip["*"] = lines end,
+  },
+  paste = {
+    ["+"] = function() return _clip["+"] end,
+    ["*"] = function() return _clip["*"] end,
+  },
+  cache_enabled = 0,
+}
+vim.fn.setreg("+", "clipboard-fixture")
+assert(vim.fn.getreg("+") == "clipboard-fixture", "clipboard fixture did not take: the provider is not in effect")
+vim.fn.setreg("+", "")
+
 -- Isolate every XDG root BEFORE the first auto-agents module load.
 --
 -- config.store resolves its directory as `stdpath("config")
