@@ -19,6 +19,9 @@
 ---       (tries 1) once the prompt has closed, it is typed and reported delivered
 ---   [8] a job left in the input for the user's Enter (prompts unreported) is reported
 ---       typed_not_sent, and the user told to press Enter there
+---   [9] that job offered again (its report lost) is typed_not_sent again, never delivered, typed once
+---   [10] a job is reported once its Enter is decided, under the lease it was taken with; one
+---       settled after the crew stopped is not reported
 
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -71,16 +74,30 @@ local function new_world(opts)
   }
   -- the typing: typed[key] is a key typed before; type_err refuses the next one; prompt is what the
   -- agent's prompt state makes of a guarded typing ("waits", "unreported" or nil: clear)
+  -- typed[key] is true (sent) or "typed_not_sent", what came of it, as the real key lines keep it.
+  -- Its done hears the outcome, as the real one's does once the Enter is decided.
   w.type_once = function(codename, key, text, topts)
+    if w.defer then -- its Enter not yet decided: held until the cell settles it
+      w.defer = false
+      w.held = function() return w.type_once(codename, key, text, topts) end
+      return true
+    end
     w.opts = topts
-    if w.typed[key] then return true end
-    if w.type_err then return false, w.type_err end
+    local function finish(ok, why, how)
+      if topts and topts.done then topts.done(ok, why, how) end
+      return ok, why, how
+    end
+    if w.typed[key] then return finish(true, nil, w.typed[key] == "typed_not_sent" and "typed_not_sent" or "sent") end
+    if w.type_err then return finish(false, w.type_err) end
     local guard = topts and topts.guard
-    if guard and w.prompt == "waits" then return false, codename .. " waits on the user's answer to a prompt", "waits" end
+    if guard and w.prompt == "waits" then return finish(false, codename .. " waits on the user's answer to a prompt", "waits") end
     w.types[#w.types + 1] = { codename = codename, key = key, text = text }
+    if guard and w.prompt == "unreported" then
+      w.typed[key] = "typed_not_sent"
+      return finish(true, nil, "typed_not_sent")
+    end
     w.typed[key] = true
-    if guard and w.prompt == "unreported" then return true, nil, "typed_not_sent" end
-    return true, nil, "sent"
+    return finish(true, nil, "sent")
   end
   w.tick = function()
     local due = w.timers
@@ -215,6 +232,43 @@ do
     if n:find("gold", 1, true) and n:find("press Enter", 1, true) then told = true end
   end
   ok("[8] the user is told to press Enter there", told, vim.inspect(w.notices))
+end
+
+do
+  local w = new_world()
+  w.prompt = "unreported"
+  w.jobs = { job("j9") }
+  w.tick()
+  w.prompt = nil -- its prompts are reported now: what was typed is still what came of it
+  w.jobs = { job("j9", 1) }
+  w.tick()
+  local dones = {}
+  for _, c in ipairs(w.of("mail.fallback_done")) do if c.params[4] == "j9" then dones[#dones + 1] = c.params[6] end end
+  ok("[9] offered again after a lost report: typed_not_sent again, typed once",
+    #w.types == 1 and vim.deep_equal(dones, { "typed_not_sent", "typed_not_sent" }), vim.inspect({ w.types, dones }))
+  local told = 0
+  for _, n in ipairs(w.notices) do if n:find("press Enter", 1, true) then told = told + 1 end end
+  ok("[9] the user is told to press Enter each time", told == 2, vim.inspect(w.notices))
+end
+
+do
+  local w = new_world()
+  w.defer = true
+  w.jobs = { job("j10") }
+  w.tick()
+  ok("[10] a job whose Enter is still being decided is not reported yet", w.held ~= nil and done_of(w, "j10") == nil)
+  w.held()
+  local d = done_of(w, "j10")
+  ok("[10] ... reported once it is settled, under the lease it was taken with", d ~= nil and d[3] == 5
+    and d[5] == "lease-j10" and d[6] == "delivered", vim.inspect(d))
+  local w2 = new_world()
+  w2.defer = true
+  w2.jobs = { job("j10b") }
+  w2.tick()
+  crew.stop() -- the scope goes before the Enter is decided
+  w2.held()
+  ok("[10] one settled after the crew stopped is not reported (its lease lapses)", done_of(w2, "j10b") == nil,
+    vim.inspect(w2.of("mail.fallback_done")))
 end
 
 -- after a failure answer, how many more asks the next ticks make (the renewals keep ticking)
