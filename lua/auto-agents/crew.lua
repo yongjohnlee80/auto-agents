@@ -1337,9 +1337,12 @@ end
 M.GUIDE_WAIT_MS = 1000
 
 ---guide is the crew and mail procedure for an auto-agents kind, the daemon's crew.guide markdown
----(§4.10), which the instruction block carries: cached per store, daemon version and kind, so a
----restarted daemon of another build is asked again. nil while the scope isn't held, on a daemon
----without the verb, or when it fails or doesn't answer within GUIDE_WAIT_MS (asked again next time).
+---(§4.10), which the instruction block carries: cached per store, daemon version, kind and mail
+---mode, so a restarted daemon of another build is asked again. It is asked in the mail mode a spawn
+---asks its setup for (mail_via_offered: "mcp" from a daemon of PROTOCOL_MAIL_VIA, the kind's own
+---form from an older one), so the guide an agent reads names the tools it was given. nil while the
+---scope isn't held, on a daemon without the verb, or when it fails or doesn't answer within
+---GUIDE_WAIT_MS (asked again next time).
 ---@param kind string auto-agents' kind
 ---@return string|nil
 function M.guide(kind)
@@ -1351,11 +1354,12 @@ function M.guide(kind)
   local h = c.hello and c:hello() or {}
   if type(h.store_id) ~= "string" or h.store_id == "" then return nil end
   local k = M.crew_kind(kind)
-  local key = table.concat({ h.store_id, tostring(h.version), k }, "\0")
+  local via = M.mail_via_offered() and "mcp" or nil
+  local key = table.concat({ h.store_id, tostring(h.version), k, via or "" }, "\0")
   st.guides = st.guides or {}
   if st.guides[key] then return st.guides[key] end
   local answered, md = false, nil
-  sess.call("crew.guide", { k }, function(res, err)
+  sess.call("crew.guide", via and { k, via } or { k }, function(res, err)
     answered = true
     if not err and type(res) == "table" and type(res.markdown) == "string" and res.markdown ~= "" then md = res.markdown end
   end)
