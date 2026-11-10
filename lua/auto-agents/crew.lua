@@ -895,42 +895,47 @@ end
 M.NO_WORKSPACE = ""
 
 ---deliver_job types a fallback job into its recipient's terminal, once (auto-agents.fallback, keyed
----by the job's id: a job offered again, by this run or after a restart, is never typed twice). The
----text is the daemon's, which names the sender and how to answer it, since a withdrawn delivery
----takes no reply. Returns the outcome mail.fallback_done takes ("delivered", "typed_not_sent": left
----for the user's Enter, its prompts unreported), "waits" when nothing was typed because the agent
----shows the user a prompt (reported to no one: the lease lapses and the job comes again), and why
----when it is "unknown" (nothing typed).
+---by the job's id: a job offered again, by this run or after a restart, is never typed twice), and
+---calls done(outcome, why) once what came of it is settled, its Enter's decision included. The text
+---is the daemon's, which names the sender and how to answer it, since a withdrawn delivery takes no
+---reply. outcome is what mail.fallback_done takes ("delivered": typed and sent; "typed_not_sent":
+---in the input, left for the user's Enter; "unknown", with why: nothing typed), or "waits" when
+---nothing was typed because the agent shows the user a prompt (reported to no one: the lease lapses
+---and the job comes again).
 ---@param job table mail.fallbacks' job: id, codename, from, text, message
 ---@param type_once fun(codename: string, key: string, text: string, opts: table): boolean, string|nil, string|nil
----@return string outcome, string|nil why
-function M.deliver_job(job, type_once)
-  local ok, why, how = type_once(job.codename, job.id, job.text, { guard = true })
-  if how == "waits" then return "waits", why end
-  if not ok then return "unknown", why end
-  if how == "typed_not_sent" then return "typed_not_sent" end
-  return "delivered"
+---@param done fun(outcome: string, why: string|nil)
+function M.deliver_job(job, type_once, done)
+  type_once(job.codename, job.id, job.text, { guard = true, done = function(ok, why, how)
+    if how == "waits" then return done("waits", why) end
+    if not ok then return done("unknown", why) end
+    if how == "typed_not_sent" then return done("typed_not_sent") end
+    done("delivered")
+  end })
 end
 
 ---take_job delivers one job and reports it; the user is told of every outcome.
 local function take_job(st, job)
-  local outcome, why = M.deliver_job(job, st.type_once)
-  if outcome == "waits" then
-    st.log(("%s's fallback job %s waits: %s"):format(job.codename, job.id, why or "a prompt is open"))
-    return -- no report: its lease lapses and the daemon offers it again
-  end
-  if outcome == "typed_not_sent" then
-    st.notify(("AutoDoc's message from %s is typed into %s's terminal but not sent: press Enter there to send it")
-      :format(tostring(job.from), job.codename), vim.log.levels.WARN)
-  elseif outcome == "delivered" then
-    st.notify(("%s couldn't be woken: AutoDoc's message from %s was typed into its terminal"):format(job.codename,
-      tostring(job.from)), vim.log.levels.INFO)
-  else
-    st.notify(("AutoDoc couldn't give %s the message from %s (%s), so send it there yourself:\n%s")
-      :format(job.codename, tostring(job.from), why or "?", tostring(job.text)), vim.log.levels.WARN)
-  end
-  -- a report the daemon doesn't take is answered again from the kept key when the job comes back
-  st.session.call("mail.fallback_done", { st.scope, st.run, st.epoch, job.id, job.lease, outcome }, function() end)
+  local scope, run, epoch = st.scope, st.run, st.epoch -- the job's lease is theirs, whenever done answers
+  M.deliver_job(job, st.type_once, function(outcome, why)
+    if not live(st) then return end -- released or stopped meanwhile: the lease lapses with it
+    if outcome == "waits" then
+      st.log(("%s's fallback job %s waits: %s"):format(job.codename, job.id, why or "a prompt is open"))
+      return -- no report: its lease lapses and the daemon offers it again
+    end
+    if outcome == "typed_not_sent" then
+      st.notify(("AutoDoc's message from %s is typed into %s's terminal but not sent: press Enter there to send it")
+        :format(tostring(job.from), job.codename), vim.log.levels.WARN)
+    elseif outcome == "delivered" then
+      st.notify(("%s couldn't be woken: AutoDoc's message from %s was typed into its terminal"):format(job.codename,
+        tostring(job.from)), vim.log.levels.INFO)
+    else
+      st.notify(("AutoDoc couldn't give %s the message from %s (%s), so send it there yourself:\n%s")
+        :format(job.codename, tostring(job.from), why or "?", tostring(job.text)), vim.log.levels.WARN)
+    end
+    -- a report the daemon doesn't take is answered again from the kept key when the job comes back
+    st.session.call("mail.fallback_done", { scope, run, epoch, job.id, job.lease, outcome }, function() end)
+  end)
 end
 
 ---takes_fallbacks is whether the daemon serves this host fallback jobs.
