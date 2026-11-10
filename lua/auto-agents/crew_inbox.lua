@@ -292,6 +292,18 @@ function Inbox:requests() return sorted(self.open.requests) end
 function Inbox:reports() return sorted(self.open.reports) end
 function Inbox:attention() return sorted(self.open.attention) end
 
+---waits_on_user is whether session shows the user a prompt now (a permission prompt, an
+---AskUserQuestion dialog, blocked). Before a first snapshot says what is open: true while the daemon
+---serves the inbox (its snapshot is on its way, so a delivery waits for it), nil when it doesn't
+---(nothing will say).
+---@param session string
+---@return boolean|nil
+function Inbox:waits_on_user(session)
+  if not self.known then return self:serves() and true or nil end
+  local a = self.open.attention[session]
+  return a ~= nil and waits_on_user(a)
+end
+
 ---count is what waits on the user: the open requests and the agents on a prompt of theirs (a
 ---permission prompt, or blocked), as the first snapshot's line counts them.
 function Inbox:count()
@@ -365,6 +377,15 @@ end
 local _x
 
 function M.count() return _x and _x:count() or 0 end
+
+---waits_on_user is whether session shows the user a prompt, as this Neovim's inbox knows it
+---(Inbox:waits_on_user): nil with no inbox (nothing says).
+---@param session string
+---@return boolean|nil
+function M.waits_on_user(session)
+  if not _x then return nil end
+  return _x:waits_on_user(session)
+end
 
 local function said(what)
   return function(err) _x.notify(err and (what .. " failed: " .. err) or (what .. ": done"), err and WARN or INFO) end

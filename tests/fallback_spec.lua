@@ -13,6 +13,16 @@
 --   [7] the notifier's handler: subject and body typed; another instance's agent refused; no key
 --       refused
 --   [8] the state file keeps the newest keys, oldest dropped first
+--   [9] two Neovims, then a restart: no Neovim erases another's keys
+--   [10] guarded (a delivery): an agent on a prompt gets nothing typed and no key kept, then is
+--       typed once it has closed; prompts unreported (or nothing says) → pasted with no Enter,
+--       typed_not_sent; unguarded typing unchanged; a todo notice is held the same way
+--   [11] the inbox's waits_on_user: before a snapshot, waits when the daemon serves the inbox, nil
+--       when not; then true only on a permission or blocked attention
+--   [12] a guarded Enter reads the state again after SUBMIT_DELAY_MS: a prompt opened since the
+--       paste, another session, slot or terminal → no Enter, typed_not_sent
+--   [13] a key keeps what came of it (sent or typed_not_sent): a re-offer or a restart never
+--       upgrades a paste-only key; a legacy bare line is sent; a crash before the Enter reads not sent
 local script_path = debug.getinfo(1).source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:prepend(project_root)
@@ -191,6 +201,203 @@ do
   ok("[9] after a restart, neither Neovim's key is typed again", #sends == n)
   crew.incarnation = real
   restart()
+end
+
+-- ── [10] the guard: never typed into an open prompt ─────────────────────────
+
+-- the guard's world: gold-man's crew session, whether the inbox has it on a prompt, the deferred
+-- Enters (run by hand), the keys pressed, and what each guarded delivery's done heard
+local G = { session = nil, waits = nil, later = {}, presses = {}, heard = {} }
+do
+  local crew = require("auto-agents.crew")
+  local inbox = require("auto-agents.crew_inbox")
+  G.real = { session_of = crew.session_of, waits_on_user = inbox.waits_on_user, after = fb._after }
+  crew.session_of = function(name) return name == "gold-man" and G.session or nil end
+  inbox.waits_on_user = function(id)
+    if G.session and id == G.session.id then return G.waits end -- false is "no prompt open", nil "nothing says"
+    return nil
+  end
+  fb._after = function(ms, fn) G.later[#G.later + 1] = { ms = ms, fn = fn } end
+  package.loaded["auto-agents"].send_keypress = function(slot, key)
+    if refuse[slot] then return false end
+    G.presses[#G.presses + 1] = { slot = slot, key = key }
+    return true
+  end
+end
+local function run_later()
+  local due = G.later
+  G.later = {}
+  for _, l in ipairs(due) do l.fn() end
+end
+local function line_of_key(key)
+  for _, l in ipairs(vim.fn.readfile(fb.state_file())) do
+    if l == key or l:sub(1, #key + 1) == key .. "\t" then return l end
+  end
+  return nil
+end
+local function guarded(key, text)
+  local heard
+  local r, why, how = fb.type_once("gold-man", key, text, { guard = true, done = function(...) heard = { ... } end })
+  return { r = r, why = why, how = how, heard = function() return heard end }
+end
+
+do
+  G.session, G.waits = { id = "s-gold", codename = "gold-man", prompts = true }, true
+  local n, p = #sends, #G.presses
+  local g = guarded("job-prompt", "Mail from jarvis.")
+  local h = g.heard()
+  ok("[10] an open prompt: done hears false, waits, saying why", h and h[1] == false and h[3] == "waits"
+    and type(h[2]) == "string" and h[2]:find("prompt", 1, true) ~= nil, vim.inspect(h))
+  ok("[10] an open prompt: nothing typed, not even pasted", #sends == n and #G.presses == p, vim.inspect(sends[#sends]))
+  ok("[10] an open prompt: no key kept, so the next offer types it", line_of_key("job-prompt") == nil)
+  G.waits = false
+  g = guarded("job-prompt", "Mail from jarvis.")
+  ok("[10] once the prompt has closed: pasted with no Enter of send_slot's", #sends == n + 1
+    and sends[#sends].opts.submit == false and g.heard() == nil, vim.inspect(sends[#sends]))
+  ok("[10] ... its line kept as not sent until its Enter", line_of_key("job-prompt") == "job-prompt\t" .. fb.NOT_SENT,
+    line_of_key("job-prompt"))
+  ok("[10] ... its Enter waits SUBMIT_DELAY_MS", #G.later == 1 and G.later[1].ms == fb.SUBMIT_DELAY_MS, vim.inspect(G.later))
+  run_later()
+  local hh = g.heard()
+  ok("[10] ... then, still clear, one Enter, and done hears sent", #G.presses == p + 1 and G.presses[#G.presses].key == "<CR>"
+    and G.presses[#G.presses].slot == 2 and hh and hh[1] == true and hh[3] == "sent", vim.inspect({ G.presses, hh }))
+  ok("[10] ... and its line is the bare key now (sent)", line_of_key("job-prompt") == "job-prompt", line_of_key("job-prompt"))
+  g = guarded("job-prompt", "Mail from jarvis.")
+  ok("[10] ... once: offered again, sent, nothing typed", #sends == n + 1 and g.heard() and g.heard()[3] == "sent")
+
+  G.session, G.waits = { id = "s-gold", codename = "gold-man", prompts = false }, false
+  n, p = #sends, #G.presses
+  g = guarded("job-unreported", "Mail from lector.")
+  ok("[10] prompts unreported: pasted with no Enter, typed_not_sent", g.heard() and g.heard()[3] == fb.NOT_SENT
+    and #sends == n + 1 and sends[#sends].opts.submit == false and sends[#sends].text == "Mail from lector."
+    and #G.later == 0 and #G.presses == p, vim.inspect({ g.heard(), sends[#sends], G.later }))
+  ok("[10] prompts unreported: its line kept as not sent", line_of_key("job-unreported") == "job-unreported\t" .. fb.NOT_SENT)
+  G.session = nil
+  g = guarded("job-nosession", "x")
+  ok("[10] no crew session: unreported, pasted with no Enter", g.heard() and g.heard()[3] == fb.NOT_SENT
+    and sends[#sends].opts.submit == false, vim.inspect(g.heard()))
+  G.session, G.waits = { id = "s-gold", codename = "gold-man", prompts = true }, nil
+  g = guarded("job-noinbox", "x")
+  ok("[10] no inbox (nothing says): unreported, pasted with no Enter", g.heard() and g.heard()[3] == fb.NOT_SENT
+    and sends[#sends].opts.submit == false, vim.inspect(g.heard()))
+
+  G.waits = true
+  n = #sends
+  local r, _, how = fb.type_once("gold-man", "job-unguarded", "the user's own prompt")
+  ok("[10] unguarded (not a delivery): typed and sent by send_slot, as before", r == true and how == "sent"
+    and #sends == n + 1 and sends[#sends].opts.submit == true and vim.deep_equal(sends[#sends].opts.submit_keys, { "<CR>" }))
+  ok("[10] unguarded: its line is the bare key", line_of_key("job-unguarded") == "job-unguarded")
+
+  n, p = #sends, #G.presses
+  local nr, nwhy = fb.notifier_handler({ recipient = "agent:gold-man", key = "todo-prompt-1", body = "b" })
+  ok("[10] a todo notice to an agent on a prompt: false (held), nothing typed", nr == false and type(nwhy) == "string"
+    and #sends == n and line_of_key("todo-prompt-1") == nil, vim.inspect({ nr, nwhy }))
+  G.waits = false
+  nr = fb.notifier_handler({ recipient = "agent:gold-man", key = "todo-prompt-1", body = "b" })
+  ok("[10] ... once it has closed: typed (true), its Enter after the delay", nr == true and #sends == n + 1
+    and sends[#sends].opts.submit == false and #G.later == 1)
+  run_later()
+  ok("[10] ... and pressed, still clear", #G.presses == p + 1)
+end
+
+-- ── [12] the Enter reads the state again: a prompt opened since the paste ───
+
+do
+  local function pasted(key)
+    G.session, G.waits = { id = "s-gold", codename = "gold-man", prompts = true }, false
+    local g = guarded(key, "Mail for " .. key)
+    return g
+  end
+  local p = #G.presses
+  local g = pasted("job-opened")
+  G.waits = true -- a permission prompt opened between the paste and its Enter
+  run_later()
+  ok("[12] a prompt opened before the Enter: no Enter, done hears typed_not_sent", #G.presses == p
+    and g.heard() and g.heard()[1] == true and g.heard()[3] == fb.NOT_SENT, vim.inspect({ G.presses, g.heard() }))
+  ok("[12] ... its line stays not sent (it is in the input: never pasted again)",
+    line_of_key("job-opened") == "job-opened\t" .. fb.NOT_SENT)
+  g = pasted("job-newsession")
+  G.session = { id = "s-gold-2", codename = "gold-man", prompts = true } -- the agent restarted meanwhile
+  run_later()
+  ok("[12] another session since the paste: no Enter, typed_not_sent", #G.presses == p
+    and g.heard() and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+  g = pasted("job-reslotted")
+  slots["gold-man"] = 3 -- the slot now runs someone else
+  run_later()
+  slots["gold-man"] = 2
+  ok("[12] the codename's slot changed since the paste: no Enter, typed_not_sent", #G.presses == p
+    and g.heard() and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+  local aa = package.loaded["auto-agents"]
+  local term = { is_alive = function() return true end }
+  aa.state = { slot_terminals = { [2] = term } }
+  g = pasted("job-newterm")
+  aa.state.slot_terminals[2] = { is_alive = function() return true end } -- a new terminal in the slot
+  run_later()
+  ok("[12] another terminal in the slot since the paste: no Enter, typed_not_sent", #G.presses == p
+    and g.heard() and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+  aa.state.slot_terminals[2] = term
+  g = pasted("job-sameterm")
+  run_later()
+  ok("[12] the same terminal, the same session, still clear: one Enter", #G.presses == p + 1
+    and g.heard() and g.heard()[3] == "sent", vim.inspect(g.heard()))
+  aa.state = nil
+end
+
+-- ── [13] a key keeps what came of it: a lost report never upgrades ──────────
+
+do
+  local n = #sends
+  local g = guarded("job-unreported", "Mail from lector.") -- typed_not_sent in [10]; its report lost
+  ok("[13] a paste-only key offered again: typed_not_sent, nothing typed", #sends == n
+    and g.heard() and g.heard()[1] == true and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+  restart()
+  g = guarded("job-unreported", "Mail from lector.")
+  ok("[13] ... and after a restart", #sends == n and g.heard() and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+  g = guarded("job-opened", "x")
+  ok("[13] an Enter withheld at the recheck: typed_not_sent after a restart too", #sends == n
+    and g.heard() and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+  g = guarded("job-prompt", "x")
+  ok("[13] one whose Enter was pressed: sent after a restart", #sends == n and g.heard() and g.heard()[3] == "sent")
+  -- a line written before the guard: a bare key, typed with its Enter
+  local own = vim.fn.readfile(fb.state_file())
+  own[#own + 1] = "job-legacy"
+  vim.fn.writefile(own, fb.state_file())
+  restart()
+  g = guarded("job-legacy", "x")
+  ok("[13] a legacy bare line reads as sent", #sends == n and g.heard() and g.heard()[3] == "sent", vim.inspect(g.heard()))
+  ok("[13] a key with a tab is no key", fb.type_once("gold-man", "a\tb", "x") == false)
+  -- paste once with the line written, then crash before the Enter: a restart reads not sent
+  G.session, G.waits = { id = "s-gold", codename = "gold-man", prompts = true }, false
+  guarded("job-crash", "x")
+  G.later = {} -- the Neovim ended before the delay was over
+  restart()
+  g = guarded("job-crash", "x")
+  ok("[13] a restart between the paste and its Enter: typed_not_sent, nothing typed again", #sends == n + 1
+    and g.heard() and g.heard()[3] == fb.NOT_SENT, vim.inspect(g.heard()))
+end
+
+-- ── [11] prompt_state reads the crew's session and the inbox's attention ────
+
+do
+  local crew = require("auto-agents.crew")
+  local inbox = require("auto-agents.crew_inbox")
+  crew.session_of, inbox.waits_on_user, fb._after = G.real.session_of, G.real.waits_on_user, G.real.after
+  local x = inbox.new({ session = {}, notify = function() end })
+  ok("[11] an inbox the daemon doesn't serve, before a snapshot, says nothing", x:waits_on_user("s-x") == nil)
+  local serving = inbox.new({ notify = function() end, session = {
+    client = function() return { can = function(_, verb) return verb == "inbox.watch" end } end } })
+  ok("[11] an inbox the daemon serves, before its first snapshot: waits (the snapshot is on its way)",
+    serving:waits_on_user("s-x") == true)
+  x.known = true
+  x.open.attention["s-x"] = { what = "permission" }
+  ok("[11] a permission attention waits on the user", x:waits_on_user("s-x") == true)
+  x.open.attention["s-x"] = { what = "blocked" }
+  ok("[11] a blocked attention waits on the user", x:waits_on_user("s-x") == true)
+  x.open.attention["s-x"] = { what = "idle" }
+  ok("[11] another attention doesn't", x:waits_on_user("s-x") == false)
+  x.open.attention["s-x"] = nil
+  ok("[11] no attention doesn't", x:waits_on_user("s-x") == false)
+  ok("[11] no inbox set up: nothing says", inbox.waits_on_user("s-x") == nil)
 end
 
 vim.fn.delete(sb, "rf")
