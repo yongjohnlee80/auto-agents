@@ -781,22 +781,37 @@ do
 end
 
 do
-  -- the mode a spawn asks its setup for: a daemon of PROTOCOL_MAIL_VIA gives every agent the crew
-  -- MCP server, so its guide is asked in that form; an older daemon's in the kind's own
+  -- the mode the kind's setup ANSWERED, never the one a spawn asked for: a kind without the crew MCP
+  -- server (junie) answers cli when asked for mcp, and its guide must name the commands it has
+  crew._reset_setups()
   local w = new_world({ protocol = crew.PROTOCOL_MAIL_VIA })
   w.answer["crew.guide"] = function(p) return { markdown = "guide for " .. p[1] .. " by " .. tostring(p[2]) } end
+  local function setup_answering(kind, mode)
+    return crew.agent_setup(kind, "/opt/autodoc", kind, { PATH = "/p" }, function()
+      return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false, mail_via = mode }), ""
+    end, "mcp", "/agents/" .. kind)
+  end
   local g = crew.guide("claude")
-  local asked = w.of("crew.guide")[1].params
-  ok("[18] a daemon that takes a mail mode: the guide asked for mcp", g == "guide for claude by mcp"
-    and asked[1] == "claude" and asked[2] == "mcp", vim.inspect(asked))
+  ok("[18] no setup answered yet: no mode sent, the kind's own form", g == "guide for claude by nil"
+    and w.of("crew.guide")[1].params[2] == nil, vim.inspect(w.of("crew.guide")[1].params))
+  setup_answering("claude", "mcp")
+  g = crew.guide("claude")
+  local asked = w.of("crew.guide")[2] and w.of("crew.guide")[2].params or {}
+  ok("[18] a setup that answered mcp: the guide asked for mcp, and asked again (the mode is in the key)",
+    g == "guide for claude by mcp" and asked[2] == "mcp" and #w.of("crew.guide") == 2, vim.inspect(asked))
   crew.guide("claude")
-  ok("[18] the same mode is answered from the cache", #w.of("crew.guide") == 1)
-  -- the same store and build, now taking no mail mode: the mode alone makes it another guide
+  ok("[18] the same mode is answered from the cache", #w.of("crew.guide") == 2)
+  setup_answering("junie", "cli")
+  g = crew.guide("junie")
+  asked = w.of("crew.guide")[3] and w.of("crew.guide")[3].params or {}
+  ok("[18] a kind whose setup answered cli though asked for mcp: the guide asked for cli",
+    g == "guide for junie by cli" and asked[2] == "cli", vim.inspect(asked))
   w.protocol = crew.PROTOCOL_MAIL_VIA - 1
   g = crew.guide("claude")
-  asked = w.of("crew.guide")[2] and w.of("crew.guide")[2].params or {}
-  ok("[18] an older daemon: asked again, in the kind's own form, no mode sent",
-    g == "guide for claude by nil" and #w.of("crew.guide") == 2 and asked[2] == nil, vim.inspect(asked))
+  asked = w.of("crew.guide")[4] and w.of("crew.guide")[4].params or {}
+  ok("[18] an older daemon: no mode sent, whatever was answered", g == "guide for claude by nil" and asked[2] == nil,
+    vim.inspect(asked))
+  crew._reset_setups()
 end
 
 do

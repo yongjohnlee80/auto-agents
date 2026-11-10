@@ -239,6 +239,7 @@ end
 
 -- agent_setup's answers, kept for the session as wake_env's are; never a failure
 local _setups = {}
+local _modes = {} -- crew kind → the mail mode its latest setup answered (answered_mode)
 
 -- How long a spawn waits for its setup (`autodoc crew setup`) before starting without it.
 M.SETUP_WAIT_MS = 5000
@@ -297,6 +298,7 @@ function M.agent_setup(kind, bin, program, env, run, mail_via, agent_dir)
     notices = list(s.notices), after = list(s.after), mail_via = mv, folder_files = list(s.folder_files),
     server = list(s.server), server_socket = type(s.server_socket) == "string" and s.server_socket or nil }
   _setups[key] = s
+  if mv then _modes[M.crew_kind(kind)] = mv end
   return vim.deepcopy(s), nil, false
 end
 
@@ -319,7 +321,7 @@ function M.mail_via_offered()
 end
 
 ---_reset_setups forgets agent_setup's kept answers (tests).
-function M._reset_setups() _setups = {} end
+function M._reset_setups() _setups, _modes = {}, {} end
 
 ---after_argv is a setup's after steps as argv lists, run by bin, M.SETUP_SINCE given as since.
 ---@param s table a setup
@@ -1336,13 +1338,20 @@ end
 -- How long writing an instruction block waits for the daemon's crew guide before writing it without.
 M.GUIDE_WAIT_MS = 1000
 
+---answered_mode is the mail mode the latest crew setup for kind answered ("cli" or "mcp"), the mode
+---its agents register and are given the tools of; nil before any setup of kind answered one.
+---@param kind string crew's kind (crew_kind)
+---@return string|nil
+function M.answered_mode(kind) return _modes[kind] end
+
 ---guide is the crew and mail procedure for an auto-agents kind, the daemon's crew.guide markdown
 ---(§4.10), which the instruction block carries: cached per store, daemon version, kind and mail
----mode, so a restarted daemon of another build is asked again. It is asked in the mail mode a spawn
----asks its setup for (mail_via_offered: "mcp" from a daemon of PROTOCOL_MAIL_VIA, the kind's own
----form from an older one), so the guide an agent reads names the tools it was given. nil while the
----scope isn't held, on a daemon without the verb, or when it fails or doesn't answer within
----GUIDE_WAIT_MS (asked again next time).
+---mode, so a restarted daemon of another build is asked again. It is asked in the mode the kind's
+---setup answered (answered_mode), from a daemon of PROTOCOL_MAIL_VIA, so the guide an agent reads
+---names the tools it was given: never the mode a spawn only asked for, which a kind without the
+---crew MCP server answers with "cli". With no answer yet, or from an older daemon, no mode is sent
+---and the daemon answers in the kind's own form. nil while the scope isn't held, on a daemon
+---without the verb, or when it fails or doesn't answer within GUIDE_WAIT_MS (asked again next time).
 ---@param kind string auto-agents' kind
 ---@return string|nil
 function M.guide(kind)
@@ -1354,7 +1363,7 @@ function M.guide(kind)
   local h = c.hello and c:hello() or {}
   if type(h.store_id) ~= "string" or h.store_id == "" then return nil end
   local k = M.crew_kind(kind)
-  local via = M.mail_via_offered() and "mcp" or nil
+  local via = (tonumber(h.protocol) or 0) >= M.PROTOCOL_MAIL_VIA and _modes[k] or nil
   local key = table.concat({ h.store_id, tostring(h.version), k, via or "" }, "\0")
   st.guides = st.guides or {}
   if st.guides[key] then return st.guides[key] end

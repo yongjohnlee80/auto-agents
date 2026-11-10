@@ -915,6 +915,11 @@ local function ensure_main_slot_terminal(slot, winid)
         end
       end
     end
+    -- the instruction block was written before the setup answered: written again in the mode it
+    -- answered, so the guide names the tools this agent is given (crew.answered_mode); idempotent
+    if setup and setup.mail_via then
+      pcall(function() require("auto-agents.kb.instruct").ensure(spec, require("auto-agents.kb").primary(), cwd) end)
+    end
     local reg = { codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
       mail_via = setup ~= nil and setup.mail_via or nil, path = ctx_path }
     local ok, handle, why = pcall(function() return crew.begin(reg) end)
