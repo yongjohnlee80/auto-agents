@@ -806,9 +806,30 @@ do
   asked = w.of("crew.guide")[3] and w.of("crew.guide")[3].params or {}
   ok("[18] a kind whose setup answered cli though asked for mcp: the guide asked for cli",
     g == "guide for junie by cli" and asked[2] == "cli", vim.inspect(asked))
+  -- one kind, two answers (A: no folder of its own, cli; B: its folder, mcp), then A again from the
+  -- kept answer: the guide follows each spawn, the kept one included
+  local function codex(dir, mode)
+    return crew.agent_setup("codex", "/opt/autodoc", "codex", { PATH = "/p" }, function()
+      return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false, mail_via = mode }), ""
+    end, "mcp", dir)
+  end
+  codex(nil, "cli")
+  ok("[18] A: a codex spawn given cli", crew.answered_mode("codex") == "cli")
+  codex("/agents/b", "mcp")
+  ok("[18] B: the same kind given mcp", crew.answered_mode("codex") == "mcp")
+  local a = codex(nil, "never asked: the kept answer is used")
+  ok("[18] A again, from the kept answer: the kind's mode is A's again", a.mail_via == "cli" and crew.answered_mode("codex") == "cli",
+    tostring(crew.answered_mode("codex")))
+  g = crew.guide("codex")
+  asked = w.of("crew.guide")[#w.of("crew.guide")].params
+  ok("[18] and the guide is asked for A's mode", g == "guide for codex by cli" and asked[2] == "cli", vim.inspect(asked))
+  crew.agent_setup("opencode", "/opt/autodoc", "opencode", {}, function()
+    return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false }), ""
+  end, "mcp", nil)
+  ok("[18] a setup that says no mode leaves none for its kind", crew.answered_mode("opencode") == nil)
   w.protocol = crew.PROTOCOL_MAIL_VIA - 1
   g = crew.guide("claude")
-  asked = w.of("crew.guide")[4] and w.of("crew.guide")[4].params or {}
+  asked = w.of("crew.guide")[#w.of("crew.guide")].params
   ok("[18] an older daemon: no mode sent, whatever was answered", g == "guide for claude by nil" and asked[2] == nil,
     vim.inspect(asked))
   crew._reset_setups()
