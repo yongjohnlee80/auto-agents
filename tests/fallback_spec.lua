@@ -206,7 +206,10 @@ do
   local real_session_of, real_waits = crew.session_of, inbox.waits_on_user
   local session, waits = nil, nil -- gold-man's crew session; whether the inbox has it on a prompt
   crew.session_of = function(name) return name == "gold-man" and session or nil end
-  inbox.waits_on_user = function(id) return session and id == session.id and waits or nil end
+  inbox.waits_on_user = function(id)
+    if session and id == session.id then return waits end -- false is "no prompt open", nil "nothing says"
+    return nil
+  end
   local function kept(key) return vim.tbl_contains(vim.fn.readfile(fb.state_file()), key) end
 
   session, waits = { id = "s-gold", codename = "gold-man", prompts = true }, true
