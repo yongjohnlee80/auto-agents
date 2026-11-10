@@ -791,6 +791,22 @@ do
     after:find("GUIDE-FOR-claude-BY-mcp", 1, true) ~= nil and after:find("GUIDE-FOR-claude-BY-nil", 1, true) == nil, after)
   ok("[18b] no setup, or one with no mode: nothing written", instruct.after_setup(spec, nil, cwd, kb) == nil
     and instruct.after_setup(spec, { argv = {} }, cwd, kb) == nil)
+  -- the original case: the kind primed with mcp (the file says so), then a spawn of it whose setup
+  -- answers cli though offered mcp (no folder of its own): the file it starts on says cli, nothing
+  -- of the MCP guide left
+  local cli_setup = crew.agent_setup("claude", "/opt/autodoc", "claude", { PATH = "/p" }, function()
+    return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false, mail_via = "cli" }), ""
+  end, "mcp", nil)
+  instruct.after_setup(spec, cli_setup, cwd, kb)
+  local cli = read(path)
+  ok("[18b] an MCP offer answered cli: the file has the CLI guide, and no MCP guide left",
+    cli:find("GUIDE-FOR-claude-BY-cli", 1, true) ~= nil and cli:find("GUIDE-FOR-claude-BY-mcp", 1, true) == nil, cli)
+  -- the same kind, then a setup that says no mode: the kind's mode is cleared, not left at cli
+  crew.agent_setup("claude", "/opt/autodoc", "claude", { PATH = "/other" }, function()
+    return 0, vim.json.encode({ argv = {}, env = {}, files = {}, prompts = false }), ""
+  end, "mcp", nil)
+  ok("[18b] a setup of the same kind that says no mode clears its mode", crew.answered_mode("claude") == nil,
+    tostring(crew.answered_mode("claude")))
   -- the spawn calls it between its setup and its registration (so before the agent's terminal)
   local src = read(project_root .. "/lua/auto-agents/init.lua")
   local at_setup = src:find("setup, setup_why, older = crew.agent_setup(", 1, true)
