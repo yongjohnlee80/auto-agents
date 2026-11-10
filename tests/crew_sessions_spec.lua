@@ -66,6 +66,14 @@ local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:prepend(project_root)
 vim.o.swapfile = false
 
+-- [18b] writes the instruction block through auto-core.fs.atomic, as instruct_crew_spec does
+local plugins_root = vim.fn.fnamemodify(project_root, ":h:h")
+local core_root = vim.env.AUTO_CORE_ROOT or (plugins_root .. "/auto-core.nvim/main")
+if not vim.env.AUTO_CORE_ROOT and vim.fn.isdirectory(core_root) == 0 then
+  core_root = plugins_root .. "/auto-core.nvim"
+end
+vim.opt.runtimepath:prepend(core_root)
+
 local pass, fail = 0, 0
 local function ok(name, cond, detail)
   if cond then
