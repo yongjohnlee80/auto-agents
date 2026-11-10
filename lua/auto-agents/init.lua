@@ -825,6 +825,23 @@ local function _with_unfixed_buf(winid, fn)
   return ok, result
 end
 
+---_apply_setup_files writes a crew setup's folder_files into the agent's own folder before its CLI
+---starts (crew.write_folder_files). A file that can't be written refuses the spawn: the session ends
+---start_failed, an error says which file and the OS's error, and false is answered, so nothing
+---starts; a retry once the cause is fixed writes them again. true when there is nothing to write,
+---or all of it was written.
+---@return boolean written
+function M._apply_setup_files(spec, agent_dir, setup, crew_session)
+  if not (agent_dir and setup and #(setup.folder_files or {}) > 0) then return true end
+  local crew = require("auto-agents.crew")
+  local why = crew.write_folder_files(agent_dir, setup.folder_files)
+  if not why then return true end
+  crew.finish(crew_session, "start_failed")
+  vim.notify(("%s did not start: its setup's files could not be written: %s"):format(spec.name, why), vim.log.levels.ERROR,
+    { title = "auto-agents" })
+  return false
+end
+
 ---start_terminal builds a slot's terminal and starts it. From the crew registration on, every
 ---failure is the session's (ADR 1793271500 §4.4): a constructor that throws, a start that throws
 ---or answers no buffer, each ends the crew session start_failed once, and a throw is raised again
@@ -920,8 +937,14 @@ local function ensure_main_slot_terminal(slot, winid)
     require("auto-agents.kb.instruct").after_setup(spec, setup, cwd, require("auto-agents.kb").primary())
     local reg = { codename = spec.name, kind = spec.kind, cwd = cwd, prompts = setup ~= nil and setup.prompts,
       mail_via = setup ~= nil and setup.mail_via or nil, path = ctx_path }
-    local ok, handle, why = pcall(function() return crew.begin(reg) end)
+    local ok, handle, why, refused = pcall(function() return crew.begin(reg) end)
     M.state.slot_spawning[slot] = nil
+    if ok and refused then
+      -- this host failed (its context file could not be written): nothing starts, and the slot says
+      -- why, since an agent started now would find no context (crew.begin ended its session)
+      vim.notify(("%s did not start: %s"):format(spec.name, tostring(why)), vim.log.levels.ERROR, { title = "auto-agents" })
+      return nil
+    end
     if not ok then
       -- a registration that raised: logged whole, said in one plain line, and the slot joins later
       -- as one with no answer does, never left unreachable with nothing said
@@ -971,13 +994,9 @@ local function ensure_main_slot_terminal(slot, winid)
             if a == "-i" and type(setup.argv[i + 1]) == "string" then crew_session.agy_prompt = setup.argv[i + 1] end
           end
         end
-        if agent_dir and #setup.folder_files > 0 then -- its kind's files in its own folder (agy's MCP config)
-          local fwhy = crew.write_folder_files(agent_dir, setup.folder_files)
-          if fwhy then
-            vim.notify(("%s: its setup's files could not be written: %s"):format(spec.name, fwhy), vim.log.levels.WARN,
-              { title = "auto-agents" })
-          end
-        end
+        -- its kind's files in its own folder (Claude's and agy's MCP config): written, or the spawn is
+        -- refused with nothing started, since the agent would start without them
+        if not M._apply_setup_files(spec, agent_dir, setup, crew_session) then return nil end
         crew_setup = setup
       else
         if setup_why and not older then

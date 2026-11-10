@@ -55,6 +55,10 @@
 ---       ending late never removes a newer one's file; a slot that stopped never joins; a Claude
 ---       slot is never typed into; an agy slot whose bridge didn't register gets its launch prompt
 ---       once per session; a registration refused while held is asked again at a renewal, logged once
+---  [24] a setup's file that can't be written (aa._apply_setup_files) refuses the spawn: the
+---       session ends start_failed, the error names the file and the OS's, no temporary file is
+---       left, a retry once fixed writes it; a context file that can't be written is begin's
+---       refusal (no session to defer); the spawn checks both before its server and terminal
 ---  [18] the crew guide for the instruction block: none while no scope is held or the daemon lacks
 ---       crew.guide; asked by crew's kind, in the mail mode a spawn asks for (mcp from a daemon of
 ---       PROTOCOL_MAIL_VIA, the kind's own form from an older one), and cached per store, daemon
@@ -1317,6 +1321,101 @@ do -- F6: a slot started while another Neovim holds the scope joins once this on
     vim.inspect({ crew.scope_denied(), h.session, w.ran }))
   crew.finish(h, "exit")
   crew.stop()
+end
+
+-- ── [24] a setup's file that can't be written refuses the spawn ─────────────
+
+do
+  local aa = require("auto-agents")
+  local saved_notify = vim.notify
+  local errors = {}
+  vim.notify = function(msg, level) if level == vim.log.levels.ERROR then errors[#errors + 1] = msg end end
+  local cwd = tmpcwd()
+  local w = new_world({ workspaces = { kb = { name = "kb", root = cwd, id = 7 } } })
+  local dir = tmpcwd()
+  local function leftovers(d)
+    local out = {}
+    for name in vim.fs.dir(d) do if name:sub(1, 1) == "." then out[#out + 1] = name end end
+    return out
+  end
+
+  -- the file's place is taken by a folder that isn't empty: the temporary file is written, and the
+  -- rename over it fails with the OS's error, for any user, root too
+  vim.fn.mkdir(vim.fs.joinpath(dir, "mcp.json", "inside"), "p")
+  local setup = { folder_files = { { path = "mcp.json", content = '{"mcpServers":{}}' } } }
+  local h = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local written = aa._apply_setup_files({ name = "gold" }, dir, setup, h)
+  local exits = w.of("crew.exit")
+  ok("[24] a setup file that can't be written refuses the spawn: false, the session ended start_failed",
+    written == false and #exits == 1 and exits[1].params[5] == "start_failed", vim.inspect({ written, exits }))
+  ok("[24] the refusal says which file and the OS's error",
+    #errors == 1 and errors[1]:find("gold did not start", 1, true) ~= nil
+      and errors[1]:find(vim.fs.joinpath(dir, "mcp.json") .. ": ", 1, true) ~= nil and errors[1]:find("E[A-Z]+") ~= nil,
+    vim.inspect(errors))
+  ok("[24] nothing half-written is left: no temporary file, the folder in its place as it was",
+    #leftovers(dir) == 0 and vim.fn.isdirectory(vim.fs.joinpath(dir, "mcp.json", "inside")) == 1, vim.inspect(leftovers(dir)))
+
+  -- the cause fixed: a retry writes the file, and keeps its session
+  vim.fn.delete(vim.fs.joinpath(dir, "mcp.json"), "rf")
+  errors = {}
+  local h2 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+  local again = aa._apply_setup_files({ name = "gold" }, dir, setup, h2)
+  local f = io.open(vim.fs.joinpath(dir, "mcp.json"), "r")
+  local body = f and f:read("*a")
+  if f then f:close() end
+  local st = vim.uv.fs_stat(vim.fs.joinpath(dir, "mcp.json"))
+  ok("[24] the retry once the cause is fixed writes the file, 0600, and keeps its session",
+    again == true and body == '{"mcpServers":{}}' and st and bit.band(st.mode, tonumber("777", 8)) == tonumber("600", 8)
+      and #errors == 0 and #w.of("crew.exit") == 1, vim.inspect({ again, body, errors }))
+  crew.finish(h2, "exit")
+  ok("[24] no setup, or one with no files: nothing to write, the spawn goes on",
+    aa._apply_setup_files({ name = "gold" }, dir, nil, nil) == true
+      and aa._apply_setup_files({ name = "gold" }, dir, { folder_files = {} }, nil) == true
+      and aa._apply_setup_files({ name = "gold" }, nil, setup, nil) == true)
+
+  -- a folder this user may not write in: the open fails (root writes anyway, so it's skipped there)
+  local ro = tmpcwd()
+  vim.uv.fs_chmod(ro, tonumber("500", 8))
+  if vim.uv.getuid() ~= 0 then
+    errors = {}
+    local h3 = crew.begin({ codename = "gold", kind = "claude", cwd = cwd })
+    local denied = aa._apply_setup_files({ name = "gold" }, ro, setup, h3)
+    ok("[24] a folder it can't write in refuses the spawn too, naming the file and EACCES",
+      denied == false and #errors == 1 and errors[1]:find(vim.fs.joinpath(ro, "mcp.json") .. ": ", 1, true) ~= nil
+        and errors[1]:find("EACCES", 1, true) ~= nil, vim.inspect(errors))
+  end
+  vim.uv.fs_chmod(ro, tonumber("700", 8))
+  vim.fn.delete(ro, "rf")
+
+  -- a context file that can't be written is this host's failure: begin answers it refused, never
+  -- a session the spawn would defer to a later claim
+  local blocker = vim.fs.joinpath(tmpcwd(), "not-a-folder")
+  local bf = io.open(blocker, "w"); bf:write("x"); bf:close()
+  local nh, nwhy, refused = crew.begin({ codename = "gold", kind = "claude", cwd = cwd, path = vim.fs.joinpath(blocker, "ctx") })
+  ok("[24] a context file that can't be written: no session, why, and refused (so the spawn starts nothing)",
+    nh == nil and type(nwhy) == "string" and nwhy:find("its session context could not be written", 1, true) ~= nil and refused == true,
+    vim.inspect({ nh, nwhy, refused }))
+  local _, _, not_refused = crew.begin({ codename = "gold", kind = "claude", cwd = "" })
+  ok("[24] a registration that can't be tried is no refusal", not_refused == nil)
+
+  -- the spawn applies both before anything starts: a refusal returns before the terminal
+  local sf = io.open(project_root .. "/lua/auto-agents/init.lua", "r")
+  local src = sf:read("*a")
+  sf:close()
+  local at_begin = src:find("local ok, handle, why, refused = pcall(function() return crew.begin(reg) end)", 1, true)
+  local at_refused = src:find("if ok and refused then", 1, true)
+  local at_defer = src:find("handle = crew.defer(reg)", 1, true)
+  local at_files = src:find("if not M._apply_setup_files(spec, agent_dir, setup, crew_session) then return nil end", 1, true)
+  local at_server = src:find("server, swhy = cs.start(", 1, true)
+  local at_term = src:find("M._start_terminal(", at_server or 1, true)
+  ok("[24] the spawn refuses on begin's refusal before it would defer, and on the files before the server and terminal",
+    at_begin and at_refused and at_defer and at_files and at_server and at_term
+      and at_begin < at_refused and at_refused < at_defer and at_defer < at_files and at_files < at_server and at_server < at_term,
+    vim.inspect({ at_begin, at_refused, at_defer, at_files, at_server, at_term }))
+
+  vim.notify = saved_notify
+  vim.fn.delete(dir, "rf")
+  vim.fn.delete(cwd, "rf")
 end
 
 -- ── [22] a registration that raises is said in one plain line (N7) ──────────

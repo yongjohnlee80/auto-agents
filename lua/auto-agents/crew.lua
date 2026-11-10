@@ -407,14 +407,17 @@ end
 
 -- write_private writes body to path through an exclusive 0600 temporary file renamed over it: a
 -- reader sees the whole file or none, a link at path is replaced (never followed), and an older
--- file's broader mode never stays.
+-- file's broader mode never stays. Any failure (the open, a short write, the close, the rename)
+-- answers the OS's error and leaves no temporary file.
 local function write_private(path, body)
   local tmp = vim.fs.joinpath(vim.fs.dirname(path), "." .. vim.fs.basename(path) .. "." .. M.run_token():sub(1, 12))
   vim.uv.fs_unlink(tmp) -- a temporary file a crash of this very run left
   local fd, oerr = vim.uv.fs_open(tmp, "wx", tonumber("600", 8))
-  if not fd then return oerr end
-  local _, werr = vim.uv.fs_write(fd, body)
-  vim.uv.fs_close(fd)
+  if not fd then return tostring(oerr) end
+  local n, werr = vim.uv.fs_write(fd, body)
+  local closed, cerr = vim.uv.fs_close(fd)
+  if not werr and n ~= #body then werr = ("wrote %s of %d bytes"):format(tostring(n), #body) end
+  if not werr and not closed then werr = cerr end
   if not werr then
     local ok, rerr = vim.uv.fs_rename(tmp, path)
     if ok then return nil end
@@ -612,7 +615,8 @@ end
 ---write_folder_files writes a setup's folder_files ({path, content}, each path relative to dir)
 ---into dir, each through an exclusive 0600 temporary file renamed over it (never through a link,
 ---never keeping an older mode), their folders private: refused, and nothing more written, for a
----path that is absolute or climbs out of dir. It answers nil, or why.
+---path that is absolute or climbs out of dir. It answers nil, or why: the file and the OS's error
+---for a write that failed, which leaves no temporary file behind.
 ---@param dir string
 ---@param files table
 ---@return string|nil why
@@ -629,7 +633,7 @@ function M.write_folder_files(dir, files)
       if not ok then return why end
     end
     local why = write_private(path, type(f.content) == "string" and f.content or "")
-    if why then return why end
+    if why then return path .. ": " .. why end
   end
   return nil
 end
@@ -1088,6 +1092,8 @@ end
 ---@param opts { codename: string, kind: string|nil, cwd: string, prompts: boolean|nil }
 ---@return table|nil handle the session, its context's path and the env to add
 ---@return string|nil why
+---@return boolean|nil refused true when this host failed (its context file could not be written):
+---the spawn is refused then, never deferred to a later claim, since the agent would start without it
 function M.begin(opts)
   local st = _s
   if not st or st.status ~= "held" or not st.session then return nil, nil end
@@ -1174,7 +1180,7 @@ function M.begin(opts)
   r.secret = nil -- kept no longer than it is needed
   if not path then
     end_session(st, s, "start_failed")
-    return nil, "its session context could not be written: " .. tostring(werr)
+    return nil, "its session context could not be written: " .. tostring(werr), true -- here, not the daemon: refused
   end
   if opts.path then s.path = path end
   local h = { session = s, context = path, env = { AUTODOC_CREW_CONTEXT = path }, codename = codename, kind = kind,
