@@ -25,7 +25,8 @@
 ---       report its permission prompts (each always exiting 0) and
 ---       crossSessionInbound accept, nothing else; the other kinds with nothing added
 ---  [4b] prompts (the setup reports the session's permission prompts) is crew.register's 9th
----       parameter, sent only when true and only to a daemon of protocol 41 or later
+---       parameter, sent only when true and only to a daemon of protocol 41 or later; session_of
+---       keeps whether it was sent (the fallback's guard reads it)
 ---  [12c] AutoDoc's setup (`autodoc crew setup`): its argv carries no value of the agent's
 ---       environment, which is its process environment; its answer is parsed and kept; a failure
 ---       is not kept; an autodoc without the command is told apart (older); after steps get the start
@@ -591,6 +592,10 @@ do
     local reg = w.of("crew.register")[1]
     ok(("[4b] prompts=%s to a protocol %d daemon: %d register params"):format(tostring(c.prompts), c.protocol, c.want),
       reg and #reg.params == c.want and (c.want == 8 or reg.params[9] == true), vim.inspect(reg and reg.params))
+    local s = crew.session_of("gold")
+    ok(("[4b] prompts=%s to a protocol %d daemon: the session keeps whether its prompts are reported (%s)")
+      :format(tostring(c.prompts), c.protocol, tostring(c.want == 9)),
+      s ~= nil and s.prompts == (c.want == 9), vim.inspect(s))
     crew.release()
     vim.fn.delete(cwd, "rf")
   end

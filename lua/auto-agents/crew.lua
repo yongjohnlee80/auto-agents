@@ -834,7 +834,7 @@ local function send_register(st, r, then_)
       end
       forget(st, r)
       local s = { id = id, profile = res.profile, scope = r.scope, epoch = r.epoch, folder = r.folder, kind = r.kind,
-        codename = r.codename }
+        codename = r.codename, prompts = r.prompts == true }
       st.sessions[id] = s
       then_(s, nil)
     end)
@@ -897,21 +897,32 @@ M.NO_WORKSPACE = ""
 ---deliver_job types a fallback job into its recipient's terminal, once (auto-agents.fallback, keyed
 ---by the job's id: a job offered again, by this run or after a restart, is never typed twice). The
 ---text is the daemon's, which names the sender and how to answer it, since a withdrawn delivery
----takes no reply. Returns the outcome mail.fallback_done takes, and why when it is "unknown"
----(nothing typed).
+---takes no reply. Returns the outcome mail.fallback_done takes ("delivered", "typed_not_sent": left
+---for the user's Enter, its prompts unreported), "waits" when nothing was typed because the agent
+---shows the user a prompt (reported to no one: the lease lapses and the job comes again), and why
+---when it is "unknown" (nothing typed).
 ---@param job table mail.fallbacks' job: id, codename, from, text, message
----@param type_once fun(codename: string, key: string, text: string): boolean, string|nil
+---@param type_once fun(codename: string, key: string, text: string, opts: table): boolean, string|nil, string|nil
 ---@return string outcome, string|nil why
 function M.deliver_job(job, type_once)
-  local ok, why = type_once(job.codename, job.id, job.text)
+  local ok, why, how = type_once(job.codename, job.id, job.text, { guard = true })
+  if how == "waits" then return "waits", why end
   if not ok then return "unknown", why end
+  if how == "typed_not_sent" then return "typed_not_sent" end
   return "delivered"
 end
 
 ---take_job delivers one job and reports it; the user is told of every outcome.
 local function take_job(st, job)
   local outcome, why = M.deliver_job(job, st.type_once)
-  if outcome == "delivered" then
+  if outcome == "waits" then
+    st.log(("%s's fallback job %s waits: %s"):format(job.codename, job.id, why or "a prompt is open"))
+    return -- no report: its lease lapses and the daemon offers it again
+  end
+  if outcome == "typed_not_sent" then
+    st.notify(("AutoDoc's message from %s is typed into %s's terminal but not sent: press Enter there to send it")
+      :format(tostring(job.from), job.codename), vim.log.levels.WARN)
+  elseif outcome == "delivered" then
     st.notify(("%s couldn't be woken: AutoDoc's message from %s was typed into its terminal"):format(job.codename,
       tostring(job.from)), vim.log.levels.INFO)
   else
@@ -1420,8 +1431,8 @@ function M.setup(opts)
     -- the log of what a join did: never a second notice
     log = opts.log or function(msg) pcall(function() require("auto-agents.log").info("crew", msg) end) end,
     -- the fallback's jobs, typed into their agents' terminals once each (auto-agents.fallback)
-    type_once = opts.type_once or function(codename, key, text)
-      return require("auto-agents.fallback").type_once(codename, key, text)
+    type_once = opts.type_once or function(codename, key, text, topts)
+      return require("auto-agents.fallback").type_once(codename, key, text, topts)
     end,
     -- the crew send's verb call, from inside the todo notifier's daemon.run (crew_send)
     rpc = opts.rpc or function(method, params) return require("auto-core.todo.daemon").rpc(method, params) end,
@@ -1534,6 +1545,19 @@ function M.crew_send(name, mid, msg, how)
   if c == M.CODE_HANDED_OVER then return true end
   if certain(c) then return false end
   return "retry"
+end
+
+---session_of is codename's live crew session in this Neovim, under the scope and epoch held:
+---{ id, codename, kind, prompts (whether its setup reports its prompts) }, or nil.
+---@param codename string
+---@return table|nil
+function M.session_of(codename)
+  local st = _s
+  if not st then return nil end
+  for _, s in pairs(st.sessions) do
+    if s.codename == codename and s.scope == st.scope and s.epoch == st.epoch then return s end
+  end
+  return nil
 end
 
 ---_run_for_tests is this process's run token while a scope is set up (tests only).

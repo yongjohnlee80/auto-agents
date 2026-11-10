@@ -25,6 +25,12 @@
 ---paste followed by a bare Enter (never Esc, which would cancel an agent mid-turn): an agent mid-turn
 ---gets it as queued input, whole.
 ---
+---A delivery is typed guarded, as AutoDoc's own window types one: never into an open prompt. While
+---its agent's session shows the user a prompt (a permission prompt, an AskUserQuestion dialog), a
+---paste or an Enter would answer it, so nothing is typed and no key kept: the job's lease lapses and
+---its next offer is typed once the prompt has closed (a todo notice is held by the notifier). When
+---nothing reports the agent's prompts, the line is pasted with no Enter, for the user to send.
+---
 ---@module 'auto-agents.fallback'
 
 local M = {}
@@ -120,14 +126,36 @@ function M.line(text)
   return s
 end
 
+---prompt_state is whether codename's agent may be typed to now, as AutoDoc's own window decides it
+---(its submitter): "waits" while its session shows the user a prompt (a permission prompt, an
+---AskUserQuestion dialog, blocked: the inbox's attention), where any key would answer it;
+---"unreported" when nothing says whether one is open (a session registered without its prompts
+---reported, a kind with no hooks, no inbox watching), where an Enter could approve one unseen;
+---"clear" otherwise.
+---@param codename string
+---@return "waits"|"unreported"|"clear"
+function M.prompt_state(codename)
+  local s = require("auto-agents.crew").session_of(codename)
+  if not s or s.prompts ~= true then return "unreported" end
+  local waits = require("auto-agents.crew_inbox").waits_on_user(s.id)
+  if waits == nil then return "unreported" end
+  return waits and "waits" or "clear"
+end
+
 ---type_once types text into codename's terminal, once for key. Answers true when it is typed, or was
 ---before (this run or an earlier one); false and why when it can't be: no key or text, no slot runs
 ---codename, its terminal won't take it, or the key can't be kept.
+---
+---With opts.guard (a delivery to an agent, not a prompt the user asked for), it first asks
+---prompt_state: while the agent waits on the user, nothing is typed and no key kept, so a later offer
+---types it once the prompt has closed (false, why, "waits"); when its prompts aren't reported, the
+---line is pasted with no Enter, for the user to send (true, nil, "typed_not_sent").
 ---@param codename string the agent's name in this Neovim's roster
 ---@param key string the delivery's stable id
 ---@param text string
----@return boolean ok, string|nil why
-function M.type_once(codename, key, text)
+---@param opts { guard: boolean|nil }|nil
+---@return boolean ok, string|nil why, "sent"|"typed_not_sent"|"waits"|nil how
+function M.type_once(codename, key, text, opts)
   if type(key) ~= "string" or key == "" or key:find("[\r\n]") then return false, "no key" end
   local line = M.line(text)
   if not line then return false, "nothing to type" end
@@ -136,17 +164,23 @@ function M.type_once(codename, key, text)
   local aa = require("auto-agents")
   local slot = aa.slot_for_name(codename)
   if not slot then return false, ("no slot runs %s"):format(tostring(codename)) end
+  local state = opts and opts.guard and M.prompt_state(codename) or "clear"
+  -- NOTE: an open prompt takes any key as its answer, a paste's too: nothing is typed, nor its key
+  -- kept, so the job's lease lapses and its next offer types it once the prompt has closed.
+  if state == "waits" then return false, ("%s waits on the user's answer to a prompt"):format(codename), "waits" end
   mine[#mine + 1] = key
   if not save() then
     table.remove(_mine)
     return false, "can't keep the key in " .. M.state_file()
   end
-  if not aa.send_slot(slot, line, { submit = true, submit_keys = { "<CR>" } }) then
+  local send = { submit = true, submit_keys = { "<CR>" } }
+  if state == "unreported" then send = { submit = false } end -- an Enter could approve a prompt unseen
+  if not aa.send_slot(slot, line, send) then
     _mine = vim.tbl_filter(function(k) return k ~= key end, _mine) -- nothing was typed: it may be typed later
     save()
     return false, ("slot %d's terminal didn't take it"):format(slot)
   end
-  return true
+  return true, nil, state == "unreported" and "typed_not_sent" or "sent"
 end
 
 ---notifier_handler is auto-core's todo-notifier fallback (set_fallback): delivery = { recipient =
@@ -166,7 +200,8 @@ function M.notifier_handler(delivery)
   if type(delivery.subject) == "string" and delivery.subject ~= "" then
     text = delivery.subject .. ": " .. tostring(delivery.body or "")
   end
-  return M.type_once(name, delivery.key, text)
+  -- an agent showing the user a prompt is held: the notifier asks again within its grace window
+  return M.type_once(name, delivery.key, text, { guard = true })
 end
 
 ---attach hands the notifier its fallback, at setup, and starts it; detach takes the fallback back.
