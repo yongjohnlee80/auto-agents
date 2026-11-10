@@ -273,7 +273,10 @@ function M.agent_setup(kind, bin, program, env, run, mail_via, agent_dir)
   local function from(k) return env[k] or vim.env[k] or "" end
   local key = table.concat({ plugin_env_key(bin, nil), kind, program, from("PATH"), from("OPENCODE_CONFIG_CONTENT"),
     mail_via or "", agent_dir or "" }, "\0")
-  if _setups[key] then return vim.deepcopy(_setups[key]), nil, false end
+  if _setups[key] then
+    _modes[M.crew_kind(kind)] = _setups[key].mail_via -- a kept answer is this spawn's too
+    return vim.deepcopy(_setups[key]), nil, false
+  end
   run = run or function(argv, e, ms)
     local r = vim.system(argv, { env = e, text = true }):wait(ms)
     return r.code, r.stdout or "", r.stderr
@@ -298,7 +301,7 @@ function M.agent_setup(kind, bin, program, env, run, mail_via, agent_dir)
     notices = list(s.notices), after = list(s.after), mail_via = mv, folder_files = list(s.folder_files),
     server = list(s.server), server_socket = type(s.server_socket) == "string" and s.server_socket or nil }
   _setups[key] = s
-  if mv then _modes[M.crew_kind(kind)] = mv end
+  _modes[M.crew_kind(kind)] = mv -- this spawn's mode, the kind's from now on; nil: none said
   return vim.deepcopy(s), nil, false
 end
 
@@ -1338,8 +1341,11 @@ end
 -- How long writing an instruction block waits for the daemon's crew guide before writing it without.
 M.GUIDE_WAIT_MS = 1000
 
----answered_mode is the mail mode the latest crew setup for kind answered ("cli" or "mcp"), the mode
----its agents register and are given the tools of; nil before any setup of kind answered one.
+---answered_mode is the mail mode the latest spawn of kind was given by its crew setup ("cli" or
+---"mcp"), a kept answer included; nil before any, or when that setup said none. The instruction
+---file is one per kind and folder, shared by every agent of the kind there, so it carries one
+---guide: the latest spawn's. Agents of one kind given different modes (one with a folder of its
+---own and one without) share the guide of whichever started last.
 ---@param kind string crew's kind (crew_kind)
 ---@return string|nil
 function M.answered_mode(kind) return _modes[kind] end
